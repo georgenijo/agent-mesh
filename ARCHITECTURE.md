@@ -263,14 +263,26 @@ shared conventions, overlapping files) and is dead weight when it isn't.
 
 ## 12. Build phases
 
-- **P0 — Walking skeleton.** NATS local, one sidecar, `mesh join/who/status`,
-  dashboard tails `mesh.>`. Prove registration + presence.
-- **P1 — Async ask/answer.** `ask/inbox/answer/poll`, coordinator role-routing,
-  ticket lifecycle. Wire one Claude Code hook to auto-`inbox`.
-- **P2 — Collaboration primitives.** `announce` (conflict avoidance) +
-  `note/context` (JetStream blackboard).
-- **P3 — Experts & caching.** Warm expert pool, semantic answer cache, rate
-  limits, audit log.
+> **Revised 2026-06-05 (cheap-core-first).** The original order built async
+> ask/answer (P1) before the collaboration primitives (P2). Reversed: the cheap,
+> no-LLM-in-the-loop, guaranteed-value primitives ship first; the expensive,
+> hook-dependent, hallucination-compounding ask/answer vertical is deferred until
+> the cheap core proves the thesis. Built in **Go** with an embedded NATS server.
+> See `docs/decisions/DECISIONS.md` (2026-06-05).
+
+- **P0 — Walking skeleton (presence).** Go `meshd` with embedded JetStream, one
+  sidecar, `mesh join/who/status` + heartbeat lease, dashboard tails `mesh.>`.
+  Prove registration + presence across a real process boundary.
+- **P1 — Conflict avoidance + blackboard (cheap core).** `announce` (advisory
+  pub/sub) **+ CAS file-claims** (real single-winner locks), `note/context`
+  (JetStream blackboard). TTL leases + reclaim-on-death. Pure pub/sub + durable
+  stream — zero LLM turns.
+- **P2 — Async ask/answer (expensive vertical).** `ask/inbox/answer/poll`,
+  ticket FSM validated in the write path, coordinator role-routing (pull/CAS
+  self-claim). Wire one Claude Code hook to auto-`inbox`. **Start homogeneous**
+  (Claude Code only) to solve hook parity once.
+- **P3 — Experts, caching & multi-CLI.** Warm expert pool, semantic answer
+  cache, rate limits, dedup, audit log, per-CLI hook adapters (Codex/Cursor/Aider).
 - **P4 — Live dashboard.** Replace the scripted mockup feed with a real
   WebSocket tap on `mesh.>`. The mockup becomes the production UI.
 
@@ -284,3 +296,11 @@ shared conventions, overlapping files) and is dead weight when it isn't.
 - Multi-host: when (if) to graduate from one machine to a shared NATS cluster.
 - Answer trust: do we verify a peer's answer (second opinion) before the asker
   acts on it? Adversarial-verify option for high-stakes asks.
+
+**Resolved** (see `docs/decisions/DECISIONS.md`, 2026-06-05):
+- *Advisory `announce` vs real lock* → both: `announce` stays advisory pub/sub,
+  but actual file edits take a **JetStream KV revision-CAS** lock. CAS is the one
+  claim primitive for both file-claims and ask-tickets.
+- *Crashed agent holds a claim forever* → every claim/presence record is a
+  **TTL lease** renewed by heartbeat, with reclaim-on-death.
+- *Language* → **Go**, embedded NATS.

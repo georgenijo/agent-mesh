@@ -45,4 +45,13 @@ Build in this order (ARCHITECTURE.md §12): **P0** walking skeleton (NATS + one 
 
 ## Tech choices (when implementing)
 
-Sidecar + CLI in **Go or Rust** (single static binary, ships in a container). Transport **NATS + JetStream**. Local IPC over a **unix socket** (permissioned, no open TCP port). Isolation via **Docker / cgroups**. Warm responders via **Claude Agent SDK** sessions. Agent identity via **A2A-style agent cards**. Rationale for each is in ARCHITECTURE.md §11; open questions (mid-turn interruption, routing intelligence, multi-host, answer trust) are in §13.
+Sidecar + CLI in **Go** with an **embedded NATS server** (one static binary, `meshd`/`mesh` by mode). Transport **NATS + JetStream** (also the durable store — no separate DB). Local IPC over a **unix socket** (permissioned, no open TCP port). Isolation via **Docker / cgroups** (later). Warm responders via **Claude Agent SDK** sessions. Agent identity via **A2A-style agent cards**. Rationale in ARCHITECTURE.md §11.
+
+## Working notes
+
+- **`docs/decisions/DECISIONS.md`** — running log of locked architectural decisions (language, phase order, CAS locks, TTL leases, envelope/authority invariants). Read it before changing direction; append via the `/decisions` skill.
+- **`docs/concepts.md`** — glossary of the building blocks (daemon, NATS/JetStream, KV bucket, sidecar, coordinator, meshd, hooks). Start here if a term is unclear.
+- **`docs/components.md`** — per-component feature breakdown, tiered MVP/v1+/later.
+- **`docs/audit-multi-agent-pm.md`** — patterns mined from a sibling project (`steal`/`avoid`); the source of several locked decisions.
+- **`topology.html`** — runtime topology diagram (`open topology.html`).
+- Build order is **cheap-core-first** (ARCHITECTURE.md §12, revised): presence → announce+blackboard → ask/answer. Start homogeneous (Claude Code only).

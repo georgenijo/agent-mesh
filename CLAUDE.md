@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**Pre-implementation.** The repo holds a design spec and a UI prototype — no source code, build system, tests, or package manifest exist yet, and it is not a git repo.
+**Pre-implementation.** The repo holds a design spec, supporting docs, and HTML prototypes — no source code, build system, tests, or package manifest exist yet. It is a git repo (GitHub: `georgenijo/agent-mesh`).
 
 - `ARCHITECTURE.md` — the full system design (the source of truth; read it before building anything).
-- `mockup.html` — a self-contained, dependency-free dashboard prototype. Open it directly in a browser (`open mockup.html`); it runs a scripted, animated NATS-bus visualization with no server or build step. Per the spec (Phase P4) this is intended to become the production dashboard, with the scripted feed replaced by a live WebSocket tap on `mesh.>`.
+- `docs/mockups/dashboard-bus.html` — a self-contained, dependency-free dashboard prototype. Open it directly in a browser (`open docs/mockups/dashboard-bus.html`); it runs a scripted, animated NATS-bus visualization with no server or build step. Per the spec (Phase P4) this is intended to become the production dashboard, with the scripted feed replaced by a live WebSocket tap on `mesh.>`.
 
 When implementation starts, add the real build/lint/test commands to this file.
 
@@ -41,7 +41,7 @@ Four planes, joined by a NATS bus. Understanding the **control-plane / data-plan
 
 ## Build phases (roadmap)
 
-Build in this order (ARCHITECTURE.md §12): **P0** walking skeleton (NATS + one sidecar + `join/who/status` + dashboard tail) → **P1** async ask/answer + role-routing → **P2** `announce` + JetStream blackboard → **P3** warm experts, semantic cache, rate limits, audit log → **P4** live dashboard (promote `mockup.html` to a real `mesh.>` tap).
+Build in this order (ARCHITECTURE.md §12, revised cheap-core-first): **P0** walking skeleton (presence: `join/who/status` + heartbeat lease + dashboard tail) → **P1** conflict avoidance + blackboard (`announce` + CAS file-claims, `note/context`) → **P2** async ask/answer (ticket FSM + role-routing, Claude Code hook) → **P3** experts, caching, rate limits, audit log, multi-CLI hooks → **P4** live dashboard (promote `dashboard-bus.html` to a real `mesh.>` tap).
 
 ## Tech choices (when implementing)
 
@@ -53,6 +53,7 @@ Sidecar + CLI in **Go** with an **embedded NATS server** (one static binary, `me
 - **Log major decision forks.** When a meaningful fork is resolved in conversation — architectural choice, scope cut/deferral, phase ordering, tradeoff resolution, convention adoption, or superseding a prior call — proactively invoke the **`/decisions`** skill to append it to the log (don't wait to be asked). Skip trivia, bug fixes, and anything the code or git history already captures. When superseding, flip the old entry's status rather than rewriting it.
 - **`docs/concepts.md`** — glossary of the building blocks (daemon, NATS/JetStream, KV bucket, sidecar, coordinator, meshd, hooks). Start here if a term is unclear.
 - **`docs/components.md`** — per-component feature breakdown, tiered MVP/v1+/later.
+- **`docs/repo-layout.md`** — target Go repo structure (`cmd/`+`internal/`); create `internal/` dirs as each phase needs them.
 - **`docs/audit-multi-agent-pm.md`** — patterns mined from a sibling project (`steal`/`avoid`); the source of several locked decisions.
-- **`topology.html`** — runtime topology diagram (`open topology.html`).
+- **`docs/mockups/`** — HTML prototypes: `dashboard-bus.html` (bus visualizer), `dashboard-full.html` (full dashboard concept), `topology.html` (runtime topology diagram). No build step — `open` in a browser.
 - Build order is **cheap-core-first** (ARCHITECTURE.md §12, revised): presence → announce+blackboard → ask/answer. Start homogeneous (Claude Code only).

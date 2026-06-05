@@ -18,10 +18,11 @@ not forced per turn.
 Pre-implementation. This repo currently holds the design and a UI prototype:
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the full system design (source of truth).
-- **mockup.html** — a self-contained dashboard prototype. Open it in a browser
-  (`open mockup.html`); no build step. Slated to become the production dashboard.
-- **full-mockup.html** — a fuller dashboard concept showing tickets, file claims,
-  private/public streams, blackboard notes, policy guards, cache, experts, and audit.
+- **[docs/](docs/)** — concepts glossary, per-component features, the decisions log, and the multi-agent-pm audit.
+- **[docs/mockups/](docs/mockups/)** — HTML prototypes (no build step, open in a browser):
+  - `dashboard-bus.html` — the NATS-bus visualizer; slated to become the production dashboard.
+  - `dashboard-full.html` — a fuller dashboard concept (tickets, file claims, streams, notes, policy, cache, experts, audit).
+  - `topology.html` — runtime topology diagram.
 
 ## Build phases
 

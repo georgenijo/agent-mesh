@@ -2,7 +2,7 @@
 
 What each working part is and the features it must support. Tiers: **[MVP]** = needed for the thesis to work at all, **[v1+]** = makes it good, **[later]** = scale/hardening. Audit lessons (from `audit-multi-agent-pm.md`) are baked in.
 
-See `concepts.md` for what each term means and `topology.html` for the picture.
+See `concepts.md` for what each term means and `mockups/topology.html` for the picture.
 
 ---
 
@@ -77,7 +77,7 @@ See `concepts.md` for what each term means and `topology.html` for the picture.
 - **[MVP]** **Read-only** — never publishes to the mesh.
 - **[v1+]** **Authenticated subscriber + subject-filter scoping** (audit: no global unauth firehose).
 - **[v1+]** Metrics by **counting the registry at read time**, not hand-rolled counters (audit: dead/miswired metrics).
-- **[v1+]** Replace `mockup.html` scripted feed with the live tap (this is P4).
+- **[v1+]** Replace `mockups/dashboard-bus.html` scripted feed with the live tap (this is P4).
 
 ## 6. Hooks (config/glue per agent CLI)
 

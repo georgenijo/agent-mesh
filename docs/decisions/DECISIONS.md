@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: Adopt standard Go cmd/+internal repo layout; mockups under docs/
+
+**Decision:** Use the standard Go layout — `cmd/{meshd,mesh}` entrypoints over private `internal/` packages (one per component plus a `envelope`/`bus`/`socket` shared spine), `web/` for the embedded production dashboard UI, `hooks/` for per-CLI glue, `test/e2e/` for cross-process tests, `deploy/` for later packaging. No speculative `pkg/`. HTML prototypes moved to `docs/mockups/` (`dashboard-bus.html`, `dashboard-full.html`, `topology.html`). `internal/` dirs are created as each phase needs them, not scaffolded empty up front. Full tree in `docs/repo-layout.md`.
+
+**Rationale:** `cmd`+`internal` is the idiomatic Go convention — `internal/` prevents accidental public API leakage, thin `cmd/` keeps logic testable, and the spine split (`envelope`/`bus`/`socket` with no upward imports) prevents cycles. Mockups belong with design docs, not at repo root, now that real code dirs are coming. First-class `test/e2e/` answers the audit lesson that unit tests over mocks hid a non-running system.
+
+**Status:** active
+
+**References:** docs/repo-layout.md, docs/components.md
+
+---
+
 ## 2026-06-05: Build meshd/mesh in Go with an embedded NATS server
 
 **Decision:** Implement the single `meshd`/`mesh` binary in Go. Embed the NATS server + JetStream as a Go library inside the coordinator mode rather than running NATS as a separate installed process for the local-first MVP.

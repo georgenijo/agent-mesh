@@ -20,9 +20,11 @@ Pre-implementation. This repo currently holds the design and a UI prototype:
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the full system design (source of truth).
 - **[docs/](docs/)** — concepts glossary, per-component features, the decisions log, and the multi-agent-pm audit.
 - **[docs/mockups/](docs/mockups/)** — HTML prototypes (no build step, open in a browser):
-  - `dashboard-bus.html` — the NATS-bus visualizer; slated to become the production dashboard.
+  - `topology-hybrid.html` — **current target shape**: persistent experts + ephemeral workers + blackboard-as-memory.
+  - `flow.html` — animated ticket → done walkthrough (narrated, step-by-step).
+  - `dashboard-bus.html` — the NATS-bus visualizer; an early dashboard concept.
   - `dashboard-full.html` — a fuller dashboard concept (tickets, file claims, streams, notes, policy, cache, experts, audit).
-  - `topology.html` — runtime topology diagram.
+  - `topology.html` — earlier (pre-pivot) runtime topology diagram.
 
 ## Build phases
 

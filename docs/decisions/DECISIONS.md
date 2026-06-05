@@ -6,6 +6,54 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: Pivot to an autonomous, hands-off product (Mode B)
+
+**Decision:** Agent Mesh is a service + UI where the user drops a ticket/issue and the system **autonomously** triages it, spawns a team of agents, executes, and reports — the user watches and drives nothing. This **supersedes** the original "opt-in per message, agents work solo 95%" framing ("Mode A": a human driving long-lived agents that the mesh merely assists). `ARCHITECTURE.md` §1 vision/principles and the build-phase plan are to be re-derived for the autonomous model.
+
+**Rationale:** The user's goal is hands-off automation from a ticket, not assistive coordination of human-driven sessions. The two imply different topologies, agent lifecycles, and infra; conflating them muddied the design.
+
+**Status:** active
+
+**References:** prompts/PROMPT_CHAT.md (Current frontier), docs/mockups/topology-hybrid.html, docs/mockups/flow.html
+
+---
+
+## 2026-06-05: Hybrid agent model — persistent experts + ephemeral workers; blackboard = expert memory
+
+**Decision:** Two agent lifetimes. **Persistent experts** (per domain/codebase) stay warm — they hold the codebase map + decisions, answer questions, and **review** worker output, living across many tickets. **Ephemeral workers** are pipeline-spawned per subtask and exit when done. The **blackboard** (durable store) is the experts' long-term memory, so an expert can restart from it without losing knowledge (with compaction + re-sync on file changes). Workers ask experts **by role** through a router.
+
+**Rationale:** A warm expert pays the expensive codebase-context load once, making every additional question/review cheap and high-value (it catches cross-cutting issues isolated workers can't see). Combines Mode B's repeatable worker pipeline with Mode A's long-lived advisor. Dynamic worker churn + ask-by-role is exactly the loosely-coupled shape a message/router layer is for.
+
+**Status:** active
+
+**References:** docs/mockups/topology-hybrid.html
+
+---
+
+## 2026-06-05: All cognition is a CLI invocation on the user's subscription; experts are headless CLI sessions
+
+**Decision:** The mesh **never calls an LLM API**. Every "brain" — workers, experts, and the triage/planner — is an agent-CLI invocation (`claude -p`, `codex exec`, …) that reuses the user's existing on-disk **subscription** login. No API key in the core (an API key is an off-machine fallback only). An expert and a worker differ only by **model + prompt + injected context**, not by auth. Adapters drive each CLI in **headless + structured-output** mode (e.g. `claude -p --output-format json`) so answers are captured as typed results, never scraped from prose.
+
+**Rationale:** Keeps the product subscription-native with zero key management, and makes heterogeneous CLI↔CLI message-passing tractable (the envelope stays structured; free text is opaque `content`). **Open risk:** rate-limits / ToS for a spawned headless fleet on a consumer subscription — to be verified before relying on it.
+
+**Status:** active
+
+**References:** prompts/PROMPT_CHAT.md, docs/mockups/flow.html
+
+---
+
+## 2026-06-05: Transport reopened (bus vs star) and language under review
+
+**Decision:** The autonomous model is a coordinator-spawned **tree**, not a flat peer mesh, so a full NATS broker is no longer assumed. Choose between (a) a lighter **coordinator + role-router + durable store** (star) and (b) a **NATS/JetStream bus** — deferring the bus until lateral peer comms or multi-host genuinely require it. This **supersedes** "Build meshd/mesh in Go with an embedded NATS server" (the embedded-NATS commitment is dropped pending this choice), and **reopens the language** (Go vs TS — a star + store + websocket is equally comfortable in TS). JetStream-dependent specifics in other still-active entries (CAS-lock, TTL-lease, "the JetStream record" as authority, the Go repo layout) are **contingent** on this choice.
+
+**Rationale:** "Don't pay the distributed tax until distributed." A coordinator that spawns and knows every agent already has discovery/presence; the bus's headline strengths (flat discovery, dynamic peer membership) mostly don't apply until workers/experts talk laterally at scale. Keep the transport-independent invariants (one versioned envelope, one authority per fact, async ask→ticket, durable blackboard) regardless.
+
+**Status:** active
+
+**References:** docs/mockups/topology-hybrid.html, docs/components.md
+
+---
+
 ## 2026-06-05: Adopt standard Go cmd/+internal repo layout; mockups under docs/
 
 **Decision:** Use the standard Go layout — `cmd/{meshd,mesh}` entrypoints over private `internal/` packages (one per component plus a `envelope`/`bus`/`socket` shared spine), `web/` for the embedded production dashboard UI, `hooks/` for per-CLI glue, `test/e2e/` for cross-process tests, `deploy/` for later packaging. No speculative `pkg/`. HTML prototypes moved to `docs/mockups/` (`dashboard-bus.html`, `dashboard-full.html`, `topology.html`). `internal/` dirs are created as each phase needs them, not scaffolded empty up front. Full tree in `docs/repo-layout.md`.
@@ -24,7 +72,7 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 **Rationale:** Go gives a single static binary, trivial daemons/goroutines, and — uniquely — NATS server + JetStream are Go libraries that embed cleanly, collapsing the infra to one shipped artifact. Rust was considered (stronger types/perf) but async daemons are heavier and NATS embeds less cleanly, slowing the path to a walking skeleton. Speed-to-first-running-slice won.
 
-**Status:** active
+**Status:** superseded by 2026-06-05 (Transport reopened + language under review)
 
 **References:** ARCHITECTURE.md §11, docs/concepts.md, docs/audit-multi-agent-pm.md
 
@@ -36,7 +84,7 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 **Rationale:** announce + blackboard are pure pub/sub — guaranteed value, zero LLM-turn cost, low risk. ask/answer is the expensive, hallucination-compounding, hook-dependent part. The original plan front-loaded the risky LLM-coordination before the cheap guaranteed wins. Prove the thesis with the cheap core; defer the research bet.
 
-**Status:** active
+**Status:** superseded by 2026-06-05 (Pivot to an autonomous, hands-off product)
 
 **References:** ARCHITECTURE.md §12 (revised), §9
 

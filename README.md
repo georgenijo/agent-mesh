@@ -20,6 +20,8 @@ Pre-implementation. This repo currently holds the design and a UI prototype:
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the full system design (source of truth).
 - **mockup.html** — a self-contained dashboard prototype. Open it in a browser
   (`open mockup.html`); no build step. Slated to become the production dashboard.
+- **full-mockup.html** — a fuller dashboard concept showing tickets, file claims,
+  private/public streams, blackboard notes, policy guards, cache, experts, and audit.
 
 ## Build phases
 

@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh - Full Dashboard Concept</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --bg-soft: #10141a;
+    --panel: #151a22;
+    --panel-2: #11161d;
+    --line: #2b3543;
+    --line-strong: #465568;
+    --text: #edf2f7;
+    --muted: #8a98aa;
+    --subtle: #657284;
+    --cyan: #35c7f4;
+    --green: #38d982;
+    --amber: #f4b942;
+    --rose: #f66f7d;
+    --violet: #9b8cff;
+    --blue: #6aa8ff;
+    --orange: #f28b55;
+    --shadow: 0 18px 55px rgba(0, 0, 0, .32);
+    --radius: 8px;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background:
+      linear-gradient(180deg, rgba(53, 199, 244, .04), transparent 34rem),
+      linear-gradient(90deg, rgba(255, 255, 255, .03) 1px, transparent 1px) 0 0 / 44px 44px,
+      linear-gradient(rgba(255, 255, 255, .025) 1px, transparent 1px) 0 0 / 44px 44px,
+      var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: 0;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  .app {
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) auto auto;
+    gap: 18px;
+    align-items: center;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(11, 13, 16, .86);
+    backdrop-filter: blur(14px);
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+  }
+
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: var(--radius);
+    display: grid;
+    place-items: center;
+    color: #071015;
+    background: linear-gradient(135deg, var(--cyan), var(--green));
+    font-weight: 800;
+    box-shadow: 0 0 28px rgba(53, 199, 244, .28);
+    flex: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+
+  h1 {
+    font-size: 18px;
+    line-height: 1.15;
+  }
+
+  .brand p {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+
+  .status-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(92px, 1fr));
+    gap: 8px;
+    min-width: 460px;
+  }
+
+  .metric {
+    border: 1px solid var(--line);
+    background: rgba(21, 26, 34, .82);
+    border-radius: var(--radius);
+    padding: 9px 10px;
+  }
+
+  .metric span {
+    display: block;
+    color: var(--subtle);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
+  .metric strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 15px;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .icon-button {
+    width: 38px;
+    height: 38px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--text);
+    background: var(--panel);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+
+  .icon-button:hover,
+  .mode-button:hover {
+    border-color: var(--line-strong);
+  }
+
+  .icon-button svg {
+    width: 17px;
+    height: 17px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .modes {
+    display: flex;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    overflow: hidden;
+  }
+
+  .mode-button {
+    border: 0;
+    border-right: 1px solid var(--line);
+    padding: 10px 12px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .mode-button:last-child {
+    border-right: 0;
+  }
+
+  .mode-button.active {
+    color: var(--text);
+    background: rgba(53, 199, 244, .12);
+  }
+
+  .dashboard {
+    display: grid;
+    grid-template-columns: 280px minmax(620px, 1fr) 340px;
+    gap: 14px;
+    padding: 14px;
+    align-items: start;
+  }
+
+  .stack {
+    display: grid;
+    gap: 14px;
+  }
+
+  .panel {
+    background: rgba(21, 26, 34, .92);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .panel-header {
+    min-height: 46px;
+    padding: 13px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, .02);
+  }
+
+  .panel-header h2 {
+    font-size: 13px;
+  }
+
+  .panel-header .hint {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .panel-body {
+    padding: 14px;
+  }
+
+  .agents-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .agent-row {
+    display: grid;
+    grid-template-columns: 35px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+  }
+
+  .agent-icon {
+    width: 35px;
+    height: 35px;
+    border-radius: var(--radius);
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    color: #071015;
+  }
+
+  .agent-meta {
+    min-width: 0;
+  }
+
+  .agent-meta strong {
+    display: block;
+    font-size: 13px;
+  }
+
+  .agent-meta span {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .pill.green {
+    color: var(--green);
+    border-color: rgba(56, 217, 130, .42);
+    background: rgba(56, 217, 130, .08);
+  }
+
+  .pill.amber {
+    color: var(--amber);
+    border-color: rgba(244, 185, 66, .42);
+    background: rgba(244, 185, 66, .08);
+  }
+
+  .pill.rose {
+    color: var(--rose);
+    border-color: rgba(246, 111, 125, .42);
+    background: rgba(246, 111, 125, .08);
+  }
+
+  .pill.blue {
+    color: var(--blue);
+    border-color: rgba(106, 168, 255, .42);
+    background: rgba(106, 168, 255, .08);
+  }
+
+  .topology {
+    min-height: 420px;
+  }
+
+  .map {
+    position: relative;
+    min-height: 374px;
+    padding: 18px;
+    overflow: hidden;
+    background:
+      linear-gradient(90deg, rgba(53, 199, 244, .055), transparent 22%, transparent 78%, rgba(56, 217, 130, .055)),
+      var(--panel-2);
+  }
+
+  .lane {
+    position: absolute;
+    left: 22px;
+    right: 22px;
+    height: 54px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    display: grid;
+    align-items: center;
+    padding: 0 22px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .lane.public {
+    top: 126px;
+    background: linear-gradient(90deg, rgba(53, 199, 244, .09), rgba(53, 199, 244, .02));
+    box-shadow: inset 0 0 24px rgba(53, 199, 244, .08);
+  }
+
+  .lane.private {
+    top: 206px;
+    background: linear-gradient(90deg, rgba(155, 140, 255, .09), rgba(246, 111, 125, .025));
+    box-shadow: inset 0 0 24px rgba(155, 140, 255, .08);
+  }
+
+  .lane strong {
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  .map-node {
+    position: absolute;
+    width: 128px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: rgba(21, 26, 34, .94);
+    padding: 10px;
+    z-index: 4;
+  }
+
+  .map-node h3 {
+    font-size: 12px;
+  }
+
+  .map-node p {
+    color: var(--muted);
+    font-size: 10px;
+    margin-top: 4px;
+  }
+
+  .sidecar {
+    margin-top: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
+    color: var(--cyan);
+    font-size: 10px;
+  }
+
+  .claude {
+    left: 40px;
+    top: 28px;
+  }
+
+  .codex {
+    left: calc(50% - 64px);
+    top: 28px;
+  }
+
+  .cursor {
+    right: 40px;
+    top: 28px;
+  }
+
+  .coordinator {
+    left: 44px;
+    bottom: 26px;
+    border-color: rgba(56, 217, 130, .42);
+  }
+
+  .expert {
+    left: calc(50% - 64px);
+    bottom: 26px;
+    border-color: rgba(244, 185, 66, .42);
+  }
+
+  .dashboard-node {
+    right: 40px;
+    bottom: 26px;
+    border-color: rgba(106, 168, 255, .42);
+  }
+
+  .wire {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .wire path {
+    stroke: rgba(138, 152, 170, .28);
+    stroke-width: 1.5;
+    fill: none;
+    stroke-dasharray: 5 7;
+  }
+
+  .packet {
+    position: absolute;
+    z-index: 5;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 18px currentColor;
+    animation-duration: 5.8s;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+    animation-delay: var(--delay);
+  }
+
+  .packet::after {
+    content: attr(data-label);
+    position: absolute;
+    left: 16px;
+    top: -8px;
+    min-width: 82px;
+    color: var(--text);
+    background: rgba(11, 13, 16, .78);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 7px;
+    font-size: 10px;
+  }
+
+  .packet.public-packet {
+    color: var(--cyan);
+    background: var(--cyan);
+    top: 150px;
+    left: 8%;
+    animation-name: publicFlow;
+  }
+
+  .packet.private-packet {
+    color: var(--violet);
+    background: var(--violet);
+    top: 230px;
+    left: 9%;
+    animation-name: privateFlow;
+  }
+
+  .packet.answer-packet {
+    color: var(--green);
+    background: var(--green);
+    top: 230px;
+    left: 73%;
+    animation-name: answerFlow;
+  }
+
+  .packet.audit-packet {
+    color: var(--amber);
+    background: var(--amber);
+    top: 150px;
+    left: 72%;
+    animation-name: auditFlow;
+  }
+
+  body.paused .packet,
+  body.paused .claim-fill,
+  body.paused .live-dot,
+  body.paused .cache-bar span {
+    animation-play-state: paused;
+  }
+
+  @keyframes publicFlow {
+    0% { transform: translateX(0); opacity: 0; }
+    8% { opacity: 1; }
+    72% { opacity: 1; }
+    100% { transform: translateX(620px); opacity: 0; }
+  }
+
+  @keyframes privateFlow {
+    0% { transform: translateX(0); opacity: 0; }
+    10% { opacity: 1; }
+    72% { opacity: 1; }
+    100% { transform: translateX(470px); opacity: 0; }
+  }
+
+  @keyframes answerFlow {
+    0% { transform: translateX(0); opacity: 0; }
+    10% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { transform: translateX(-540px); opacity: 0; }
+  }
+
+  @keyframes auditFlow {
+    0% { transform: translateX(0); opacity: 0; }
+    8% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { transform: translateX(-620px); opacity: 0; }
+  }
+
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  .legend-item {
+    min-height: 58px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    padding: 9px;
+  }
+
+  .legend-item strong {
+    display: block;
+    font-size: 11px;
+  }
+
+  .legend-item span {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+    margin-top: 4px;
+  }
+
+  .ticket-list,
+  .note-list,
+  .claim-list,
+  .event-log,
+  .policy-list {
+    display: grid;
+    gap: 9px;
+  }
+
+  .ticket-row {
+    display: grid;
+    grid-template-columns: 58px 1fr auto;
+    gap: 9px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+  }
+
+  .ticket-id {
+    font-weight: 800;
+    font-size: 12px;
+  }
+
+  .ticket-main strong,
+  .claim-main strong,
+  .note strong,
+  .policy strong {
+    display: block;
+    font-size: 12px;
+  }
+
+  .ticket-main span,
+  .claim-main span,
+  .note span,
+  .policy span {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 3px;
+  }
+
+  .timeline {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .step {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    min-height: 62px;
+    padding: 10px;
+  }
+
+  .step::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: block;
+    background: var(--line-strong);
+    margin-bottom: 8px;
+  }
+
+  .step.done::before {
+    background: var(--green);
+    box-shadow: 0 0 12px rgba(56, 217, 130, .55);
+  }
+
+  .step.live::before {
+    background: var(--amber);
+    box-shadow: 0 0 12px rgba(244, 185, 66, .55);
+  }
+
+  .step strong {
+    display: block;
+    font-size: 11px;
+  }
+
+  .step span {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 10px;
+  }
+
+  .claim-row {
+    display: grid;
+    grid-template-columns: 1fr 72px;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+  }
+
+  .claim-meter {
+    height: 8px;
+    border-radius: 999px;
+    background: #252d39;
+    overflow: hidden;
+  }
+
+  .claim-fill {
+    display: block;
+    height: 100%;
+    width: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--green), var(--amber));
+    transform-origin: left;
+    animation: ttl 9s linear infinite;
+  }
+
+  .claim-row.conflict {
+    border-color: rgba(246, 111, 125, .55);
+  }
+
+  .claim-row.conflict .claim-fill {
+    background: linear-gradient(90deg, var(--rose), var(--amber));
+    animation-duration: 5.5s;
+  }
+
+  @keyframes ttl {
+    0% { transform: scaleX(1); }
+    100% { transform: scaleX(.18); }
+  }
+
+  .note {
+    display: grid;
+    gap: 4px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+  }
+
+  .note small {
+    color: var(--subtle);
+    font-size: 10px;
+  }
+
+  .policy {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 9px;
+    align-items: start;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+  }
+
+  .policy-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius);
+    display: grid;
+    place-items: center;
+    color: #071015;
+    font-weight: 900;
+    font-size: 12px;
+  }
+
+  .matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  .matrix th,
+  .matrix td {
+    border-bottom: 1px solid var(--line);
+    padding: 8px 6px;
+    text-align: left;
+  }
+
+  .matrix th {
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .matrix td:last-child {
+    text-align: right;
+  }
+
+  .event-row {
+    display: grid;
+    grid-template-columns: 54px 80px 1fr;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+  }
+
+  .event-row:last-child {
+    border-bottom: 0;
+  }
+
+  .event-row time {
+    color: var(--subtle);
+  }
+
+  .event-row strong {
+    color: var(--text);
+  }
+
+  .event-row span {
+    color: var(--muted);
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .cache-grid {
+    display: grid;
+    gap: 11px;
+  }
+
+  .cache-row {
+    display: grid;
+    grid-template-columns: 96px 1fr 34px;
+    gap: 10px;
+    align-items: center;
+    font-size: 11px;
+  }
+
+  .cache-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: #252d39;
+    overflow: hidden;
+  }
+
+  .cache-bar span {
+    display: block;
+    height: 100%;
+    width: var(--w);
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--blue), var(--violet));
+    animation: shimmer 2.8s ease-in-out infinite;
+  }
+
+  @keyframes shimmer {
+    50% { filter: brightness(1.35); }
+  }
+
+  .focus-ring {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    transition: outline-color .2s ease, box-shadow .2s ease;
+  }
+
+  body.mode-ask [data-feature~="ask"],
+  body.mode-conflict [data-feature~="conflict"],
+  body.mode-security [data-feature~="security"],
+  body.mode-memory [data-feature~="memory"] {
+    outline-color: rgba(53, 199, 244, .85);
+    box-shadow: 0 0 0 4px rgba(53, 199, 244, .08), var(--shadow);
+  }
+
+  .live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 12px rgba(56, 217, 130, .8);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    50% { opacity: .35; }
+  }
+
+  .inline-status {
+    display: inline-flex;
+    gap: 7px;
+    align-items: center;
+  }
+
+  @media (max-width: 1240px) {
+    .topbar {
+      grid-template-columns: 1fr;
+    }
+
+    .status-strip {
+      min-width: 0;
+    }
+
+    .dashboard {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .topbar {
+      padding: 14px;
+    }
+
+    .status-strip,
+    .legend-grid,
+    .timeline,
+    .split {
+      grid-template-columns: 1fr;
+    }
+
+    .modes {
+      overflow-x: auto;
+    }
+
+    .mode-button {
+      white-space: nowrap;
+    }
+
+    .map {
+      min-height: 520px;
+    }
+
+    .map-node {
+      position: relative;
+      left: auto;
+      right: auto;
+      top: auto;
+      bottom: auto;
+      width: auto;
+      margin-bottom: 10px;
+    }
+
+    .lane,
+    .wire,
+    .packet {
+      display: none;
+    }
+  }
+</style>
+</head>
+<body class="mode-ask">
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">AM</div>
+      <div>
+        <h1>Agent Mesh</h1>
+        <p>CLI edge / local NATS bus / durable tickets / live dashboard</p>
+      </div>
+    </div>
+    <div class="status-strip" aria-label="System metrics">
+      <div class="metric"><span>Agents online</span><strong>5</strong></div>
+      <div class="metric"><span>Open tickets</span><strong id="openTickets">3</strong></div>
+      <div class="metric"><span>File claims</span><strong>4</strong></div>
+      <div class="metric"><span>Secrets blocked</span><strong>2</strong></div>
+    </div>
+    <div class="controls">
+      <div class="modes" aria-label="Dashboard focus">
+        <button class="mode-button active" data-mode="ask">Ask flow</button>
+        <button class="mode-button" data-mode="conflict">Files</button>
+        <button class="mode-button" data-mode="security">Safety</button>
+        <button class="mode-button" data-mode="memory">Memory</button>
+      </div>
+      <button class="icon-button" id="pauseButton" aria-label="Pause live animation">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <aside class="stack">
+      <section class="panel focus-ring" data-feature="ask conflict security">
+        <div class="panel-header">
+          <h2>Agent roster</h2>
+          <span class="hint inline-status"><span class="live-dot"></span> live</span>
+        </div>
+        <div class="panel-body">
+          <div class="agents-list">
+            <div class="agent-row">
+              <div class="agent-icon" style="background: var(--cyan)">C</div>
+              <div class="agent-meta"><strong>Claude Code</strong><span>builder / calendar UI / idle</span></div>
+              <span class="pill green">ready</span>
+            </div>
+            <div class="agent-row">
+              <div class="agent-icon" style="background: var(--violet)">X</div>
+              <div class="agent-meta"><strong>Codex CLI</strong><span>backend / auth / answering T-104</span></div>
+              <span class="pill amber">busy</span>
+            </div>
+            <div class="agent-row">
+              <div class="agent-icon" style="background: var(--blue)">R</div>
+              <div class="agent-meta"><strong>Cursor CLI</strong><span>frontend / EventForm.tsx / editing</span></div>
+              <span class="pill green">ready</span>
+            </div>
+            <div class="agent-row">
+              <div class="agent-icon" style="background: var(--orange)">A</div>
+              <div class="agent-meta"><strong>Aider</strong><span>tests / smoke suite / running</span></div>
+              <span class="pill amber">busy</span>
+            </div>
+            <div class="agent-row">
+              <div class="agent-icon" style="background: var(--amber)">E</div>
+              <div class="agent-meta"><strong>Expert pool</strong><span>warm auth reviewer / standby</span></div>
+              <span class="pill blue">warm</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel focus-ring" data-feature="security">
+        <div class="panel-header">
+          <h2>Subject permissions</h2>
+          <span class="hint">who can publish</span>
+        </div>
+        <div class="panel-body">
+          <table class="matrix">
+            <thead>
+              <tr><th>Subject</th><th>Allowed</th><th>State</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>mesh.status.*</td><td>all sidecars</td><td><span class="pill green">open</span></td></tr>
+              <tr><td>mesh.answer.T-104</td><td>codex only</td><td><span class="pill green">locked</span></td></tr>
+              <tr><td>mesh.private.*</td><td>ticket members</td><td><span class="pill amber">hidden</span></td></tr>
+              <tr><td>mesh.note.repo</td><td>repo agents</td><td><span class="pill blue">durable</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </aside>
+
+    <section class="stack">
+      <section class="panel topology focus-ring" data-feature="ask security">
+        <div class="panel-header">
+          <h2>Live mesh map</h2>
+          <span class="hint">public events split from private payloads</span>
+        </div>
+        <div class="map">
+          <svg class="wire" viewBox="0 0 900 374" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M115 88 L115 150 L790 150" />
+            <path d="M450 88 L450 230 L190 230" />
+            <path d="M785 88 L785 150 L106 150" />
+            <path d="M110 314 L110 230 L450 230" />
+            <path d="M450 314 L450 230 L735 230" />
+            <path d="M785 314 L785 150 L450 150" />
+          </svg>
+
+          <div class="lane public"><strong>Public event bus</strong><span>status, heartbeat, file claim, audit summary</span></div>
+          <div class="lane private"><strong>Private payload stream</strong><span>question text, answer text, ticket context</span></div>
+
+          <div class="packet public-packet" style="--delay: 0s" data-label="status"></div>
+          <div class="packet private-packet" style="--delay: -1.7s" data-label="ask T-104"></div>
+          <div class="packet answer-packet" style="--delay: -3.2s" data-label="answer"></div>
+          <div class="packet audit-packet" style="--delay: -4.4s" data-label="audit"></div>
+
+          <div class="map-node claude"><h3>Claude Code</h3><p>runs mesh ask</p><div class="sidecar">sidecar + socket</div></div>
+          <div class="map-node codex"><h3>Codex CLI</h3><p>owns auth work</p><div class="sidecar">sidecar + inbox</div></div>
+          <div class="map-node cursor"><h3>Cursor CLI</h3><p>claims UI file</p><div class="sidecar">sidecar + hooks</div></div>
+          <div class="map-node coordinator"><h3>Coordinator</h3><p>routes, limits, dedups</p><div class="sidecar">control plane</div></div>
+          <div class="map-node expert"><h3>Warm expert</h3><p>answers fallback asks</p><div class="sidecar">cached context</div></div>
+          <div class="map-node dashboard-node"><h3>Dashboard</h3><p>observes public stream</p><div class="sidecar">read-only tap</div></div>
+        </div>
+        <div class="panel-body">
+          <div class="legend-grid">
+            <div class="legend-item"><strong>CLI edge</strong><span>agents call one mesh command</span></div>
+            <div class="legend-item"><strong>Sidecars</strong><span>small helper process per agent</span></div>
+            <div class="legend-item"><strong>NATS bus</strong><span>message lanes between helpers</span></div>
+            <div class="legend-item"><strong>Dashboard</strong><span>watches safe public events</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="split">
+        <section class="panel focus-ring" data-feature="ask">
+          <div class="panel-header">
+            <h2>Ticket lifecycle</h2>
+            <span class="hint">saved question state</span>
+          </div>
+          <div class="panel-body">
+            <div class="timeline">
+              <div class="step done"><strong>Created</strong><span>T-104 saved</span></div>
+              <div class="step done"><strong>Routed</strong><span>role auth</span></div>
+              <div class="step live"><strong>Inbox</strong><span>Codex has it</span></div>
+              <div class="step"><strong>Answered</strong><span>waiting</span></div>
+              <div class="step"><strong>Polled</strong><span>Claude reads</span></div>
+            </div>
+            <div class="ticket-list">
+              <div class="ticket-row">
+                <div class="ticket-id">T-104</div>
+                <div class="ticket-main"><strong>RLS recursion fix?</strong><span>Claude to role auth, stored for retry</span></div>
+                <span class="pill amber">in inbox</span>
+              </div>
+              <div class="ticket-row">
+                <div class="ticket-id">T-103</div>
+                <div class="ticket-main"><strong>ICS feed schema?</strong><span>answered by expert pool</span></div>
+                <span class="pill green">resolved</span>
+              </div>
+              <div class="ticket-row">
+                <div class="ticket-id">T-102</div>
+                <div class="ticket-main"><strong>Timezone helper?</strong><span>deduped against cached answer</span></div>
+                <span class="pill blue">cached</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel focus-ring" data-feature="security">
+          <div class="panel-header">
+            <h2>Policy guard</h2>
+            <span class="hint">rate limit + redaction</span>
+          </div>
+          <div class="panel-body">
+            <div class="policy-list">
+              <div class="policy">
+                <div class="policy-icon" style="background: var(--green)">OK</div>
+                <div><strong>Rate limit healthy</strong><span>Claude asked 2 questions in 10 minutes</span></div>
+              </div>
+              <div class="policy">
+                <div class="policy-icon" style="background: var(--amber)">DU</div>
+                <div><strong>Duplicate caught</strong><span>Timezone question reused T-102 cache result</span></div>
+              </div>
+              <div class="policy">
+                <div class="policy-icon" style="background: var(--rose)">SE</div>
+                <div><strong>Secret redacted</strong><span>API token replaced before event left sidecar</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="split">
+        <section class="panel focus-ring" data-feature="conflict">
+          <div class="panel-header">
+            <h2>File claims</h2>
+            <span class="hint">warnings, not hard locks</span>
+          </div>
+          <div class="panel-body">
+            <div class="claim-list">
+              <div class="claim-row">
+                <div class="claim-main"><strong>src/auth/policy.sql</strong><span>Codex editing, lease refreshes every 30s</span></div>
+                <div class="claim-meter"><span class="claim-fill"></span></div>
+              </div>
+              <div class="claim-row conflict">
+                <div class="claim-main"><strong>src/EventForm.tsx</strong><span>Cursor active, Claude tried to open same file</span></div>
+                <div class="claim-meter"><span class="claim-fill"></span></div>
+              </div>
+              <div class="claim-row">
+                <div class="claim-main"><strong>tests/smoke.spec.ts</strong><span>Aider running tests, no edit claim</span></div>
+                <div class="claim-meter"><span class="claim-fill"></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel focus-ring" data-feature="memory">
+          <div class="panel-header">
+            <h2>Blackboard</h2>
+            <span class="hint">durable notes</span>
+          </div>
+          <div class="panel-body">
+            <div class="note-list">
+              <div class="note"><small>note-219 / replayed to new agents</small><strong>Store event times in UTC.</strong><span>Display conversion belongs in event-time.ts.</span></div>
+              <div class="note"><small>note-218 / decision</small><strong>Use is_admin() for RLS checks.</strong><span>Do not inline user table reads inside policies.</span></div>
+              <div class="note"><small>note-217 / convention</small><strong>Smoke test after every auth change.</strong><span>Aider owns the first pass.</span></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </section>
+
+    <aside class="stack">
+      <section class="panel focus-ring" data-feature="ask memory">
+        <div class="panel-header">
+          <h2>Inbox queues</h2>
+          <span class="hint">durable until closed</span>
+        </div>
+        <div class="panel-body">
+          <div class="ticket-list">
+            <div class="ticket-row">
+              <div class="ticket-id">C</div>
+              <div class="ticket-main"><strong>Claude</strong><span>0 open, 1 waiting for answer</span></div>
+              <span class="pill green">clear</span>
+            </div>
+            <div class="ticket-row">
+              <div class="ticket-id">X</div>
+              <div class="ticket-main"><strong>Codex</strong><span>T-104 assigned, retry count 0</span></div>
+              <span class="pill amber">1</span>
+            </div>
+            <div class="ticket-row">
+              <div class="ticket-id">E</div>
+              <div class="ticket-main"><strong>Expert</strong><span>T-105 queued if Codex times out</span></div>
+              <span class="pill blue">standby</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel focus-ring" data-feature="ask">
+        <div class="panel-header">
+          <h2>Cache + experts</h2>
+          <span class="hint">avoid extra LLM turns</span>
+        </div>
+        <div class="panel-body">
+          <div class="cache-grid">
+            <div class="cache-row"><span>auth answers</span><div class="cache-bar"><span style="--w: 78%"></span></div><strong>78%</strong></div>
+            <div class="cache-row"><span>timezone</span><div class="cache-bar"><span style="--w: 91%"></span></div><strong>91%</strong></div>
+            <div class="cache-row"><span>test fixes</span><div class="cache-bar"><span style="--w: 46%"></span></div><strong>46%</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel focus-ring" data-feature="security memory conflict">
+        <div class="panel-header">
+          <h2>Event stream</h2>
+          <span class="hint">audit view</span>
+        </div>
+        <div class="panel-body">
+          <div class="event-log" id="eventLog">
+            <div class="event-row"><time>22:21</time><strong>status</strong><span>Codex running smoke tests</span></div>
+            <div class="event-row"><time>22:20</time><strong>private</strong><span>T-104 payload hidden from dashboard</span></div>
+            <div class="event-row"><time>22:19</time><strong>claim</strong><span>Cursor claimed EventForm.tsx</span></div>
+            <div class="event-row"><time>22:18</time><strong>note</strong><span>RLS decision saved to blackboard</span></div>
+            <div class="event-row"><time>22:17</time><strong>policy</strong><span>secret redacted before publish</span></div>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+</div>
+
+<script>
+  const modeButtons = document.querySelectorAll(".mode-button");
+  const pauseButton = document.getElementById("pauseButton");
+  const eventLog = document.getElementById("eventLog");
+  const openTickets = document.getElementById("openTickets");
+
+  const events = [
+    ["status", "Claude polled T-104, no answer yet"],
+    ["private", "answer payload delivered to Claude sidecar"],
+    ["claim", "Codex refreshed auth policy lease"],
+    ["note", "new decision appended to blackboard"],
+    ["policy", "duplicate ask linked to cached answer"],
+    ["status", "Expert pool warmed auth reviewer"]
+  ];
+
+  let eventIndex = 0;
+  let ticketCount = 3;
+  let paused = false;
+
+  modeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const mode = button.dataset.mode;
+      document.body.className = document.body.className
+        .replace(/\bmode-\w+/g, "")
+        .trim();
+      document.body.classList.add("mode-" + mode);
+      if (paused) document.body.classList.add("paused");
+      modeButtons.forEach((item) => item.classList.toggle("active", item === button));
+    });
+  });
+
+  pauseButton.addEventListener("click", () => {
+    paused = !paused;
+    document.body.classList.toggle("paused", paused);
+    pauseButton.setAttribute("aria-label", paused ? "Resume live animation" : "Pause live animation");
+    pauseButton.innerHTML = paused
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>';
+  });
+
+  function addEvent() {
+    if (paused) return;
+    const now = new Date().toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    const [kind, message] = events[eventIndex % events.length];
+    const row = document.createElement("div");
+    row.className = "event-row";
+    row.innerHTML = `<time>${now}</time><strong>${kind}</strong><span>${message}</span>`;
+    eventLog.prepend(row);
+    while (eventLog.children.length > 7) eventLog.lastElementChild.remove();
+    eventIndex += 1;
+    ticketCount = ticketCount === 4 ? 2 : ticketCount + 1;
+    openTickets.textContent = String(ticketCount);
+  }
+
+  setInterval(addEvent, 2300);
+</script>
+</body>
+</html>

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh — Topology</title>
+<style>
+  :root{
+    --bg:#05060d;
+    --bus:#21e6ff;
+    --cyan:#21e6ff;
+    --green:#38ffa3;
+    --amber:#ffb31f;
+    --violet:#a78bfa;
+    --pink:#f472b6;
+    --sky:#7dd3fc;
+    --grid:rgba(80,120,200,.07);
+    --card:rgba(16,22,40,.72);
+    --stroke:rgba(120,180,255,.18);
+    --muted:#5d6f9c;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:auto;
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;color:#cdd9f5}
+  body::before{content:"";position:fixed;inset:0;z-index:0;
+    background:
+      radial-gradient(1200px 700px at 50% 30%, rgba(33,230,255,.10), transparent 60%),
+      radial-gradient(900px 600px at 85% 95%, rgba(56,255,163,.06), transparent 60%),
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px;
+    pointer-events:none}
+
+  .wrap{position:relative;z-index:1;min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
+  .stage{position:relative;width:1280px;height:860px;transform-origin:center}
+
+  .hud{position:absolute;top:0;left:6px;z-index:30}
+  .hud h1{font-size:21px;letter-spacing:.42em;font-weight:700;
+    background:linear-gradient(90deg,#fff,#21e6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hud p{font-size:11px;letter-spacing:.26em;color:var(--muted);margin-top:6px}
+
+  .legend{position:absolute;top:4px;right:6px;z-index:30;display:flex;flex-direction:column;gap:7px;font-size:10.5px;letter-spacing:.06em}
+  .legend span{display:flex;align-items:center;gap:8px;color:#8aa0cf}
+  .legend i{width:22px;height:0;border-top:2px solid;display:inline-block}
+
+  /* plane bands */
+  .band{position:absolute;left:0;width:1280px;border-radius:14px;z-index:2;
+    border:1px dashed rgba(120,180,255,.13);background:rgba(120,180,255,.022)}
+  .band .tag{position:absolute;top:8px;left:12px;font-size:9.5px;letter-spacing:.28em;color:var(--muted);text-transform:uppercase}
+
+  /* svg connectors */
+  svg.routes{position:absolute;inset:0;width:1280px;height:860px;pointer-events:none;z-index:10}
+
+  /* node cards */
+  .node{position:absolute;transform:translate(-50%,-50%);z-index:20;width:172px;
+    background:var(--card);backdrop-filter:blur(8px);border:1px solid var(--stroke);
+    border-radius:13px;padding:11px 13px;
+    box-shadow:0 8px 30px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05)}
+  .node .top{display:flex;align-items:center;gap:9px}
+  .node .glyph{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:15px;font-weight:700}
+  .node .name{font-size:12.5px;font-weight:600;color:#eaf1ff;letter-spacing:.02em}
+  .node .role{font-size:9px;letter-spacing:.13em;color:#647aa6;margin-top:2px;text-transform:uppercase}
+  .node .sub{margin-top:8px;font-size:9.5px;color:#8fa6d4;line-height:1.45}
+  .node.ext{border-style:dashed;opacity:.92}
+  .node.later{opacity:.5;border-style:dashed}
+  .node.wide{width:236px}
+  .tagpill{display:inline-block;margin-top:7px;font-size:8.5px;letter-spacing:.1em;color:#8aa0cf;
+    border:1px solid var(--stroke);border-radius:6px;padding:1px 6px}
+
+  /* the bus */
+  .bus{position:absolute;left:70px;top:432px;width:1140px;height:60px;border-radius:30px;z-index:15;
+    background:linear-gradient(90deg,rgba(33,230,255,.08),rgba(33,230,255,.22),rgba(56,255,163,.16),rgba(33,230,255,.22),rgba(33,230,255,.08));
+    border:1px solid rgba(33,230,255,.35);
+    box-shadow:0 0 40px rgba(33,230,255,.30),inset 0 0 30px rgba(33,230,255,.22);
+    overflow:hidden;display:flex;align-items:center;justify-content:center}
+  .bus::before{content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(90deg,transparent 0 22px,rgba(255,255,255,.16) 22px 24px);
+    animation:flow 1.1s linear infinite;opacity:.45}
+  .bus .label{position:relative;z-index:2;text-align:center}
+  .bus .label b{font-size:13px;letter-spacing:.2em;color:#eafdff}
+  .bus .label small{display:block;font-size:9.5px;letter-spacing:.16em;color:#bfe9f5;margin-top:2px;opacity:.85}
+  @keyframes flow{to{background-position:-48px 0}}
+
+  .caption{position:absolute;z-index:18;font-size:9px;letter-spacing:.08em;color:#7e93c4;
+    background:rgba(8,11,22,.7);padding:1px 5px;border-radius:5px;transform:translate(-50%,-50%)}
+
+  .foot{position:absolute;bottom:2px;left:6px;font-size:10px;color:var(--muted);letter-spacing:.04em;z-index:30}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+
+    <div class="hud">
+      <h1>AGENT&nbsp;MESH</h1>
+      <p>RUNTIME TOPOLOGY · LOCAL-FIRST</p>
+    </div>
+    <div class="legend">
+      <span><i style="border-color:#8fa6d4"></i> unix socket (CLI ↔ sidecar)</span>
+      <span><i style="border-color:var(--cyan)"></i> NATS (sidecar ↔ bus)</span>
+      <span><i style="border-color:var(--green)"></i> control (req/reply + sub)</span>
+      <span><i style="border-color:var(--sky);border-top-style:dashed"></i> read-only tap (mesh.&gt;)</span>
+    </div>
+
+    <!-- plane bands -->
+    <div class="band" style="top:74px;height:300px"><span class="tag">edge · one stack per agent</span></div>
+    <div class="band" style="top:404px;height:116px"><span class="tag">bus + store</span></div>
+    <div class="band" style="top:550px;height:250px"><span class="tag">control · view</span></div>
+
+    <svg class="routes" id="routes" viewBox="0 0 1280 860"></svg>
+
+    <!-- the bus -->
+    <div class="bus">
+      <div class="label">
+        <b>NATS&nbsp;&nbsp;+&nbsp;&nbsp;JetStream</b>
+        <small>BUS · DURABLE STREAMS · KV (claims · tickets · registry · notes · audit)</small>
+      </div>
+    </div>
+
+    <div class="foot">6 long-running procs at rest (NATS · coordinator · dashboard · N×sidecar) + agent CLIs + transient <b>mesh</b> calls. JetStream is the bus AND the store.</div>
+  </div>
+</div>
+
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const stage=document.getElementById('stage');
+const svg=document.getElementById('routes');
+
+// node definitions {x,y,w,h(for anchor),glyph,color,name,role,sub,cls}
+const AG = [
+  {x:240, c:'#21e6ff', g:'◆', name:'Claude Code', role:'agent · external'},
+  {x:530, c:'#a78bfa', g:'⬡', name:'Codex CLI',  role:'agent · external'},
+  {x:820, c:'#f472b6', g:'▲', name:'Cursor CLI',  role:'agent · external'},
+];
+const nodes={};
+
+function card(id,{x,y,c,g,name,role,sub,cls='',wide=false}){
+  const d=document.createElement('div');
+  d.className='node'+(cls?(' '+cls):'')+(wide?' wide':'');
+  d.style.left=x+'px'; d.style.top=y+'px';
+  d.innerHTML=`<div class="top">
+      <div class="glyph" style="color:${c};border:1px solid ${c}55;background:${c}1a">${g}</div>
+      <div><div class="name">${name}</div><div class="role">${role}</div></div>
+    </div>${sub?`<div class="sub">${sub}</div>`:''}`;
+  stage.appendChild(d);
+  // measure for anchors
+  const h=d.offsetHeight, w=d.offsetWidth;
+  nodes[id]={x,y,w,h,top:y-h/2,bot:y+h/2,c};
+  return d;
+}
+
+function line(x1,y1,x2,y2,color,dash){
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d',`M ${x1} ${y1} L ${x2} ${y2}`);
+  p.setAttribute('stroke',color); p.setAttribute('stroke-width','2');
+  p.setAttribute('fill','none'); p.setAttribute('stroke-linecap','round');
+  if(dash) p.setAttribute('stroke-dasharray','5 5');
+  svg.appendChild(p);
+}
+function dot(x,y,color){
+  const c=document.createElementNS(SVGNS,'circle');
+  c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r','4');
+  c.setAttribute('fill',color); c.setAttribute('opacity','.75'); svg.appendChild(c);
+}
+function caption(x,y,text){
+  const d=document.createElement('div'); d.className='caption';
+  d.style.left=x+'px'; d.style.top=y+'px'; d.textContent=text; stage.appendChild(d);
+}
+
+const BUS_TOP=432, BUS_BOT=492;
+
+// ---- agents + their edge stacks ----
+AG.forEach((a,i)=>{
+  card('agent'+i,{x:a.x,y:120,c:a.c,g:a.g,name:a.name,role:a.role,
+    sub:`runs <b style="color:#cdd9f5">mesh</b> CLI · hooks (pre-edit · between-turn)`, cls:'ext'});
+  card('side'+i,{x:a.x,y:300,c:'#38ffa3',g:'▢',name:'Sidecar (meshd)',role:'daemon · 1 per agent',
+    sub:`owns unix socket · heartbeat · holds this agent's tickets + claims · NATS client`});
+  // agent -> sidecar : unix socket
+  line(a.x, nodes['agent'+i].bot, a.x, nodes['side'+i].top, '#8fa6d4', false);
+  caption(a.x+1, (nodes['agent'+i].bot+nodes['side'+i].top)/2, 'unix socket');
+  // sidecar -> bus : NATS
+  line(a.x, nodes['side'+i].bot, a.x, BUS_TOP, a.c, false);
+  dot(a.x, BUS_TOP, a.c);
+});
+caption(940, (300)/1, '');
+
+// ---- control + view ----
+card('coord',{x:300,y:640,c:'#38ffa3',g:'✺',name:'Coordinator (meshd)',role:'control plane · 1',
+  sub:`registry · role→subject routing · policy (rate-limit · dedup) · audit. <b>Off the data path.</b>`, wide:true});
+card('expert',{x:610,y:648,c:'#ffb31f',g:'★',name:'Expert pool',role:'on-demand · later',
+  sub:`warm responder spawned when no live agent owns a topic`, cls:'later'});
+card('dash',{x:920,y:640,c:'#7dd3fc',g:'▣',name:'Dashboard',role:'observer · 1',
+  sub:`web server + browser UI · subscribes <b>mesh.&gt;</b> · read-only`, wide:true});
+
+// coordinator -> bus
+line(300, nodes['coord'].top, 300, BUS_BOT, '#38ffa3', false);
+dot(300, BUS_BOT, '#38ffa3');
+caption(300, (nodes['coord'].top+BUS_BOT)/2, 'req/reply + sub');
+// expert -> bus (later, dashed faded)
+line(610, nodes['expert'].top, 610, BUS_BOT, 'rgba(255,179,31,.5)', true);
+dot(610, BUS_BOT, 'rgba(255,179,31,.5)');
+// dashboard -> bus : read-only dashed
+line(920, nodes['dash'].top, 920, BUS_BOT, '#7dd3fc', true);
+dot(920, BUS_BOT, '#7dd3fc');
+caption(920, (nodes['dash'].top+BUS_BOT)/2, 'tap mesh.>');
+
+// responsive fit
+function fit(){
+  const s=Math.min(window.innerWidth/1320, window.innerHeight/900, 1);
+  stage.style.transform=`scale(${s})`;
+}
+window.addEventListener('resize',fit); fit();
+</script>
+</body>
+</html>

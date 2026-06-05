@@ -1,0 +1,29 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Go (sidecar + CLI candidate)
+/bin/
+*.test
+*.out
+
+# Rust (sidecar + CLI candidate)
+/target/
+
+# Node (dashboard tooling, if added)
+node_modules/
+dist/

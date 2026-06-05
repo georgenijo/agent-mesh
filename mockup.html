@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh — Bus Visualizer</title>
+<style>
+  :root{
+    --bg:#05060d;
+    --bus:#21e6ff;
+    --status:#21e6ff;   /* cyan  - status/heartbeat */
+    --ask:#ffb31f;      /* amber - question */
+    --answer:#38ffa3;   /* green - answer */
+    --grid:rgba(80,120,200,.07);
+    --card:rgba(16,22,40,.72);
+    --stroke:rgba(120,180,255,.18);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;color:#cdd9f5}
+  /* ambient background */
+  body::before{content:"";position:fixed;inset:0;
+    background:
+      radial-gradient(1200px 700px at 50% 38%, rgba(33,230,255,.10), transparent 60%),
+      radial-gradient(900px 600px at 85% 95%, rgba(56,255,163,.06), transparent 60%),
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px;
+    pointer-events:none}
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(120% 120% at 50% 50%,transparent 55%,rgba(0,0,0,.7));}
+
+  .wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  .stage{position:relative;width:1280px;height:760px;transform-origin:center;}
+
+  /* header */
+  .hud{position:absolute;top:22px;left:30px;z-index:30}
+  .hud h1{font-size:22px;letter-spacing:.5em;font-weight:700;
+    background:linear-gradient(90deg,#fff,#21e6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hud p{font-size:11px;letter-spacing:.28em;color:#5d6f9c;margin-top:6px}
+  .legend{position:absolute;top:26px;right:30px;z-index:30;display:flex;gap:18px;font-size:11px;letter-spacing:.12em}
+  .legend span{display:flex;align-items:center;gap:7px;color:#8aa0cf}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  /* the bus */
+  .bus{position:absolute;left:200px;top:356px;width:880px;height:48px;border-radius:24px;
+    background:linear-gradient(90deg,rgba(33,230,255,.08),rgba(33,230,255,.22),rgba(56,255,163,.18),rgba(33,230,255,.22),rgba(33,230,255,.08));
+    border:1px solid rgba(33,230,255,.35);
+    box-shadow:0 0 40px rgba(33,230,255,.35),inset 0 0 30px rgba(33,230,255,.25);
+    overflow:hidden}
+  .bus::before{content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(90deg,transparent 0 22px,rgba(255,255,255,.18) 22px 24px);
+    animation:flow 1.1s linear infinite;opacity:.5}
+  .bus::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);
+    width:30%;animation:sweep 3.2s linear infinite}
+  @keyframes flow{to{background-position:-48px 0}}
+  @keyframes sweep{from{transform:translateX(-120%)}to{transform:translateX(450%)}}
+  .bus-label{position:absolute;left:200px;top:412px;width:880px;text-align:center;
+    font-size:10px;letter-spacing:.5em;color:#3f5a86}
+
+  /* svg routing layer */
+  svg.routes{position:absolute;inset:0;width:1280px;height:760px;pointer-events:none;z-index:10}
+
+  /* node cards */
+  .node{position:absolute;width:168px;transform:translate(-50%,-50%);z-index:20;
+    background:var(--card);backdrop-filter:blur(8px);border:1px solid var(--stroke);
+    border-radius:14px;padding:12px 14px;
+    box-shadow:0 8px 30px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05)}
+  .node .top{display:flex;align-items:center;gap:10px}
+  .node .glyph{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;
+    font-size:17px;font-weight:700;background:rgba(33,230,255,.12);border:1px solid rgba(33,230,255,.3)}
+  .node .name{font-size:13px;font-weight:600;color:#eaf1ff;letter-spacing:.03em}
+  .node .role{font-size:9.5px;letter-spacing:.16em;color:#647aa6;margin-top:2px;text-transform:uppercase}
+  .node .stat{margin-top:9px;font-size:10px;color:#8fa6d4;display:flex;align-items:center;gap:7px;
+    min-height:14px;line-height:1.3}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--answer);flex:none;
+    box-shadow:0 0 8px var(--answer);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  .node.hub{width:188px;border-color:rgba(56,255,163,.4);
+    box-shadow:0 8px 40px rgba(56,255,163,.18),inset 0 1px 0 rgba(255,255,255,.06)}
+  .node.hub .glyph{background:rgba(56,255,163,.14);border-color:rgba(56,255,163,.4);color:#38ffa3}
+  .node.flash{border-color:rgba(33,230,255,.7);box-shadow:0 0 34px rgba(33,230,255,.45)}
+
+  /* live log */
+  .log{position:absolute;right:26px;bottom:24px;width:330px;height:188px;z-index:30;
+    background:rgba(8,11,22,.82);border:1px solid var(--stroke);border-radius:12px;
+    padding:12px 14px;overflow:hidden;backdrop-filter:blur(8px)}
+  .log h2{font-size:10px;letter-spacing:.3em;color:#5d6f9c;margin-bottom:8px;display:flex;justify-content:space-between}
+  .log .live{color:#38ffa3}
+  .log ul{list-style:none;font-size:11px;line-height:1.85}
+  .log li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;animation:slidein .4s forwards}
+  @keyframes slidein{to{opacity:1}}
+  .log .t{color:#4a5f8c}
+  .log .from{color:#cdd9f5}
+  .pkt-status{color:var(--status)} .pkt-ask{color:var(--ask)} .pkt-answer{color:var(--answer)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+    <div class="hud">
+      <h1>AGENT&nbsp;MESH</h1>
+      <p>NATS BUS · MCP EDGE · A2A SEMANTICS</p>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--status);box-shadow:0 0 8px var(--status)"></i>STATUS</span>
+      <span><i style="background:var(--ask);box-shadow:0 0 8px var(--ask)"></i>ASK</span>
+      <span><i style="background:var(--answer);box-shadow:0 0 8px var(--answer)"></i>ANSWER</span>
+    </div>
+
+    <div class="bus"></div>
+    <div class="bus-label">◂ ◂ ◂   J E T S T R E A M   ▸ ▸ ▸</div>
+
+    <svg class="routes" id="routes" viewBox="0 0 1280 760"></svg>
+
+    <div class="log">
+      <h2><span>MESSAGE STREAM</span><span class="live">● LIVE</span></h2>
+      <ul id="loglist"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- node layout (stage coords) ----
+const BUS_TOP=356, BUS_BOT=404, BUS_MID=380;
+const nodes = {
+  claude:  {x:330, y:150, side:'top', glyph:'◆', color:'#21e6ff', name:'Claude Code', role:'builder'},
+  codex:   {x:640, y:120, side:'top', glyph:'⬡', color:'#a78bfa', name:'Codex CLI',  role:'builder'},
+  cursor:  {x:950, y:150, side:'top', glyph:'▲', color:'#f472b6', name:'Cursor CLI', role:'builder'},
+  coord:   {x:430, y:618, side:'bot', glyph:'✺', color:'#38ffa3', name:'Coordinator', role:'router · brain', hub:true},
+  expert:  {x:735, y:618, side:'bot', glyph:'★', color:'#ffb31f', name:'Expert',     role:'on-demand'},
+  dash:    {x:1010,y:618, side:'bot', glyph:'▣', color:'#7dd3fc', name:'Dashboard',  role:'observer'},
+};
+
+const stage = document.getElementById('stage');
+const svg = document.getElementById('routes');
+const SVGNS='http://www.w3.org/2000/svg';
+
+// build node cards
+const els={};
+for(const [k,n] of Object.entries(nodes)){
+  const d=document.createElement('div');
+  d.className='node'+(n.hub?' hub':'');
+  d.style.left=n.x+'px'; d.style.top=n.y+'px';
+  d.innerHTML=`<div class="top">
+      <div class="glyph" style="color:${n.color};border-color:${n.color}55;background:${n.color}1a">${n.glyph}</div>
+      <div><div class="name">${n.name}</div><div class="role">${n.role}</div></div>
+    </div>
+    <div class="stat"><span class="dot" style="background:${n.color};box-shadow:0 0 8px ${n.color}"></span><span class="msg">idle</span></div>`;
+  stage.appendChild(d);
+  els[k]=d;
+  n.anchorY = n.side==='top' ? n.y+46 : n.y-46; // card edge
+  n.busEdge = n.side==='top' ? BUS_TOP : BUS_BOT;
+}
+
+// draw faint static connector lines node->bus
+for(const n of Object.values(nodes)){
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d',`M ${n.x} ${n.anchorY} L ${n.x} ${n.busEdge}`);
+  p.setAttribute('stroke','rgba(120,180,255,.14)');
+  p.setAttribute('stroke-width','2');
+  p.setAttribute('fill','none');
+  svg.appendChild(p);
+  // bus stop node
+  const c=document.createElementNS(SVGNS,'circle');
+  c.setAttribute('cx',n.x); c.setAttribute('cy',n.busEdge);
+  c.setAttribute('r','4'); c.setAttribute('fill','#21e6ff');
+  c.setAttribute('opacity','.7');
+  svg.appendChild(c);
+}
+
+// glow filter for packets
+const defs=document.createElementNS(SVGNS,'defs');
+defs.innerHTML=`<filter id="g" x="-200%" y="-200%" width="500%" height="500%">
+  <feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+svg.appendChild(defs);
+
+// routing path builder: A -> bus center -> B
+function routePath(a,b){
+  return `M ${a.x} ${a.anchorY} L ${a.x} ${BUS_MID} L ${b.x} ${BUS_MID} L ${b.x} ${b.anchorY}`;
+}
+
+const TYPE={status:'#21e6ff',ask:'#ffb31f',answer:'#38ffa3'};
+const packets=[];
+
+function spawn(fromKey,toKey,type,text){
+  const a=nodes[fromKey], b=nodes[toKey];
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',routePath(a,b));
+  path.setAttribute('fill','none'); path.setAttribute('stroke','none');
+  svg.appendChild(path);
+  const len=path.getTotalLength();
+
+  const trail=document.createElementNS(SVGNS,'path');
+  trail.setAttribute('d',routePath(a,b));
+  trail.setAttribute('fill','none');
+  trail.setAttribute('stroke',TYPE[type]);
+  trail.setAttribute('stroke-width','2.5');
+  trail.setAttribute('stroke-linecap','round');
+  trail.setAttribute('opacity','.0');
+  trail.setAttribute('stroke-dasharray',`60 ${len}`);
+  svg.appendChild(trail);
+
+  const dot=document.createElementNS(SVGNS,'circle');
+  dot.setAttribute('r','5'); dot.setAttribute('fill',TYPE[type]);
+  dot.setAttribute('filter','url(#g)');
+  svg.appendChild(dot);
+
+  // light up source
+  flashNode(fromKey,type,text);
+  packets.push({path,trail,dot,len,t:0,speed:.0055+Math.random()*.0025,type,toKey,text,arrived:false});
+}
+
+function flashNode(key,type,text){
+  els[key].classList.add('flash');
+  els[key].querySelector('.msg').textContent=text;
+  els[key].querySelector('.dot').style.background=TYPE[type];
+  setTimeout(()=>els[key].classList.remove('flash'),500);
+}
+
+function tick(){
+  for(let i=packets.length-1;i>=0;i--){
+    const p=packets[i];
+    p.t+=p.speed;
+    if(p.t>=1){
+      if(!p.arrived){p.arrived=true; flashNode(p.toKey,p.type,p.text);}
+      p.path.remove(); p.trail.remove(); p.dot.remove();
+      packets.splice(i,1); continue;
+    }
+    const pt=p.path.getPointAtLength(p.t*p.len);
+    p.dot.setAttribute('cx',pt.x); p.dot.setAttribute('cy',pt.y);
+    // trailing comet
+    const off=Math.max(0,p.t*p.len-60);
+    p.trail.setAttribute('stroke-dashoffset', -off);
+    p.trail.setAttribute('opacity', p.t<.06? p.t/.06*.8 : .8);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- scripted conversation ----
+const script=[
+  ['codex','coord','status','building auth middleware'],
+  ['claude','coord','status','writing RRULE builder'],
+  ['cursor','coord','ask','tz convert util?'],
+  ['coord','expert','ask','RLS recursion fix?'],
+  ['coord','claude','answer','use event-time.ts'],
+  ['expert','codex','answer','is_admin() SECURITY DEFINER'],
+  ['codex','dash','status','✓ middleware passing'],
+  ['claude','coord','ask','ICS feed schema?'],
+  ['coord','expert','ask','review RLS policy'],
+  ['expert','claude','answer','public read + admin CRUD'],
+  ['cursor','coord','status','refactoring EventForm'],
+  ['coord','dash','status','3 agents active'],
+  ['expert','cursor','answer','parseDatetimeLocal()'],
+  ['codex','coord','status','running smoke tests'],
+];
+const logEl=document.getElementById('loglist');
+let si=0;
+function step(){
+  const [f,t,type,text]=script[si%script.length];
+  spawn(f,t,type,text);
+  const li=document.createElement('li');
+  const time=new Date().toLocaleTimeString('en-US',{hour12:false});
+  li.innerHTML=`<span class="t">${time}</span> <span class="from">${nodes[f].name}</span> <span class="pkt-${type}">${type==='answer'?'◂':'▸'} ${type}</span> ${nodes[t].name.split(' ')[0]}: ${text}`;
+  logEl.prepend(li);
+  while(logEl.children.length>7) logEl.lastChild.remove();
+  si++;
+  setTimeout(step, 1500+Math.random()*900);
+}
+setTimeout(step,600);
+
+// ---- responsive scale ----
+function fit(){
+  const s=Math.min(window.innerWidth/1300, window.innerHeight/780);
+  stage.style.transform=`scale(${s})`;
+}
+window.addEventListener('resize',fit); fit();
+</script>
+</body>
+</html>

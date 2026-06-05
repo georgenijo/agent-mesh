@@ -49,7 +49,8 @@ Sidecar + CLI in **Go** with an **embedded NATS server** (one static binary, `me
 
 ## Working notes
 
-- **`docs/decisions/DECISIONS.md`** — running log of locked architectural decisions (language, phase order, CAS locks, TTL leases, envelope/authority invariants). Read it before changing direction; append via the `/decisions` skill.
+- **`docs/decisions/DECISIONS.md`** — running log of locked architectural decisions (language, phase order, CAS locks, TTL leases, envelope/authority invariants). Read it before changing direction.
+- **Log major decision forks.** When a meaningful fork is resolved in conversation — architectural choice, scope cut/deferral, phase ordering, tradeoff resolution, convention adoption, or superseding a prior call — proactively invoke the **`/decisions`** skill to append it to the log (don't wait to be asked). Skip trivia, bug fixes, and anything the code or git history already captures. When superseding, flip the old entry's status rather than rewriting it.
 - **`docs/concepts.md`** — glossary of the building blocks (daemon, NATS/JetStream, KV bucket, sidecar, coordinator, meshd, hooks). Start here if a term is unclear.
 - **`docs/components.md`** — per-component feature breakdown, tiered MVP/v1+/later.
 - **`docs/audit-multi-agent-pm.md`** — patterns mined from a sibling project (`steal`/`avoid`); the source of several locked decisions.

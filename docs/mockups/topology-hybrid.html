@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh — Hybrid Topology</title>
+<style>
+  :root{
+    --bg:#05060d;
+    --cyan:#21e6ff; --green:#38ffa3; --amber:#ffb31f; --violet:#a78bfa;
+    --pink:#f472b6; --sky:#7dd3fc; --orange:#ff8a3d;
+    --grid:rgba(80,120,200,.07);
+    --card:rgba(16,22,40,.72);
+    --stroke:rgba(120,180,255,.18);
+    --muted:#5d6f9c;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:auto;
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;color:#cdd9f5}
+  body::before{content:"";position:fixed;inset:0;z-index:0;
+    background:
+      radial-gradient(1200px 700px at 50% 30%, rgba(33,230,255,.10), transparent 60%),
+      radial-gradient(900px 600px at 85% 95%, rgba(56,255,163,.06), transparent 60%),
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px;
+    pointer-events:none}
+  .wrap{position:relative;z-index:1;min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px}
+  .stage{position:relative;width:1280px;height:880px;transform-origin:center}
+
+  .hud{position:absolute;top:2px;left:6px;z-index:30}
+  .hud h1{font-size:19px;letter-spacing:.4em;font-weight:700;
+    background:linear-gradient(90deg,#fff,#21e6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hud p{font-size:10px;letter-spacing:.24em;color:var(--muted);margin-top:5px}
+
+  .legend{position:absolute;top:2px;right:6px;z-index:30;display:flex;flex-direction:column;gap:6px;font-size:10px;letter-spacing:.05em}
+  .legend span{display:flex;align-items:center;gap:8px;color:#8aa0cf}
+  .legend i{width:20px;height:0;border-top:2px solid;display:inline-block}
+  .legend b{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+  .band{position:absolute;border-radius:16px;z-index:2;border:1px dashed rgba(120,180,255,.15);background:rgba(120,180,255,.022)}
+  .band .tag{position:absolute;top:8px;left:14px;font-size:9.5px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase}
+
+  svg.routes{position:absolute;inset:0;width:1280px;height:880px;pointer-events:none;z-index:10}
+
+  .node{position:absolute;width:188px;transform:translate(-50%,-50%);z-index:20;
+    background:var(--card);backdrop-filter:blur(8px);border:1px solid var(--stroke);
+    border-radius:13px;padding:10px 13px;box-shadow:0 8px 26px rgba(0,0,0,.45)}
+  .node .top{display:flex;align-items:center;gap:9px}
+  .node .glyph{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:15px;font-weight:700}
+  .node .name{font-size:12px;font-weight:600;color:#eaf1ff}
+  .node .role{font-size:8.5px;letter-spacing:.1em;color:#647aa6;margin-top:1px;text-transform:uppercase}
+  .node .sub{margin-top:7px;font-size:9px;color:#8fa6d4;line-height:1.4}
+  .badge{display:inline-block;margin-top:7px;font-size:8px;letter-spacing:.08em;border-radius:5px;padding:1px 6px}
+  .badge.alive{color:#7dffc4;border:1px solid rgba(56,255,163,.4);background:rgba(56,255,163,.08)}
+  .badge.eph{color:#ffcf6b;border:1px dashed rgba(255,179,31,.5);background:rgba(255,179,31,.06)}
+
+  .node.expert{border-color:rgba(56,255,163,.34);box-shadow:0 0 26px rgba(56,255,163,.12),0 8px 26px rgba(0,0,0,.45);animation:breathe 3.4s ease-in-out infinite}
+  @keyframes breathe{50%{box-shadow:0 0 36px rgba(56,255,163,.22),0 8px 26px rgba(0,0,0,.45)}}
+  .node.worker{border-style:dashed;border-color:rgba(255,179,31,.42);animation:churn 4.2s ease-in-out infinite}
+  @keyframes churn{0%,100%{opacity:1}46%{opacity:1}53%{opacity:.42}60%{opacity:1}}
+  .node.coord{width:230px;border-color:rgba(33,230,255,.38)}
+  .node.ui{width:230px;border-color:rgba(244,114,182,.4)}
+  .node.store{width:150px;height:330px;display:flex;flex-direction:column;justify-content:center;border-color:rgba(125,211,252,.4)}
+
+  /* role router vertical bar */
+  .router{position:absolute;left:610px;top:268px;width:70px;height:486px;border-radius:35px;z-index:15;
+    background:linear-gradient(180deg,rgba(167,139,250,.10),rgba(167,139,250,.26),rgba(33,230,255,.18),rgba(167,139,250,.26),rgba(167,139,250,.10));
+    border:1px solid rgba(167,139,250,.4);
+    box-shadow:0 0 34px rgba(167,139,250,.28),inset 0 0 24px rgba(167,139,250,.2);overflow:hidden}
+  .router::before{content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(0deg,transparent 0 20px,rgba(255,255,255,.14) 20px 22px);
+    animation:vflow 1.3s linear infinite;opacity:.5}
+  @keyframes vflow{to{background-position:0 -44px}}
+  .router .lbl{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-90deg);white-space:nowrap;
+    font-size:10px;letter-spacing:.26em;color:#e7dcff}
+  .router .lbl small{display:block;font-size:8px;letter-spacing:.14em;color:#cdb8ff;opacity:.85;text-align:center;margin-top:2px}
+
+  .caption{position:absolute;z-index:18;font-size:9px;letter-spacing:.05em;color:#8aa0cf;
+    background:rgba(8,11,22,.72);padding:1px 6px;border-radius:5px;transform:translate(-50%,-50%);text-align:center}
+  .foot{position:absolute;bottom:0;left:6px;font-size:10px;color:var(--muted);letter-spacing:.03em;z-index:30}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+    <div class="hud"><h1>AGENT&nbsp;MESH</h1><p>HYBRID · PERSISTENT EXPERTS + EPHEMERAL WORKERS</p></div>
+    <div class="legend">
+      <span><b style="background:var(--green)"></b> persistent expert (warm, alive)</span>
+      <span><b style="background:var(--amber);border-radius:3px"></b> ephemeral worker (spawned→exit)</span>
+      <span><i style="border-color:var(--violet)"></i> ask ⇄ answer (by role)</span>
+      <span><i style="border-color:var(--sky)"></i> read ⇄ write memory</span>
+      <span><i style="border-color:var(--cyan);border-top-style:dashed"></i> spawn / teardown</span>
+      <span><i style="border-color:var(--pink)"></i> ticket / observe</span>
+    </div>
+
+    <!-- bands -->
+    <div class="band" style="left:30px;top:236px;width:520px;height:580px"><span class="tag">persistent experts · live across many tickets</span></div>
+    <div class="band" style="left:740px;top:236px;width:430px;height:580px"><span class="tag">ephemeral workers · one subtask, then exit</span></div>
+
+    <!-- router -->
+    <div class="router"><div class="lbl">ROLE ROUTER<small>subjects · ask by role</small></div></div>
+
+    <svg class="routes" id="routes" viewBox="0 0 1280 880"></svg>
+
+    <div class="foot">Coordinator spawns workers per subtask & keeps experts warm. Workers ask experts by role through the router. Experts' long-term memory lives in the blackboard, so they restart without losing knowledge.</div>
+  </div>
+</div>
+
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const stage=document.getElementById('stage');
+const svg=document.getElementById('routes');
+
+const nodes={
+  ui:    {x:645,y:54, c:'#f472b6',g:'▣',name:'UI',role:'drop ticket · live view',cls:'ui',sub:'submit a ticket / GitHub issue · watch it run'},
+  coord: {x:645,y:168,c:'#21e6ff',g:'✺',name:'Coordinator',role:'control plane',cls:'coord',sub:'triage (claude -p) · plan DAG · spawn · schedule · lifecycle'},
+  store: {x:120,y:520,c:'#7dd3fc',g:'▦',name:'Blackboard',role:'durable memory',cls:'store',sub:'experts’ long-term memory: decisions, conventions, ticket history (durable store)'},
+  // experts (persistent)
+  authE: {x:355,y:360,c:'#38ffa3',g:'★',name:'Auth Expert',role:'persistent · warm',cls:'expert',badge:['alive','⏱ persists']},
+  feE:   {x:355,y:520,c:'#38ffa3',g:'★',name:'Frontend Expert',role:'persistent · warm',cls:'expert',badge:['alive','⏱ persists']},
+  beE:   {x:355,y:680,c:'#38ffa3',g:'★',name:'Backend Expert',role:'persistent · warm',cls:'expert',badge:['alive','⏱ persists']},
+  // workers (ephemeral)
+  authW: {x:960,y:360,c:'#ffb31f',g:'⬡',name:'worker · auth',role:'ephemeral',cls:'worker',badge:['eph','⏳ this subtask']},
+  uiW:   {x:960,y:520,c:'#ffb31f',g:'◆',name:'worker · ui',role:'ephemeral',cls:'worker',badge:['eph','⏳ this subtask']},
+  apiW:  {x:960,y:680,c:'#ffb31f',g:'▲',name:'worker · api',role:'ephemeral',cls:'worker',badge:['eph','⏳ this subtask']},
+};
+const meta={};
+for(const [k,n] of Object.entries(nodes)){
+  const d=document.createElement('div');
+  d.className='node '+(n.cls||'');
+  d.style.left=n.x+'px'; d.style.top=n.y+'px';
+  d.innerHTML=`<div class="top">
+      <div class="glyph" style="color:${n.c};border:1px solid ${n.c}55;background:${n.c}1a">${n.g}</div>
+      <div><div class="name">${n.name}</div><div class="role">${n.role}</div></div>
+    </div>${n.sub?`<div class="sub">${n.sub}</div>`:''}${n.badge?`<span class="badge ${n.badge[0]}">${n.badge[1]}</span>`:''}`;
+  stage.appendChild(d);
+  const w=d.offsetWidth,h=d.offsetHeight;
+  meta[k]={x:n.x,y:n.y,w,h,L:n.x-w/2,R:n.x+w/2,T:n.y-h/2,B:n.y+h/2};
+}
+
+function line(x1,y1,x2,y2,color,dash,w){
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d',`M ${x1} ${y1} L ${x2} ${y2}`);
+  p.setAttribute('stroke',color);p.setAttribute('stroke-width',w||2);
+  p.setAttribute('fill','none');p.setAttribute('stroke-linecap','round');
+  if(dash)p.setAttribute('stroke-dasharray','5 5');
+  svg.appendChild(p);
+}
+function arrow(x,y,dir,color){ // small triangle, dir: 'l'|'r'|'d'
+  const t=document.createElementNS(SVGNS,'path');
+  let d;
+  if(dir==='r') d=`M ${x} ${y} l -7 -4 l 0 8 z`;
+  else if(dir==='l') d=`M ${x} ${y} l 7 -4 l 0 8 z`;
+  else d=`M ${x} ${y} l -4 -7 l 8 0 z`;
+  t.setAttribute('d',d);t.setAttribute('fill',color);svg.appendChild(t);
+}
+function cap(x,y,text){const d=document.createElement('div');d.className='caption';d.style.left=x+'px';d.style.top=y+'px';d.textContent=text;stage.appendChild(d);}
+
+const ROUTER_L=610, ROUTER_R=680, ROUTER_CX=645;
+const V='#a78bfa', MEM='#7dd3fc', SPAWN='#21e6ff', PINK='#f472b6';
+
+// UI <-> Coordinator
+line(645, meta.ui.B, 645, meta.coord.T, PINK, false, 2.2);
+cap(700,(meta.ui.B+meta.coord.T)/2,'ticket ↓  observe ↑');
+// Coordinator -> router top
+line(645, meta.coord.B, 645, 268, '#21e6ff', false, 2);
+
+// Experts <-> router (ask/answer)  and Experts <-> blackboard (memory)
+for(const k of ['authE','feE','beE']){
+  const m=meta[k];
+  line(m.R, m.y, ROUTER_L, m.y, V, false, 2); arrow(m.R+8,m.y,'l',V);
+  line(m.L, m.y, meta.store.R, m.y, MEM, false, 2); arrow(meta.store.R+8,m.y,'l',MEM);
+}
+// Workers <-> router
+for(const k of ['authW','uiW','apiW']){
+  const m=meta[k];
+  line(ROUTER_R, m.y, m.L, m.y, V, false, 2); arrow(m.L-8,m.y,'r',V);
+}
+cap(ROUTER_CX, 250, 'ask  ⇄  answer');
+cap((meta.store.R+meta.authE.L)/2, 318, 'read ⇄ write');
+
+// Coordinator -> experts (ensure alive) and -> workers (spawn/teardown): representative dashed
+line(meta.coord.L, meta.coord.y+6, meta.authE.x, meta.authE.T, SPAWN, true, 1.6);
+cap((meta.coord.L+meta.authE.x)/2-20, (meta.coord.y+meta.authE.T)/2-6, 'keep warm');
+line(meta.coord.R, meta.coord.y+6, meta.authW.x, meta.authW.T, SPAWN, true, 1.6);
+cap((meta.coord.R+meta.authW.x)/2+14, (meta.coord.y+meta.authW.T)/2-6, 'spawn / teardown');
+// worker reads blackboard on start (faint, from uiW down-left to store bottom)
+line(meta.uiW.L, meta.uiW.B-4, meta.store.R, meta.store.B-10, MEM, true, 1.3);
+cap(560, 770, 'worker reads context on start');
+</script>
+</body>
+</html>

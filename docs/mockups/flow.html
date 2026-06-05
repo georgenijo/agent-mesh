@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh — Ticket → Done Walkthrough</title>
+<style>
+  :root{
+    --bg:#05060d;
+    --status:#21e6ff;   /* cyan  - status/heartbeat */
+    --ask:#ffb31f;      /* amber - question */
+    --answer:#38ffa3;   /* green - answer */
+    --claim:#a78bfa;    /* violet- file claim / lock */
+    --note:#7dd3fc;     /* blue  - blackboard note */
+    --ticket:#f472b6;   /* pink  - the human ticket */
+    --spawn:#ff8a3d;    /* orange- spawn expert */
+    --grid:rgba(80,120,200,.07);
+    --card:rgba(16,22,40,.72);
+    --stroke:rgba(120,180,255,.18);
+    --muted:#5d6f9c;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;color:#cdd9f5}
+  body::before{content:"";position:fixed;inset:0;z-index:0;
+    background:
+      radial-gradient(1200px 700px at 50% 32%, rgba(33,230,255,.10), transparent 60%),
+      radial-gradient(900px 600px at 85% 92%, rgba(56,255,163,.06), transparent 60%),
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px;
+    pointer-events:none}
+
+  .wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  .stage{position:relative;width:1280px;height:820px;transform-origin:center}
+
+  .hud{position:absolute;top:14px;left:24px;z-index:30}
+  .hud h1{font-size:18px;letter-spacing:.4em;font-weight:700;
+    background:linear-gradient(90deg,#fff,#21e6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hud p{font-size:10px;letter-spacing:.24em;color:var(--muted);margin-top:5px}
+
+  .legend{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:30;display:flex;gap:14px;font-size:10px;letter-spacing:.08em;flex-wrap:wrap;justify-content:center;max-width:560px}
+  .legend span{display:flex;align-items:center;gap:6px;color:#8aa0cf}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  /* state panel */
+  .state{position:absolute;top:54px;right:22px;width:286px;z-index:30;
+    background:rgba(8,11,22,.82);border:1px solid var(--stroke);border-radius:12px;
+    padding:11px 13px;backdrop-filter:blur(8px)}
+  .state h2{font-size:9.5px;letter-spacing:.26em;color:var(--muted);margin-bottom:7px}
+  .state .row{font-size:10.5px;line-height:1.5;color:#aebbe0;display:flex;gap:6px}
+  .state .k{color:var(--muted);min-width:58px}
+  .state .blk{margin-bottom:9px}
+  .state .empty{color:#3f4f74;font-style:italic}
+  .pill{display:inline-block;border-radius:5px;padding:0 5px;font-size:9px;letter-spacing:.04em}
+  .pill.open{background:rgba(255,179,31,.16);color:#ffcf6b}
+  .pill.routed{background:rgba(167,139,250,.16);color:#c4b0ff}
+  .pill.answered,.pill.closed{background:rgba(56,255,163,.16);color:#7dffc4}
+
+  /* bus */
+  .bus{position:absolute;left:90px;top:392px;width:1100px;height:58px;border-radius:29px;z-index:15;
+    background:linear-gradient(90deg,rgba(33,230,255,.08),rgba(33,230,255,.20),rgba(56,255,163,.15),rgba(33,230,255,.20),rgba(33,230,255,.08));
+    border:1px solid rgba(33,230,255,.35);
+    box-shadow:0 0 40px rgba(33,230,255,.28),inset 0 0 30px rgba(33,230,255,.20);
+    overflow:hidden;display:flex;align-items:center;justify-content:center}
+  .bus::before{content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(90deg,transparent 0 22px,rgba(255,255,255,.15) 22px 24px);
+    animation:flow 1.1s linear infinite;opacity:.4}
+  .bus .lbl{position:relative;z-index:2;font-size:11px;letter-spacing:.22em;color:#cdeffa}
+  .bus .lbl small{display:block;font-size:8.5px;letter-spacing:.14em;color:#9fd9ec;opacity:.8;margin-top:1px}
+  @keyframes flow{to{background-position:-48px 0}}
+
+  svg.routes{position:absolute;inset:0;width:1280px;height:820px;pointer-events:none;z-index:10}
+
+  .node{position:absolute;width:166px;transform:translate(-50%,-50%);z-index:20;
+    background:var(--card);backdrop-filter:blur(8px);border:1px solid var(--stroke);
+    border-radius:13px;padding:10px 12px;transition:opacity .4s,border-color .25s,box-shadow .25s}
+  .node .top{display:flex;align-items:center;gap:9px}
+  .node .glyph{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:15px;font-weight:700}
+  .node .name{font-size:12px;font-weight:600;color:#eaf1ff}
+  .node .role{font-size:8.5px;letter-spacing:.12em;color:#647aa6;margin-top:1px;text-transform:uppercase}
+  .node .stat{margin-top:8px;font-size:10px;color:#8fa6d4;display:flex;align-items:center;gap:7px;min-height:14px;line-height:1.3}
+  .node .dot{width:7px;height:7px;border-radius:50%;background:var(--answer);flex:none;box-shadow:0 0 8px var(--answer)}
+  .node.you{border-color:rgba(244,114,182,.4)}
+  .node.hub{border-color:rgba(56,255,163,.36)}
+  .node.hidden{opacity:0;pointer-events:none}
+  .node.flash{border-color:rgba(33,230,255,.75);box-shadow:0 0 30px rgba(33,230,255,.4)}
+
+  /* narration */
+  .narr{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);width:1060px;z-index:30;
+    background:rgba(8,11,22,.86);border:1px solid var(--stroke);border-radius:14px;
+    padding:14px 18px;backdrop-filter:blur(8px);display:flex;gap:16px;align-items:center}
+  .narr .num{font-size:30px;font-weight:700;color:#22324f;min-width:64px;text-align:center;line-height:1}
+  .narr .body{flex:1}
+  .narr .body h3{font-size:14px;color:#eaf1ff;letter-spacing:.02em;margin-bottom:4px}
+  .narr .body p{font-size:11.5px;line-height:1.5;color:#9fb1da}
+  .narr .body code{background:rgba(120,180,255,.12);border-radius:4px;padding:0 4px;color:#cfe4ff;font-size:11px}
+  .ctrls{display:flex;flex-direction:column;gap:8px;align-items:center;min-width:150px}
+  .btns{display:flex;gap:6px}
+  .btn{background:rgba(120,180,255,.1);border:1px solid var(--stroke);color:#cdd9f5;
+    border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:inherit;transition:background .15s}
+  .btn:hover{background:rgba(120,180,255,.22)}
+  .btn.play{min-width:42px}
+  .dots{display:flex;gap:5px;flex-wrap:wrap;justify-content:center;max-width:160px}
+  .dots i{width:7px;height:7px;border-radius:50%;background:#26324c;cursor:pointer;transition:background .2s}
+  .dots i.on{background:var(--status);box-shadow:0 0 7px var(--status)}
+  .dots i.done{background:#3a6a86}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+    <div class="hud"><h1>AGENT&nbsp;MESH</h1><p>TICKET → DONE · LIVE WALKTHROUGH</p></div>
+    <div class="legend">
+      <span><i style="background:var(--ticket)"></i>ticket</span>
+      <span><i style="background:var(--claim)"></i>claim/lock</span>
+      <span><i style="background:var(--status)"></i>status</span>
+      <span><i style="background:var(--ask)"></i>ask</span>
+      <span><i style="background:var(--spawn)"></i>spawn</span>
+      <span><i style="background:var(--answer)"></i>answer</span>
+      <span><i style="background:var(--note)"></i>note</span>
+    </div>
+
+    <div class="state" id="statePanel"></div>
+
+    <div class="bus"><div class="lbl">NATS&nbsp;·&nbsp;JetStream<small>BUS + STORE — the postman, never the caller</small></div></div>
+    <svg class="routes" id="routes" viewBox="0 0 1280 820"></svg>
+
+    <div class="narr">
+      <div class="num" id="num">1</div>
+      <div class="body"><h3 id="title">—</h3><p id="desc">—</p></div>
+      <div class="ctrls">
+        <div class="btns">
+          <button class="btn" id="restart" title="Restart">⟲</button>
+          <button class="btn" id="prev" title="Previous">‹</button>
+          <button class="btn play" id="play" title="Play / Pause">⏸</button>
+          <button class="btn" id="next" title="Next">›</button>
+        </div>
+        <div class="dots" id="dots"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const stage=document.getElementById('stage');
+const svg=document.getElementById('routes');
+const C={status:'#21e6ff',ask:'#ffb31f',answer:'#38ffa3',claim:'#a78bfa',note:'#7dd3fc',ticket:'#f472b6',spawn:'#ff8a3d'};
+
+// ---- nodes ----
+const BUS_TOP=392, BUS_BOT=450, BUS_MID=421;
+const nodes={
+  you:   {x:150,y:120,side:'top',g:'☻',c:'#f472b6',name:'You',role:'human · ticket',cls:'you'},
+  claude:{x:455,y:110,side:'top',g:'◆',c:'#21e6ff',name:'Claude Code',role:'worker · frontend'},
+  codex: {x:720,y:110,side:'top',g:'⬡',c:'#a78bfa',name:'Codex CLI',role:'worker · backend/auth'},
+  cursor:{x:985,y:110,side:'top',g:'▲',c:'#f472b6',name:'Cursor CLI',role:'worker · styling'},
+  coord: {x:360,y:660,side:'bot',g:'✺',c:'#38ffa3',name:'Coordinator',role:'control plane',cls:'hub'},
+  expert:{x:690,y:660,side:'bot',g:'★',c:'#ff8a3d',name:'Expert',role:'claude -p · your sub',hidden:true},
+  dash:  {x:1010,y:660,side:'bot',g:'▣',c:'#7dd3fc',name:'Dashboard',role:'observer'},
+};
+const els={};
+for(const [k,n] of Object.entries(nodes)){
+  const d=document.createElement('div');
+  d.className='node'+(n.cls?(' '+n.cls):'')+(n.hidden?' hidden':'');
+  d.style.left=n.x+'px'; d.style.top=n.y+'px';
+  d.innerHTML=`<div class="top">
+      <div class="glyph" style="color:${n.c};border:1px solid ${n.c}55;background:${n.c}1a">${n.g}</div>
+      <div><div class="name">${n.name}</div><div class="role">${n.role}</div></div>
+    </div><div class="stat"><span class="dot" style="background:${n.c};box-shadow:0 0 8px ${n.c}"></span><span class="msg">idle</span></div>`;
+  stage.appendChild(d);
+  els[k]=d;
+  n.anchorY = n.side==='top' ? n.y+46 : n.y-46;
+}
+// static connectors
+for(const n of Object.values(nodes)){
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d',`M ${n.x} ${n.anchorY} L ${n.x} ${n.side==='top'?BUS_TOP:BUS_BOT}`);
+  p.setAttribute('stroke','rgba(120,180,255,.13)');p.setAttribute('stroke-width','2');p.setAttribute('fill','none');
+  svg.appendChild(p);
+}
+const defs=document.createElementNS(SVGNS,'defs');
+defs.innerHTML=`<filter id="g" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+svg.appendChild(defs);
+
+function routePath(a,b){return `M ${a.x} ${a.anchorY} L ${a.x} ${BUS_MID} L ${b.x} ${BUS_MID} L ${b.x} ${b.anchorY}`;}
+
+// ---- packet animation ----
+const packets=[];
+function spawnPacket(fromKey,toKey,type,label){
+  const a=nodes[fromKey], b=nodes[toKey];
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',routePath(a,b));path.setAttribute('fill','none');path.setAttribute('stroke','none');
+  svg.appendChild(path);
+  const len=path.getTotalLength();
+  const trail=document.createElementNS(SVGNS,'path');
+  trail.setAttribute('d',routePath(a,b));trail.setAttribute('fill','none');
+  trail.setAttribute('stroke',C[type]);trail.setAttribute('stroke-width','2.5');trail.setAttribute('stroke-linecap','round');
+  trail.setAttribute('opacity','0');trail.setAttribute('stroke-dasharray',`56 ${len}`);
+  svg.appendChild(trail);
+  const dot=document.createElementNS(SVGNS,'circle');
+  dot.setAttribute('r','5');dot.setAttribute('fill',C[type]);dot.setAttribute('filter','url(#g)');
+  svg.appendChild(dot);
+  let lblEl=null;
+  if(label){
+    lblEl=document.createElementNS(SVGNS,'text');
+    lblEl.setAttribute('fill',C[type]);lblEl.setAttribute('font-size','10.5');
+    lblEl.setAttribute('font-family','SF Mono,monospace');lblEl.setAttribute('text-anchor','middle');
+    lblEl.textContent=label;svg.appendChild(lblEl);
+  }
+  flash(fromKey);
+  packets.push({path,trail,dot,lblEl,len,t:0,speed:.0072,type,toKey,arrived:false});
+}
+function flash(key){els[key].classList.add('flash');setTimeout(()=>els[key].classList.remove('flash'),480);}
+function tick(){
+  for(let i=packets.length-1;i>=0;i--){
+    const p=packets[i];p.t+=p.speed;
+    if(p.t>=1){if(!p.arrived){p.arrived=true;flash(p.toKey);}p.path.remove();p.trail.remove();p.dot.remove();if(p.lblEl)p.lblEl.remove();packets.splice(i,1);continue;}
+    const pt=p.path.getPointAtLength(p.t*p.len);
+    p.dot.setAttribute('cx',pt.x);p.dot.setAttribute('cy',pt.y);
+    if(p.lblEl){p.lblEl.setAttribute('x',pt.x);p.lblEl.setAttribute('y',pt.y-12);p.lblEl.setAttribute('opacity',p.t<.12?p.t/.12:(p.t>.85?(1-p.t)/.15:1));}
+    const off=Math.max(0,p.t*p.len-56);
+    p.trail.setAttribute('stroke-dashoffset',-off);
+    p.trail.setAttribute('opacity',p.t<.06?p.t/.06*.85:.85);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- scenario ----
+// patch fields: online, claims [{path,agent}], tickets [{id,q,state}], notes [str],
+// msg {key:[text,color]}, reveal [keys], packets [[from,to,type,label?]]
+const steps=[
+ { title:"Three agents are online",
+   desc:"Claude Code, Codex, and Cursor each booted with a sidecar that registered them and sends a heartbeat lease. The dashboard shows 3 live. Each is a CLI on <b>your</b> subscription — the mesh adds no login.",
+   patch:{online:3, msg:{claude:['idle',C.status],codex:['idle',C.status],cursor:['idle',C.status],coord:['registry: 3 live',C.answer],dash:['watching mesh.&gt;',C.note]},
+     packets:[['claude','coord','status','register'],['codex','coord','status','register'],['cursor','coord','status','register']]}},
+
+ { title:"You file a ticket",
+   desc:"You drop a task into the mesh: <code>Add event RSVP + email confirmation</code>. The coordinator logs it and the team self-organizes — no one is assigned top-down.",
+   patch:{tickets:[{id:'TKT',q:'RSVP + email',state:'open'}], msg:{you:['filed RSVP ticket',C.ticket],coord:['new ticket TKT',C.ticket]},
+     packets:[['you','coord','ticket','RSVP + email confirm']]}},
+
+ { title:"Claim before you touch (real locks)",
+   desc:"Before editing, each agent takes a <b>CAS file-lock</b> — a single-winner claim on a JetStream KV key, TTL-leased so a crash auto-releases it. Claude locks <code>RSVPForm.tsx</code>; Codex locks <code>rsvp-api.ts</code>.",
+   patch:{claims:[{path:'RSVPForm.tsx',agent:'claude'},{path:'rsvp-api.ts',agent:'codex'}],
+     msg:{claude:['building RSVP form',C.claim],codex:['writing endpoint',C.claim]},
+     packets:[['claude','coord','claim','lock RSVPForm.tsx'],['codex','coord','claim','lock rsvp-api.ts']]}},
+
+ { title:"Collision avoided",
+   desc:"Cursor's <b>pre-edit hook</b> tries to open <code>RSVPForm.tsx</code> — the lock is already Claude's, so its claim <b>loses</b> and Cursor backs off to styling instead. No two agents edit the same file. No merge hell.",
+   patch:{claims:[{path:'RSVPForm.tsx',agent:'claude'},{path:'rsvp-api.ts',agent:'codex'},{path:'rsvp.css',agent:'cursor'}],
+     msg:{cursor:['lock lost → took rsvp.css',C.claim]},
+     packets:[['cursor','coord','claim','RSVPForm.tsx → lost'],['cursor','coord','claim','lock rsvp.css']]}},
+
+ { title:"Work happens — status is free",
+   desc:"Agents post <code>mesh status</code> as they go. Pure pub/sub, no LLM turn — the dashboard updates live. This is the cheap 95% of mesh traffic.",
+   patch:{msg:{claude:['form: fields done',C.status],codex:['endpoint: RLS policy…',C.status],cursor:['styling rsvp.css',C.status],dash:['3 active · TKT in progress',C.note]},
+     packets:[['claude','dash','status','✓ fields'],['codex','dash','status','RLS…'],['cursor','dash','status','styling']]}},
+
+ { title:"Stuck → ask the mesh (async)",
+   desc:"Codex hits an RLS recursion error. It runs <code>mesh ask --role auth \"RLS recursion fix?\"</code> → gets ticket <b>T1</b> back <b>instantly</b> and keeps coding. Asking never blocks the turn.",
+   patch:{tickets:[{id:'TKT',q:'RSVP + email',state:'open'},{id:'T1',q:'RLS recursion fix?',state:'open'}],
+     msg:{codex:['asked T1, kept working',C.ask]},
+     packets:[['codex','coord','ask','ask → T1']]}},
+
+ { title:"Coordinator routes — decides who, not what",
+   desc:"The coordinator owns the registry and resolves <code>--role auth</code> to a subject. It's control-plane only: it picks <b>who</b> should answer and never carries the question's payload. No live specialist is free, so it will summon one.",
+   patch:{tickets:[{id:'TKT',q:'RSVP + email',state:'open'},{id:'T1',q:'RLS recursion fix?',state:'routed'}],
+     msg:{coord:['route T1 → auth role',C.claim]},
+     packets:[['coord','coord','claim']]}},
+
+ { title:"Summon an expert = `claude -p` on YOUR subscription",
+   desc:"With no live owner, the coordinator spawns a <b>headless</b> agent: <code>claude -p --model opus --append-system-prompt \"auth expert\" \"RLS recursion fix?\"</code>. Same on-disk login as your workers — <b>no API key</b>. An expert is just a worker with a different model + prompt.",
+   patch:{reveal:['expert'], msg:{coord:['spawned expert',C.spawn],expert:['thinking · your sub',C.spawn]},
+     packets:[['coord','expert','spawn','claude -p']]}},
+
+ { title:"The one real cost: a single turn",
+   desc:"The expert thinks (5–60s — the only real cost in the whole system) and answers: <code>use is_admin() SECURITY DEFINER</code>. It publishes the answer to T1 and exits. Transport everywhere else is sub-millisecond and free.",
+   patch:{tickets:[{id:'TKT',q:'RSVP + email',state:'open'},{id:'T1',q:'RLS recursion fix?',state:'answered'}],
+     msg:{expert:['answered T1 ✓',C.answer]},
+     packets:[['expert','coord','answer','is_admin() SECURITY DEFINER']]}},
+
+ { title:"Answer comes back, asker resumes",
+   desc:"On its next turn Codex runs <code>mesh poll T1</code>, gets the fix, and applies it. It never sat idle waiting — it kept building the endpoint the whole time the expert was thinking.",
+   patch:{tickets:[{id:'TKT',q:'RSVP + email',state:'open'},{id:'T1',q:'RLS recursion fix?',state:'closed'}],
+     msg:{codex:['applied fix ✓ RLS green',C.answer]},
+     packets:[['coord','codex','answer','T1 answer']]}},
+
+ { title:"Write it on the blackboard",
+   desc:"Codex records the decision: <code>mesh note \"RLS: use is_admin() SECURITY DEFINER; events store UTC\"</code>. It lands on a <b>durable JetStream stream</b> — permanent, replayable shared memory.",
+   patch:{notes:['RLS → is_admin() SECURITY DEFINER','events stored in UTC'],
+     msg:{codex:['noted decision',C.note]},
+     packets:[['codex','coord','note','note → blackboard']]}},
+
+ { title:"Knowledge spreads — no one asked",
+   desc:"Cursor starts related work and runs <code>mesh context</code> first. It <b>replays the notes</b> and conforms to the UTC + RLS conventions automatically — learning from a peer without a single question. Stigmergy.",
+   patch:{msg:{cursor:['read notes → conformed',C.note]},
+     packets:[['coord','cursor','note','context replay']]}},
+
+ { title:"Done",
+   desc:"Locks auto-release on their TTL leases, every agent reports green, and the dashboard marks the ticket complete. You see it finished — and every brain that ran was a <code>claude</code>/<code>codex</code> CLI on a subscription you already pay for.",
+   patch:{tickets:[{id:'TKT',q:'RSVP + email',state:'closed'},{id:'T1',q:'RLS recursion fix?',state:'closed'}], claims:[],
+     msg:{claude:['✓ form passing',C.answer],codex:['✓ endpoint passing',C.answer],cursor:['✓ styling passing',C.answer],coord:['TKT complete',C.answer],dash:['✓ RSVP shipped',C.answer],you:['ticket done 🎉',C.ticket]},
+     packets:[['claude','dash','answer','✓'],['codex','dash','answer','✓'],['cursor','dash','answer','✓']]}},
+];
+
+// ---- fold scenes for deterministic render on jump ----
+const base={online:0,claims:[],tickets:[],notes:[],msg:{},revealed:{expert:false}};
+const scenes=[];
+let cur=JSON.parse(JSON.stringify(base));
+for(const s of steps){
+  const p=s.patch;
+  if(p.online!==undefined) cur.online=p.online;
+  if(p.claims!==undefined) cur.claims=p.claims;
+  if(p.tickets!==undefined) cur.tickets=p.tickets;
+  if(p.notes!==undefined) cur.notes=p.notes;
+  if(p.reveal) p.reveal.forEach(k=>cur.revealed[k]=true);
+  if(p.msg) for(const k in p.msg) cur.msg[k]=p.msg[k];
+  scenes.push(JSON.parse(JSON.stringify(cur)));
+}
+
+// ---- render ----
+const statePanel=document.getElementById('statePanel');
+function renderState(sc){
+  const claims = sc.claims.length? sc.claims.map(c=>`<div class="row"><span class="k">${c.path}</span><span style="color:var(--claim)">🔒 ${c.agent}</span></div>`).join('') : '<div class="row empty">none</div>';
+  const tix = sc.tickets.length? sc.tickets.map(t=>`<div class="row"><span class="k">${t.id}</span><span>${t.q} <span class="pill ${t.state}">${t.state}</span></span></div>`).join('') : '<div class="row empty">none</div>';
+  const notes = sc.notes.length? sc.notes.map(n=>`<div class="row"><span style="color:var(--note)">▪</span> ${n}</div>`).join('') : '<div class="row empty">none</div>';
+  statePanel.innerHTML=`
+    <div class="blk"><h2>PRESENCE</h2><div class="row"><span class="k">online</span><span style="color:var(--answer)">● ${sc.online} live</span></div></div>
+    <div class="blk"><h2>FILE CLAIMS</h2>${claims}</div>
+    <div class="blk"><h2>TICKETS</h2>${tix}</div>
+    <div class="blk"><h2>BLACKBOARD</h2>${notes}</div>`;
+}
+function renderNodes(sc){
+  for(const k in nodes){
+    els[k].classList.toggle('hidden', nodes[k].hidden && !sc.revealed[k]);
+    const m=sc.msg[k];
+    if(m){els[k].querySelector('.msg').textContent=m[0];els[k].querySelector('.dot').style.background=m[1];els[k].querySelector('.dot').style.boxShadow=`0 0 8px ${m[1]}`;}
+    else {els[k].querySelector('.msg').textContent='idle';}
+  }
+}
+const numEl=document.getElementById('num'),titleEl=document.getElementById('title'),descEl=document.getElementById('desc');
+const dotsEl=document.getElementById('dots');
+steps.forEach((_,i)=>{const d=document.createElement('i');d.onclick=()=>go(i);dotsEl.appendChild(d);});
+
+let idx=0, playing=true, timer=null;
+function render(i){
+  idx=i;
+  renderState(scenes[i]); renderNodes(scenes[i]);
+  numEl.textContent=(i+1); titleEl.textContent=steps[i].title; descEl.innerHTML=steps[i].desc;
+  [...dotsEl.children].forEach((d,j)=>{d.className=j===i?'on':(j<i?'done':'');});
+  // fire this step's packets
+  (steps[i].patch.packets||[]).forEach((pk,j)=>{
+    if(pk[0]===pk[1]) return; // self (routing think) — skip travel
+    setTimeout(()=>spawnPacket(pk[0],pk[1],pk[2],pk[3]||''), 120+j*260);
+  });
+}
+function go(i){i=Math.max(0,Math.min(steps.length-1,i));render(i);schedule();}
+function next(){ if(idx<steps.length-1) render(idx+1); else stop(); }
+function schedule(){ clearTimeout(timer); if(playing){ timer=setTimeout(()=>{ if(idx<steps.length-1){render(idx+1);schedule();} else stop(); }, 4200);} }
+function stop(){playing=false;document.getElementById('play').textContent='▶';clearTimeout(timer);}
+function start(){playing=true;document.getElementById('play').textContent='⏸';if(idx>=steps.length-1)render(0);schedule();}
+
+document.getElementById('play').onclick=()=>{playing?stop():start();};
+document.getElementById('next').onclick=()=>{stop();render(Math.min(steps.length-1,idx+1));};
+document.getElementById('prev').onclick=()=>{stop();render(Math.max(0,idx-1));};
+document.getElementById('restart').onclick=()=>{render(0);start();};
+
+render(0); schedule();
+
+// responsive
+function fit(){const s=Math.min(window.innerWidth/1310,window.innerHeight/850,1);stage.style.transform=`scale(${s})`;}
+window.addEventListener('resize',fit);fit();
+</script>
+</body>
+</html>

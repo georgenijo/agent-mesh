@@ -4,6 +4,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Current state
 
+**Next up: P1 — read `prompts/PROMPT_P1.md` for the full build brief (claims + announce + blackboard, issues #12–#16).**
+
 **P0 implemented (presence walking skeleton).** Go module `github.com/georgenijo/agent-mesh`, zero external dependencies, stdlib only. The spine is real: `mesh join/leave/who/status` work end-to-end across separate processes — CLI → sidecar unix socket → coordinator-embedded bus → registry KV — with heartbeat leases, two-tier eviction (live → away → evict), autostart, and a read-only SSE dashboard. P1 (announce + claims + blackboard) and P2 (ask/answer) are not built yet. GitHub: `georgenijo/agent-mesh`.
 
 ### Build / test commands (same as CI)

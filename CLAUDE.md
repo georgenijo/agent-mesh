@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**P0 implemented (presence walking skeleton).** Go module `github.com/georgenijo/agent-mesh`, zero external dependencies, stdlib only. The spine is real: `mesh join/leave/who/status` work end-to-end across separate processes — CLI → sidecar unix socket → coordinator-embedded bus → registry KV — with heartbeat leases, two-tier eviction (live → away → evict), autostart, and a read-only SSE dashboard. P1 (announce + claims + blackboard) and P2 (ask/answer) are not built yet. GitHub: `georgenijo/agent-mesh`.
+**P0 + P1 implemented.** Go module `github.com/georgenijo/agent-mesh`, zero external dependencies, stdlib only. The spine is real end-to-end across separate processes — CLI → sidecar unix socket → coordinator-embedded bus → registry/claims KV — with heartbeat leases and two-tier eviction (live → away → evict).
+
+- **P0 (presence):** `mesh join/leave/who/status`, autostart, read-only SSE dashboard.
+- **P1 (conflict avoidance + blackboard, #12–#16):** `mesh claim/release` (CAS file-claims; typed `claimed|lost|error`; exit 6 on lost; TTL leases with reclaim-on-death and re-establishment across a coordinator restart; paths canonicalized repo-relative so a hook's absolute path and a manual relative path collide on one key), `mesh announce` (advisory pub/sub), `mesh note/context` (durable per-repo blackboard streams persisted to `$MESH_DIR/streams/<name>.jsonl`, replayed across restarts). Claude Code `PreToolUse` claim-guard hook in `hooks/claude-code/`. Dashboard shows live claims + notes.
+- **Ops plane:** `mesh ops` + `meshd --mode observe`.
+
+P2 (ask/answer) is not built yet. GitHub: `georgenijo/agent-mesh`.
 
 ### Build / test commands
 

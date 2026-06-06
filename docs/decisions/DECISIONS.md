@@ -6,6 +6,30 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: Claim paths are canonicalized repo-relative at the sidecar
+
+**Decision:** A claim path is folded to its repo-relative form before it becomes a claim key: the sidecar relativizes an absolute in-tree path against the agent's `card.CWD`, then `claim.NormalizePath` cleans it (slash form, reject `..` escapes), and `Key(repo, path)` joins the parts with a NUL byte. `NormalizePath` itself does not relativize (it has no repo root); that one job lives at the sidecar, which does. Absolute paths outside the repo root are kept absolute (no common base to fold against).
+
+**Rationale:** The Claude Code edit hook hands the tool an absolute `file_path` while a human running `mesh claim src/foo.go` passes a repo-relative one. Keyed verbatim, the two spellings of one file produced different keys and *both* won the create-only CAS — a lock two spellings slipped past (confirmed by the P1 adversarial review, F1/F2). Folding to one canonical key closes the bypass. NUL-joining keys prevents `(a, b/c)` aliasing `(a/b, c)` under any printable delimiter a path may contain.
+
+**Status:** active
+
+**References:** internal/claim/claim.go (NormalizePath, Key), internal/sidecar/verbs_p1.go (repoRelative), #12, docs/reports/2026-06-05-p1-build-report.md
+
+---
+
+## 2026-06-05: Blackboard stream persistence = append-only JSONL per stream
+
+**Decision:** Durable bus streams persist as append-only JSONL at `$MESH_DIR/streams/<name>.jsonl`, one `json.Marshal(StreamEntry)` (seq/ts/data) per line. Loaded on bus-server `Start`; in-memory keeps the last `MaxStreamLen` entries but seq numbering continues from the full on-disk history. Disk is bounded by compaction — rewrite the retained window to a same-dir temp file and commit with an atomic `os.Rename` once a file exceeds `2x MaxStreamLen` lines. Load is corruption-tolerant: a torn final line is truncated, a corrupt mid-file line skipped (degrade-don't-throw); only an unreadable dir/file fails `Start`. No per-append `fsync` (process-crash-safe via the page cache; OS-crash tail loss is documented out of scope for a local-first bus). Gated by `bus.Options.StreamDir` — empty means pure in-memory (P0 behavior unchanged); the coordinator enables it with `cfg.StreamsDir()`.
+
+**Rationale:** Resolves the one genuinely new design fork in P1 (#15): how `mesh note`/`context` survive a coordinator restart. JSONL is the leanest durable shape that keeps the stdlib-only constraint, replays trivially, and bounds disk without a compaction daemon. KV (the claims/registry authority) deliberately stays in-memory — only the blackboard is durable.
+
+**Status:** active
+
+**References:** internal/bus/persist.go, internal/coordinator/coordinator.go, #15, docs/reports/2026-06-05-p1-build-report.md
+
+---
+
 ## 2026-06-05: Runtime observability = separate ops plane (`mesh ops` + `meshd --mode observe`)
 
 **Decision:** Add a dedicated runtime observability layer in `internal/observe`, separate from the product dashboard. Primary surface is **`mesh ops [--json]`** (no join required); secondary surface is **`meshd --mode observe`** on `127.0.0.1:8739` (`GET /api/snapshot` + minimal HTML). The collector compares filesystem facts (coordinator.pid, bus.sock, agent sockets, logs) against the registry KV and sidecar `runtime` IPC. Child agent CLI PIDs are reported by the sidecar (`TrackChild`/`MarkChildExited`), not OS process-tree scraping.

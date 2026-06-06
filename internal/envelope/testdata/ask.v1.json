@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "ask",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "to": "claude-2",
+  "subject": "mesh.ask.role.auth",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "ticket": "01976f00-0000-7000-8000-00000000007e",
+    "role": "auth",
+    "to": "claude-2",
+    "q": "RLS recursion fix?",
+    "ctx": "policy on users joins itself"
+  }
+}

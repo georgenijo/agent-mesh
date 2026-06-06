@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh — How Agents Start (Expert vs Worker)</title>
+<style>
+  :root{
+    --bg:#05060d;
+    --status:#21e6ff; --ask:#ffb31f; --answer:#38ffa3; --claim:#a78bfa;
+    --note:#7dd3fc; --ticket:#f472b6; --spawn:#ff8a3d;
+    --grid:rgba(80,120,200,.07);
+    --card:rgba(16,22,40,.72);
+    --stroke:rgba(120,180,255,.18);
+    --muted:#5d6f9c;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;color:#cdd9f5}
+  body::before{content:"";position:fixed;inset:0;z-index:0;
+    background:
+      radial-gradient(1200px 700px at 50% 30%, rgba(33,230,255,.10), transparent 60%),
+      radial-gradient(900px 600px at 85% 92%, rgba(56,255,163,.06), transparent 60%),
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px;
+    pointer-events:none}
+
+  .wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  .stage{position:relative;width:1280px;height:820px;transform-origin:center}
+
+  .hud{position:absolute;top:14px;left:24px;z-index:30}
+  .hud h1{font-size:18px;letter-spacing:.36em;font-weight:700;
+    background:linear-gradient(90deg,#fff,#21e6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hud p{font-size:10px;letter-spacing:.22em;color:var(--muted);margin-top:5px}
+
+  .legend{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:30;display:flex;gap:13px;font-size:10px;letter-spacing:.06em;flex-wrap:wrap;justify-content:center;max-width:600px}
+  .legend span{display:flex;align-items:center;gap:6px;color:#8aa0cf}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  /* state panel */
+  .state{position:absolute;top:54px;right:22px;width:264px;z-index:30;
+    background:rgba(8,11,22,.82);border:1px solid var(--stroke);border-radius:12px;
+    padding:11px 13px;backdrop-filter:blur(8px)}
+  .state h2{font-size:9px;letter-spacing:.24em;color:var(--muted);margin-bottom:6px}
+  .state .row{font-size:10px;line-height:1.5;color:#aebbe0;display:flex;gap:6px}
+  .state .k{color:var(--muted);min-width:64px}
+  .state .blk{margin-bottom:9px}
+  .state .empty{color:#3f4f74;font-style:italic}
+  .pill{display:inline-block;border-radius:5px;padding:0 5px;font-size:9px;letter-spacing:.03em}
+  .pill.open{background:rgba(255,179,31,.16);color:#ffcf6b}
+  .pill.routed{background:rgba(167,139,250,.16);color:#c4b0ff}
+  .pill.answered,.pill.closed{background:rgba(56,255,163,.16);color:#7dffc4}
+
+  /* anatomy hint */
+  .anat{position:absolute;left:24px;bottom:118px;z-index:30;font-size:9.5px;color:#7e90bd;line-height:1.6;
+    background:rgba(8,11,22,.7);border:1px solid var(--stroke);border-radius:10px;padding:9px 11px;max-width:250px}
+  .anat b{color:#cdd9f5}
+  .anat .sw{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+
+  /* bus */
+  .bus{position:absolute;left:90px;top:382px;width:1100px;height:54px;border-radius:27px;z-index:15;
+    background:linear-gradient(90deg,rgba(33,230,255,.08),rgba(33,230,255,.20),rgba(56,255,163,.15),rgba(33,230,255,.20),rgba(33,230,255,.08));
+    border:1px solid rgba(33,230,255,.35);
+    box-shadow:0 0 40px rgba(33,230,255,.28),inset 0 0 30px rgba(33,230,255,.20);
+    overflow:hidden;display:flex;align-items:center;justify-content:center}
+  .bus::before{content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(90deg,transparent 0 22px,rgba(255,255,255,.15) 22px 24px);
+    animation:flow 1.1s linear infinite;opacity:.4}
+  .bus .lbl{position:relative;z-index:2;font-size:11px;letter-spacing:.2em;color:#cdeffa}
+  .bus .lbl small{display:block;font-size:8.5px;letter-spacing:.12em;color:#9fd9ec;opacity:.8;margin-top:1px;text-align:center}
+  @keyframes flow{to{background-position:-48px 0}}
+
+  svg.routes{position:absolute;inset:0;width:1280px;height:820px;pointer-events:none;z-index:10}
+
+  .node{position:absolute;width:188px;transform:translate(-50%,-50%);z-index:20;
+    background:var(--card);backdrop-filter:blur(8px);border:1px solid var(--stroke);
+    border-radius:13px;padding:10px 12px;transition:opacity .45s,border-color .25s,box-shadow .25s,transform .35s}
+  .node .top{display:flex;align-items:center;gap:9px}
+  .node .glyph{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:15px;font-weight:700}
+  .node .name{font-size:12px;font-weight:600;color:#eaf1ff}
+  .node .role{font-size:8.5px;letter-spacing:.1em;color:#647aa6;margin-top:1px;text-transform:uppercase}
+  .node .stat{margin-top:7px;font-size:9.5px;color:#8fa6d4;display:flex;align-items:center;gap:7px;min-height:13px;line-height:1.3}
+  .node .dot{width:7px;height:7px;border-radius:50%;background:var(--answer);flex:none;box-shadow:0 0 8px var(--answer)}
+
+  .node.hidden{opacity:0;pointer-events:none;transform:translate(-50%,-50%) scale(.9)}
+  .node.flash{border-color:rgba(33,230,255,.75);box-shadow:0 0 30px rgba(33,230,255,.4)}
+  .node.you{border-color:rgba(244,114,182,.4)}
+  .node.hub{border-color:rgba(56,255,163,.36)}
+  .node.store{border-color:rgba(125,211,252,.42)}
+  .node.wt{width:170px;border-style:dashed;border-color:rgba(125,211,252,.45)}
+
+  /* agent card = sidecar shell + claude -p core */
+  .node.agent{width:212px;border-width:1px}
+  .node.agent.expert{border-color:rgba(56,255,163,.45);box-shadow:0 0 22px rgba(56,255,163,.10)}
+  .node.agent.expert.warm{animation:breathe 3.2s ease-in-out infinite}
+  @keyframes breathe{50%{box-shadow:0 0 34px rgba(56,255,163,.26)}}
+  .node.agent.worker{border-style:dashed;border-color:rgba(255,179,31,.5)}
+  .shellbadge{position:absolute;top:-8px;left:12px;font-size:7.5px;letter-spacing:.12em;text-transform:uppercase;
+    background:#0a0e1a;padding:0 5px;border-radius:4px;color:#6c80ad;border:1px solid var(--stroke)}
+  .core{margin-top:8px;border-radius:8px;padding:6px 7px;font-size:8.5px;line-height:1.35;
+    background:rgba(8,12,22,.85);border:1px solid rgba(120,180,255,.16);color:#90a4cf;
+    transition:border-color .2s,box-shadow .2s,color .2s;word-break:break-word}
+  .core .ct{font-size:7px;letter-spacing:.12em;color:#5d6f9c;text-transform:uppercase;display:block;margin-bottom:2px}
+  .core b{color:#cfe0ff;font-weight:600}
+  .node.agent.firing .core{border-color:rgba(255,138,61,.7);box-shadow:0 0 18px rgba(255,138,61,.3);color:#ffd2ab}
+  .node.agent.expert.firing .core{border-color:rgba(56,255,163,.7);box-shadow:0 0 18px rgba(56,255,163,.3);color:#bdffe0}
+  .badge{display:inline-block;margin-top:6px;font-size:7.5px;letter-spacing:.06em;border-radius:5px;padding:1px 6px}
+  .badge.alive{color:#7dffc4;border:1px solid rgba(56,255,163,.4);background:rgba(56,255,163,.08)}
+  .badge.eph{color:#ffcf6b;border:1px dashed rgba(255,179,31,.5);background:rgba(255,179,31,.06)}
+
+  /* narration */
+  .narr{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);width:1040px;z-index:30;
+    background:rgba(8,11,22,.86);border:1px solid var(--stroke);border-radius:14px;
+    padding:13px 18px;backdrop-filter:blur(8px);display:flex;gap:16px;align-items:center}
+  .narr .num{font-size:28px;font-weight:700;color:#22324f;min-width:58px;text-align:center;line-height:1}
+  .narr .body{flex:1}
+  .narr .body h3{font-size:14px;color:#eaf1ff;letter-spacing:.02em;margin-bottom:4px}
+  .narr .body p{font-size:11.5px;line-height:1.5;color:#9fb1da}
+  .narr .body code{background:rgba(120,180,255,.12);border-radius:4px;padding:0 4px;color:#cfe4ff;font-size:11px}
+  .ctrls{display:flex;flex-direction:column;gap:8px;align-items:center;min-width:150px}
+  .btns{display:flex;gap:6px}
+  .btn{background:rgba(120,180,255,.1);border:1px solid var(--stroke);color:#cdd9f5;
+    border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:inherit;transition:background .15s}
+  .btn:hover{background:rgba(120,180,255,.22)}
+  .btn.play{min-width:42px}
+  .dots{display:flex;gap:5px;flex-wrap:wrap;justify-content:center;max-width:170px}
+  .dots i{width:7px;height:7px;border-radius:50%;background:#26324c;cursor:pointer;transition:background .2s}
+  .dots i.on{background:var(--status);box-shadow:0 0 7px var(--status)}
+  .dots i.done{background:#3a6a86}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+    <div class="hud"><h1>AGENT&nbsp;MESH</h1><p>HOW AGENTS START · PERSISTENT EXPERT vs EPHEMERAL WORKER</p></div>
+    <div class="legend">
+      <span><i style="background:var(--spawn)"></i>spawn</span>
+      <span><i style="background:var(--status)"></i>register/heartbeat</span>
+      <span><i style="background:var(--note)"></i>memory</span>
+      <span><i style="background:var(--claim)"></i>claim</span>
+      <span><i style="background:var(--ask)"></i>ask</span>
+      <span><i style="background:var(--answer)"></i>answer</span>
+    </div>
+
+    <div class="state" id="statePanel"></div>
+
+    <div class="anat">
+      <b>Anatomy of an agent</b><br>
+      <span class="sw" style="background:rgba(120,180,255,.25);border:1px solid var(--stroke)"></span>outer = <b>sidecar</b> (Go) — mesh citizen: register, heartbeat, socket, claims<br>
+      <span class="sw" style="background:rgba(255,138,61,.4)"></span>inner = claude core — <b>expert: resident</b> (stdin stays open) · <b>worker: one-shot</b>
+    </div>
+
+    <div class="bus"><div class="lbl">NATS&nbsp;·&nbsp;JetStream<small>BUS + DURABLE STORE</small></div></div>
+    <svg class="routes" id="routes" viewBox="0 0 1280 820"></svg>
+
+    <div class="narr">
+      <div class="num" id="num">1</div>
+      <div class="body"><h3 id="title">—</h3><p id="desc">—</p></div>
+      <div class="ctrls">
+        <div class="btns">
+          <button class="btn" id="restart" title="Restart">⟲</button>
+          <button class="btn" id="prev" title="Previous">‹</button>
+          <button class="btn play" id="play" title="Play / Pause">⏸</button>
+          <button class="btn" id="next" title="Next">›</button>
+        </div>
+        <div class="dots" id="dots"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const stage=document.getElementById('stage');
+const svg=document.getElementById('routes');
+const C={status:'#21e6ff',ask:'#ffb31f',answer:'#38ffa3',claim:'#a78bfa',note:'#7dd3fc',ticket:'#f472b6',spawn:'#ff8a3d'};
+
+const BUS_TOP=382, BUS_BOT=436, BUS_MID=409;
+const nodes={
+  coord:  {x:250,y:118,side:'top',g:'✺',c:'#21e6ff',name:'Coordinator',role:'control plane',cls:'hub'},
+  expert: {x:660,y:130,side:'top',g:'★',c:'#38ffa3',name:'Auth Expert',role:'persistent · warm',cls:'agent expert',hidden:true,
+           core:['idle','resident claude · stream-json · stays open'],badge:['alive','⏱ persists across tickets']},
+  worker: {x:1030,y:130,side:'top',g:'⬡',c:'#ffb31f',name:'worker · api',role:'ephemeral',cls:'agent worker',hidden:true,
+           core:['idle','claude -p · one subtask'],badge:['eph','⏳ this subtask only']},
+  store:  {x:250,y:640,side:'bot',g:'▦',c:'#7dd3fc',name:'Blackboard',role:'durable memory',cls:'store'},
+  worktree:{x:1030,y:648,side:'bot',g:'▤',c:'#7dd3fc',name:'git worktree',role:'isolated tree',cls:'wt',hidden:true},
+};
+const els={};
+for(const [k,n] of Object.entries(nodes)){
+  const d=document.createElement('div');
+  d.className='node'+(n.cls?(' '+n.cls):'')+(n.hidden?' hidden':'');
+  d.style.left=n.x+'px'; d.style.top=n.y+'px';
+  const isAgent=(n.cls||'').includes('agent');
+  d.innerHTML=`${isAgent?'<span class="shellbadge">sidecar</span>':''}
+    <div class="top">
+      <div class="glyph" style="color:${n.c};border:1px solid ${n.c}55;background:${n.c}1a">${n.g}</div>
+      <div><div class="name">${n.name}</div><div class="role">${n.role}</div></div>
+    </div>
+    <div class="stat"><span class="dot" style="background:${n.c};box-shadow:0 0 8px ${n.c}"></span><span class="msg">idle</span></div>
+    ${isAgent?`<div class="core"><span class="ct">claude -p core</span><span class="cc">${n.core[1]}</span></div>`:''}
+    ${n.badge?`<span class="badge ${n.badge[0]}">${n.badge[1]}</span>`:''}`;
+  stage.appendChild(d);
+  els[k]=d;
+  n.anchorY = n.side==='top' ? n.y+ (isAgent?64:46) : n.y-46;
+}
+// static connectors
+for(const n of Object.values(nodes)){
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d',`M ${n.x} ${n.anchorY} L ${n.x} ${n.side==='top'?BUS_TOP:BUS_BOT}`);
+  p.setAttribute('stroke','rgba(120,180,255,.13)');p.setAttribute('stroke-width','2');p.setAttribute('fill','none');
+  svg.appendChild(p);
+}
+const defs=document.createElementNS(SVGNS,'defs');
+defs.innerHTML=`<filter id="g" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+svg.appendChild(defs);
+
+function routePath(a,b){return `M ${a.x} ${a.anchorY} L ${a.x} ${BUS_MID} L ${b.x} ${BUS_MID} L ${b.x} ${b.anchorY}`;}
+const packets=[];
+function spawnPacket(fromKey,toKey,type,label){
+  const a=nodes[fromKey], b=nodes[toKey];
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',routePath(a,b));path.setAttribute('fill','none');path.setAttribute('stroke','none');
+  svg.appendChild(path);
+  const len=path.getTotalLength();
+  const trail=document.createElementNS(SVGNS,'path');
+  trail.setAttribute('d',routePath(a,b));trail.setAttribute('fill','none');
+  trail.setAttribute('stroke',C[type]);trail.setAttribute('stroke-width','2.5');trail.setAttribute('stroke-linecap','round');
+  trail.setAttribute('opacity','0');trail.setAttribute('stroke-dasharray',`56 ${len}`);
+  svg.appendChild(trail);
+  const dot=document.createElementNS(SVGNS,'circle');
+  dot.setAttribute('r','5');dot.setAttribute('fill',C[type]);dot.setAttribute('filter','url(#g)');
+  svg.appendChild(dot);
+  let lblEl=null;
+  if(label){
+    lblEl=document.createElementNS(SVGNS,'text');
+    lblEl.setAttribute('fill',C[type]);lblEl.setAttribute('font-size','10.5');
+    lblEl.setAttribute('font-family','SF Mono,monospace');lblEl.setAttribute('text-anchor','middle');
+    lblEl.textContent=label;svg.appendChild(lblEl);
+  }
+  flash(fromKey);
+  packets.push({path,trail,dot,lblEl,len,t:0,speed:.0072,type,toKey,arrived:false});
+}
+function flash(key){els[key].classList.add('flash');setTimeout(()=>els[key].classList.remove('flash'),480);}
+function tick(){
+  for(let i=packets.length-1;i>=0;i--){
+    const p=packets[i];p.t+=p.speed;
+    if(p.t>=1){if(!p.arrived){p.arrived=true;flash(p.toKey);}p.path.remove();p.trail.remove();p.dot.remove();if(p.lblEl)p.lblEl.remove();packets.splice(i,1);continue;}
+    const pt=p.path.getPointAtLength(p.t*p.len);
+    p.dot.setAttribute('cx',pt.x);p.dot.setAttribute('cy',pt.y);
+    if(p.lblEl){p.lblEl.setAttribute('x',pt.x);p.lblEl.setAttribute('y',pt.y-12);p.lblEl.setAttribute('opacity',p.t<.12?p.t/.12:(p.t>.85?(1-p.t)/.15:1));}
+    const off=Math.max(0,p.t*p.len-56);
+    p.trail.setAttribute('stroke-dashoffset',-off);
+    p.trail.setAttribute('opacity',p.t<.06?p.t/.06*.85:.85);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- scenario ----
+const steps=[
+ { title:"Mesh is up — coordinator + blackboard, no agents yet",
+   desc:"The <b>coordinator</b> (control plane) and the <b>blackboard</b> (durable memory) are live on the bus. No experts, no workers spawned yet — agents are created on demand, never pre-wired.",
+   patch:{presence:1, msg:{coord:['registry: 0 agents',C.status],store:['decisions · conventions · history',C.note]}}},
+
+ { title:"A ticket arrives → triage → DAG",
+   desc:"You drop a ticket: <code>Add RSVP + email confirm</code>. The coordinator runs a <code>claude -p</code> planner that emits a task <b>DAG</b>. One subtask needs the <b>auth</b> role.",
+   patch:{ticket:{id:'TKT',q:'RSVP + email',state:'open'}, msg:{coord:['triaged → DAG (3 tasks)',C.ticket]},
+     packets:[['store','coord','note','read context']]}},
+
+ { title:"Lazy-spawn the EXPERT (persistent, stays open)",
+   desc:"First task needing <code>auth</code> has no live owner, so the coordinator spawns a persistent expert. Its sidecar launches a <b>resident</b> Claude in streaming mode — <code>claude -p --input-format stream-json --output-format stream-json</code> — and <b>holds the stdin pipe open</b>. The process stays alive, waiting for messages (the \"phone call left on the line\").",
+   patch:{reveal:['expert'], presence:2,
+     msg:{coord:['spawn auth expert',C.spawn],expert:['registering…',C.status]},
+     core:{expert:['booting','claude -p --input-format stream-json (open)']},
+     packets:[['coord','expert','spawn','spawn (resident)'],['expert','coord','status','register + ❤']]}},
+
+ { title:"Expert warms up — first turn loads memory into RAM",
+   desc:"The sidecar writes a first turn into the open pipe — <code>mesh context</code> — pulling decisions, conventions, and the repo map from the durable blackboard. That knowledge now sits in the <b>running process's RAM</b>. <b>That in-memory context is what \"warm\" means</b> — and the blackboard is the durable copy it can reload after a crash.",
+   patch:{expertWarm:true,
+     msg:{expert:['hydrated · warm + idle',C.note]},
+     core:{expert:['warm · stdin open','context held in RAM']},
+     packets:[['store','expert','note','decisions + map']]}},
+
+ { title:"Scheduler picks a subtask → make an isolated worktree",
+   desc:"A DAG subtask (write the RSVP endpoint) is ready. Before any agent touches the repo, the coordinator creates an isolated tree: <code>git worktree add …/TKT/api</code>. Parallel workers never collide on the working tree.",
+   patch:{reveal:['worktree'], worktrees:['TKT/api → worker·api'],
+     msg:{coord:['worktree add TKT/api',C.note],worktree:['clean checkout',C.note]},
+     packets:[['coord','worktree','spawn','worktree add']]}},
+
+ { title:"Spawn the WORKER (ephemeral) into the worktree",
+   desc:"The coordinator spawns a short-lived worker sidecar bound to that worktree: <code>meshd --sidecar --kind worker --role api --model sonnet --worktree …/api</code>. Same machinery as the expert — different lifetime, model, prompt.",
+   patch:{reveal:['worker'], presence:3,
+     msg:{coord:['spawn worker·api',C.spawn],worker:['registering…',C.status]},
+     core:{worker:['idle','claude -p --model sonnet (worker)']},
+     packets:[['coord','worker','spawn','spawn worker'],['worker','coord','status','register + ❤']]}},
+
+ { title:"Worker fires its claude -p core",
+   desc:"The worker's driver execs <code>claude -p --output-format json --append-system-prompt \"worker\" --add-dir …/api \"&lt;subtask&gt;\"</code>. Inside that agentic turn it has the <code>mesh</code> CLI on PATH, so it can read context, claim files, and ask experts.",
+   patch:{workerFire:true,
+     msg:{worker:['running subtask…',C.spawn]},
+     core:{worker:['running','claude -p … writing rsvp-api.ts']},
+     packets:[['store','worker','note','mesh context']]}},
+
+ { title:"Claim before edit (CAS lock)",
+   desc:"Before editing, the worker takes a single-winner CAS lock: <code>mesh claim rsvp-api.ts</code> → <span style=\"color:var(--claim)\">claimed</span>. TTL-leased, so a crash auto-releases it. No two agents edit the same file.",
+   patch:{claims:[{path:'rsvp-api.ts',agent:'worker·api'}],
+     msg:{worker:['claimed rsvp-api.ts',C.claim]},
+     core:{worker:['running','editing rsvp-api.ts 🔒']},
+     packets:[['worker','coord','claim','lock rsvp-api.ts']]}},
+
+ { title:"Stuck → ask the expert by role (blocking is fine here)",
+   desc:"The worker hits an RLS recursion error and asks: <code>mesh ask --role auth --wait \"RLS recursion fix?\"</code>. A worker has nothing else to do, so it <b>blocks</b> — the \"never block\" rule protects user turns, not spawned sub-workers.",
+   patch:{ticket2:{id:'T1',q:'RLS recursion fix?',state:'routed'},
+     msg:{worker:['asked auth, waiting…',C.ask],coord:['route T1 → auth',C.claim]},
+     core:{worker:['blocked','mesh ask --role auth --wait']},
+     packets:[['worker','expert','ask','ask --role auth']]}},
+
+ { title:"Expert answers — no new process, just write to the open pipe",
+   desc:"<b>No respawn.</b> The sidecar <b>writes the question to the open stdin</b> and <b>reads the typed answer from stdout</b> — same resident session, context already in RAM, lowest latency. It replies <code>use is_admin() SECURITY DEFINER</code> and the worker unblocks. (<code>--resume</code> from disk is only the crash-recovery path, not this.)",
+   patch:{ticket2:{id:'T1',q:'RLS recursion fix?',state:'answered'},
+     expertFire:true,
+     msg:{expert:['answered T1 ✓',C.answer],worker:['got fix, resuming',C.answer]},
+     core:{expert:['firing','write→stdin · read→stdout (same session)']},
+     packets:[['expert','worker','answer','is_admin() SECURITY DEFINER']]}},
+
+ { title:"Worker finishes — write note, return result + diff",
+   desc:"The worker applies the fix, records the decision (<code>mesh note</code> → blackboard, so the expert and future agents inherit it), and returns its structured JSON result + the diff to the coordinator.",
+   patch:{notes:['RLS → is_admin() SECURITY DEFINER'],
+     workerFire:false,
+     msg:{worker:['done ✓ result + diff',C.answer]},
+     core:{worker:['done','→ result JSON + diff']},
+     packets:[['worker','store','note','note → blackboard'],['worker','coord','answer','result + diff']]}},
+
+ { title:"Worker tears down — expert stays warm",
+   desc:"The worker's sidecar runs <code>leave</code>: claims released, deregistered, worktree removed — it's <b>gone</b>. The expert keeps breathing, warm and idle, ready for the next ticket. Persistent vs ephemeral, side by side.",
+   patch:{hide:['worker','worktree'], presence:2, claims:[], worktrees:[],
+     ticket:{id:'TKT',q:'RSVP + email',state:'closed'}, ticket2:{id:'T1',q:'RLS recursion fix?',state:'closed'},
+     msg:{coord:['worker reaped · expert warm',C.status],expert:['warm · idle · waiting',C.answer]},
+     core:{expert:['warm · stdin open','resident session · waiting on stdin']}}},
+];
+
+// ---- fold scenes ----
+const base={presence:0,claims:[],worktrees:[],notes:[],ticket:null,ticket2:null,msg:{},core:{},
+  revealed:{expert:false,worker:false,worktree:false},expertWarm:false,expertFire:false,workerFire:false};
+const scenes=[];
+let cur=JSON.parse(JSON.stringify(base));
+for(const s of steps){
+  const p=s.patch;
+  for(const key of ['presence','claims','worktrees','notes','ticket','ticket2','expertWarm']) if(p[key]!==undefined) cur[key]=p[key];
+  if(p.reveal) p.reveal.forEach(k=>cur.revealed[k]=true);
+  if(p.hide) p.hide.forEach(k=>cur.revealed[k]=false);
+  if(p.msg) for(const k in p.msg) cur.msg[k]=p.msg[k];
+  if(p.core) for(const k in p.core) cur.core[k]=p.core[k];
+  if(p.expertFire!==undefined) cur.expertFire=p.expertFire;
+  if(p.workerFire!==undefined) cur.workerFire=p.workerFire;
+  scenes.push(JSON.parse(JSON.stringify(cur)));
+}
+
+// ---- render ----
+const statePanel=document.getElementById('statePanel');
+function renderState(sc){
+  const claims = sc.claims.length? sc.claims.map(c=>`<div class="row"><span class="k">${c.path}</span><span style="color:var(--claim)">🔒 ${c.agent}</span></div>`).join('') : '<div class="row empty">none</div>';
+  const wts = sc.worktrees.length? sc.worktrees.map(w=>`<div class="row"><span style="color:var(--note)">▤</span> ${w}</div>`).join('') : '<div class="row empty">none</div>';
+  const tix=[sc.ticket,sc.ticket2].filter(Boolean);
+  const tixH = tix.length? tix.map(t=>`<div class="row"><span class="k">${t.id}</span><span>${t.q} <span class="pill ${t.state}">${t.state}</span></span></div>`).join('') : '<div class="row empty">none</div>';
+  const notes = sc.notes.length? sc.notes.map(n=>`<div class="row"><span style="color:var(--note)">▪</span> ${n}</div>`).join('') : '<div class="row empty">none</div>';
+  statePanel.innerHTML=`
+    <div class="blk"><h2>PRESENCE</h2><div class="row"><span class="k">live</span><span style="color:var(--answer)">● ${sc.presence} agents</span></div></div>
+    <div class="blk"><h2>WORKTREES</h2>${wts}</div>
+    <div class="blk"><h2>FILE CLAIMS</h2>${claims}</div>
+    <div class="blk"><h2>TICKETS</h2>${tixH}</div>
+    <div class="blk"><h2>BLACKBOARD</h2>${notes}</div>`;
+}
+function renderNodes(sc){
+  for(const k in nodes){
+    const isAgent=(nodes[k].cls||'').includes('agent');
+    const reveal = nodes[k].hidden ? !!sc.revealed[k] : true;
+    els[k].classList.toggle('hidden', !reveal);
+    const m=sc.msg[k];
+    const msgEl=els[k].querySelector('.msg');
+    if(m){msgEl.textContent=m[0];const dot=els[k].querySelector('.dot');dot.style.background=m[1];dot.style.boxShadow=`0 0 8px ${m[1]}`;}
+    else if(msgEl){msgEl.textContent='idle';}
+    if(isAgent){
+      const cc=els[k].querySelector('.cc'); const co=sc.core[k];
+      if(cc&&co) cc.textContent=co[1];
+    }
+  }
+  els.expert.classList.toggle('warm', sc.expertWarm);
+  els.expert.classList.toggle('firing', sc.expertFire);
+  els.worker.classList.toggle('firing', sc.workerFire);
+}
+const numEl=document.getElementById('num'),titleEl=document.getElementById('title'),descEl=document.getElementById('desc');
+const dotsEl=document.getElementById('dots');
+steps.forEach((_,i)=>{const d=document.createElement('i');d.onclick=()=>go(i);dotsEl.appendChild(d);});
+
+let idx=0, playing=true, timer=null;
+function render(i){
+  idx=i;
+  renderState(scenes[i]); renderNodes(scenes[i]);
+  numEl.textContent=(i+1); titleEl.textContent=steps[i].title; descEl.innerHTML=steps[i].desc;
+  [...dotsEl.children].forEach((d,j)=>{d.className=j===i?'on':(j<i?'done':'');});
+  (steps[i].patch.packets||[]).forEach((pk,j)=>{
+    if(pk[0]===pk[1]) return;
+    setTimeout(()=>spawnPacket(pk[0],pk[1],pk[2],pk[3]||''), 140+j*300);
+  });
+}
+function go(i){i=Math.max(0,Math.min(steps.length-1,i));render(i);schedule();}
+function schedule(){ clearTimeout(timer); if(playing){ timer=setTimeout(()=>{ if(idx<steps.length-1){render(idx+1);schedule();} else stop(); }, 4600);} }
+function stop(){playing=false;document.getElementById('play').textContent='▶';clearTimeout(timer);}
+function start(){playing=true;document.getElementById('play').textContent='⏸';if(idx>=steps.length-1)render(0);schedule();}
+
+document.getElementById('play').onclick=()=>{playing?stop():start();};
+document.getElementById('next').onclick=()=>{stop();render(Math.min(steps.length-1,idx+1));};
+document.getElementById('prev').onclick=()=>{stop();render(Math.max(0,idx-1));};
+document.getElementById('restart').onclick=()=>{render(0);start();};
+
+render(0); schedule();
+function fit(){const s=Math.min(window.innerWidth/1310,window.innerHeight/850,1);stage.style.transform=`scale(${s})`;}
+window.addEventListener('resize',fit);fit();
+</script>
+</body>
+</html>

@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh - Runtime Proxy Animation</title>
+<style>
+  :root{
+    --bg:#05060d;
+    --cyan:#21e6ff;
+    --green:#38ffa3;
+    --amber:#ffb31f;
+    --orange:#ff8a3d;
+    --violet:#a78bfa;
+    --pink:#f472b6;
+    --blue:#7dd3fc;
+    --grid:rgba(80,120,200,.07);
+    --card:rgba(12,17,32,.82);
+    --panel:rgba(8,11,22,.86);
+    --stroke:rgba(120,180,255,.18);
+    --muted:#6d80ac;
+    --text:#d8e4ff;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{
+    height:100%;
+    background:var(--bg);
+    color:var(--text);
+    overflow:hidden;
+    font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    background:
+      radial-gradient(1000px 620px at 48% 32%, rgba(33,230,255,.11), transparent 62%),
+      radial-gradient(780px 520px at 86% 76%, rgba(255,138,61,.08), transparent 62%),
+      radial-gradient(760px 480px at 18% 90%, rgba(56,255,163,.07), transparent 64%),
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0/40px 40px;
+    pointer-events:none;
+  }
+  body::after{
+    content:"";
+    position:fixed;
+    inset:0;
+    background:radial-gradient(120% 120% at 50% 50%, transparent 54%, rgba(0,0,0,.72));
+    pointer-events:none;
+  }
+
+  .wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  .stage{position:relative;width:1280px;height:820px;transform-origin:center}
+
+  .hud{position:absolute;top:16px;left:24px;z-index:30}
+  .hud h1{
+    font-size:18px;
+    letter-spacing:.34em;
+    font-weight:700;
+    background:linear-gradient(90deg,#fff,var(--cyan));
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+  }
+  .hud p{font-size:10px;letter-spacing:.18em;color:var(--muted);margin-top:6px}
+
+  .legend{
+    position:absolute;
+    top:18px;
+    left:50%;
+    transform:translateX(-50%);
+    z-index:30;
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+    justify-content:center;
+    max-width:650px;
+    font-size:9.5px;
+    letter-spacing:.06em;
+    color:#8ca1ce;
+  }
+  .legend span{display:flex;align-items:center;gap:6px}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  svg.routes{position:absolute;inset:0;width:1280px;height:820px;pointer-events:none;z-index:9}
+
+  .node{
+    position:absolute;
+    transform:translate(-50%,-50%);
+    width:184px;
+    z-index:20;
+    border:1px solid var(--stroke);
+    border-radius:12px;
+    background:var(--card);
+    backdrop-filter:blur(8px);
+    padding:10px 12px;
+    box-shadow:0 12px 32px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+    transition:opacity .35s, transform .35s, border-color .22s, box-shadow .22s;
+  }
+  .node.hidden{opacity:0;pointer-events:none;transform:translate(-50%,-50%) scale(.9)}
+  .node.flash{border-color:rgba(33,230,255,.78);box-shadow:0 0 34px rgba(33,230,255,.36)}
+  .node.warm{animation:warm 3.2s ease-in-out infinite}
+  .node.dead{opacity:.42;filter:grayscale(.9)}
+  @keyframes warm{50%{box-shadow:0 0 34px rgba(56,255,163,.24), inset 0 1px 0 rgba(255,255,255,.05)}}
+
+  .top{display:flex;align-items:center;gap:9px}
+  .glyph{
+    width:31px;
+    height:31px;
+    border-radius:8px;
+    display:grid;
+    place-items:center;
+    font-size:13px;
+    font-weight:800;
+  }
+  .name{font-size:12px;font-weight:700;color:#eef4ff}
+  .role{font-size:8px;letter-spacing:.1em;color:#7185b2;text-transform:uppercase;margin-top:2px}
+  .stat{margin-top:8px;font-size:9.5px;color:#99aad2;display:flex;gap:7px;align-items:center;min-height:14px;line-height:1.3}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none;animation:pulse 1.8s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.35}}
+
+  .runtime{
+    width:300px;
+    border-color:rgba(255,138,61,.46);
+    background:rgba(13,15,27,.9);
+  }
+  .runtime .subgrid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:7px;
+    margin-top:10px;
+  }
+  .module{
+    min-height:46px;
+    border:1px solid rgba(120,180,255,.15);
+    border-radius:8px;
+    background:rgba(6,9,18,.72);
+    padding:6px;
+  }
+  .module .mk{font-size:7px;letter-spacing:.12em;color:#5f7198;text-transform:uppercase}
+  .module .mv{font-size:9px;color:#b5c5ea;margin-top:4px;line-height:1.25}
+  .module.hot{border-color:rgba(255,138,61,.58);box-shadow:0 0 18px rgba(255,138,61,.18)}
+
+  .process{
+    width:226px;
+    border-style:solid;
+  }
+  .process .pipe{
+    height:8px;
+    border-radius:999px;
+    margin-top:9px;
+    overflow:hidden;
+    border:1px solid rgba(120,180,255,.14);
+    background:rgba(4,8,18,.8);
+  }
+  .process .pipe span{
+    display:block;
+    width:80px;
+    height:100%;
+    background:linear-gradient(90deg, transparent, currentColor, transparent);
+    opacity:.65;
+    animation:pipeflow 1.1s linear infinite;
+  }
+  @keyframes pipeflow{from{transform:translateX(-90px)}to{transform:translateX(230px)}}
+  .process.paused .pipe span{animation-play-state:paused;opacity:.2}
+  .process .tag{
+    display:inline-block;
+    margin-top:8px;
+    border-radius:5px;
+    padding:2px 6px;
+    font-size:7.5px;
+    letter-spacing:.06em;
+    color:#cfe4ff;
+    border:1px solid rgba(120,180,255,.22);
+    background:rgba(120,180,255,.08);
+  }
+
+  .bus{
+    position:absolute;
+    left:110px;
+    top:402px;
+    width:1060px;
+    height:52px;
+    border-radius:26px;
+    z-index:12;
+    background:linear-gradient(90deg,rgba(33,230,255,.08),rgba(33,230,255,.2),rgba(56,255,163,.14),rgba(33,230,255,.2),rgba(33,230,255,.08));
+    border:1px solid rgba(33,230,255,.34);
+    box-shadow:0 0 40px rgba(33,230,255,.28), inset 0 0 28px rgba(33,230,255,.2);
+    overflow:hidden;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .bus::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:repeating-linear-gradient(90deg, transparent 0 23px, rgba(255,255,255,.15) 23px 25px);
+    animation:busflow 1.15s linear infinite;
+    opacity:.46;
+  }
+  @keyframes busflow{to{background-position:-50px 0}}
+  .bus .lbl{position:relative;z-index:1;text-align:center;font-size:11px;letter-spacing:.22em;color:#d4f5ff}
+  .bus .lbl small{display:block;margin-top:2px;font-size:8px;letter-spacing:.13em;color:#8dc7df}
+
+  .state{
+    position:absolute;
+    top:56px;
+    right:24px;
+    width:278px;
+    z-index:30;
+    background:var(--panel);
+    border:1px solid var(--stroke);
+    border-radius:12px;
+    padding:12px 13px;
+    backdrop-filter:blur(8px);
+  }
+  .state h2{font-size:9px;letter-spacing:.22em;color:var(--muted);margin-bottom:8px}
+  .state .row{display:flex;gap:7px;font-size:10px;line-height:1.55;color:#b4c4e7}
+  .state .k{color:#687aa1;min-width:76px}
+  .pill{display:inline-block;border-radius:5px;padding:0 5px;font-size:8.5px;letter-spacing:.03em}
+  .pill.green{background:rgba(56,255,163,.14);color:#82ffc8}
+  .pill.amber{background:rgba(255,179,31,.14);color:#ffd071}
+  .pill.orange{background:rgba(255,138,61,.15);color:#ffc09c}
+  .pill.violet{background:rgba(167,139,250,.16);color:#cab7ff}
+  .pill.dead{background:rgba(244,114,182,.14);color:#ffadc9}
+
+  .terminal{
+    position:absolute;
+    left:24px;
+    bottom:118px;
+    width:340px;
+    height:142px;
+    z-index:30;
+    border:1px solid rgba(120,180,255,.16);
+    border-radius:10px;
+    background:rgba(5,8,16,.82);
+    padding:10px 12px;
+    overflow:hidden;
+  }
+  .terminal h2{font-size:8.5px;letter-spacing:.22em;color:#687aa1;margin-bottom:8px}
+  .terminal pre{font:10px/1.55 "SF Mono",ui-monospace,monospace;color:#92a6d0;white-space:pre-wrap}
+  .terminal b{color:#daf0ff;font-weight:600}
+  .terminal .cursor{display:inline-block;width:7px;height:11px;background:#7dd3fc;vertical-align:-2px;animation:blink .9s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  .narr{
+    position:absolute;
+    left:50%;
+    bottom:16px;
+    transform:translateX(-50%);
+    width:1040px;
+    z-index:30;
+    display:flex;
+    align-items:center;
+    gap:16px;
+    border:1px solid var(--stroke);
+    border-radius:14px;
+    background:var(--panel);
+    backdrop-filter:blur(8px);
+    padding:13px 18px;
+  }
+  .narr .num{min-width:58px;text-align:center;font-size:28px;font-weight:800;color:#273754;line-height:1}
+  .narr .body{flex:1}
+  .narr h3{font-size:14px;color:#eef4ff;margin-bottom:4px}
+  .narr p{font-size:11.5px;color:#a5b5da;line-height:1.5}
+  .narr code{font-size:11px;color:#d5ecff;background:rgba(120,180,255,.12);border-radius:4px;padding:0 4px}
+
+  .ctrls{min-width:172px;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .btns{display:flex;gap:6px}
+  .btn{
+    border:1px solid var(--stroke);
+    border-radius:8px;
+    background:rgba(120,180,255,.1);
+    color:#d8e4ff;
+    font:12px "SF Mono",ui-monospace,monospace;
+    padding:6px 10px;
+    cursor:pointer;
+  }
+  .btn:hover{background:rgba(120,180,255,.2)}
+  .btn.play{min-width:56px}
+  .dots{display:flex;gap:5px;flex-wrap:wrap;justify-content:center;max-width:170px}
+  .dots i{width:7px;height:7px;border-radius:50%;background:#26324c;cursor:pointer}
+  .dots i.on{background:var(--cyan);box-shadow:0 0 7px var(--cyan)}
+  .dots i.done{background:#3a6a86}
+
+  @media (max-width: 900px){
+    .stage{transform:scale(.72)}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage" id="stage">
+    <div class="hud">
+      <h1>AGENT MESH</h1>
+      <p>LOCAL RUNTIME PROXY - API CLEANLINESS WITH OAUTH CLAUDE CODE</p>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--cyan)"></i>local API</span>
+      <span><i style="background:var(--orange)"></i>spawn/reuse</span>
+      <span><i style="background:var(--green)"></i>stream-json</span>
+      <span><i style="background:var(--violet)"></i>checkpoint</span>
+      <span><i style="background:var(--pink)"></i>recovery</span>
+    </div>
+
+    <div class="state" id="statePanel"></div>
+    <div class="terminal">
+      <h2>RUNTIME VIEW</h2>
+      <pre id="terminalText"></pre>
+    </div>
+
+    <div class="bus">
+      <div class="lbl">AGENT MESH BUS<small>tickets, checkpoints, blackboard, status</small></div>
+    </div>
+    <svg class="routes" id="routes" viewBox="0 0 1280 820"></svg>
+
+    <div class="narr">
+      <div class="num" id="num">1</div>
+      <div class="body">
+        <h3 id="title">-</h3>
+        <p id="desc">-</p>
+      </div>
+      <div class="ctrls">
+        <div class="btns">
+          <button class="btn" id="restart">Restart</button>
+          <button class="btn" id="prev">Prev</button>
+          <button class="btn play" id="play">Pause</button>
+          <button class="btn" id="next">Next</button>
+        </div>
+        <div class="dots" id="dots"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const stage=document.getElementById('stage');
+const svg=document.getElementById('routes');
+const terminalText=document.getElementById('terminalText');
+const C={api:'#21e6ff',spawn:'#ff8a3d',json:'#38ffa3',checkpoint:'#a78bfa',recover:'#f472b6',note:'#7dd3fc',ask:'#ffb31f'};
+
+const BUS_TOP=402, BUS_BOT=454, BUS_MID=428;
+const nodes={
+  mesh:{x:138,y:180,side:'top',g:'M',c:C.api,name:'Agent Mesh',role:'asks clean local API'},
+  runtime:{x:640,y:192,side:'top',g:'R',c:C.spawn,name:'Runtime Proxy',role:'owns sessions',cls:'runtime'},
+  oauth:{x:1094,y:180,side:'top',g:'O',c:C.violet,name:'OAuth Login',role:'Claude Code auth'},
+  expert:{x:444,y:640,side:'bot',g:'E',c:C.green,name:'auth expert',role:'resident process',cls:'process warm hidden'},
+  worker:{x:798,y:640,side:'bot',g:'W',c:C.amber,name:'api worker',role:'task-scoped process',cls:'process hidden'},
+  board:{x:1100,y:640,side:'bot',g:'B',c:C.violet,name:'Blackboard',role:'durable notes'},
+};
+
+const els={};
+for(const [key,n] of Object.entries(nodes)){
+  const d=document.createElement('div');
+  d.className='node'+(n.cls?' '+n.cls:'');
+  d.style.left=n.x+'px';
+  d.style.top=n.y+'px';
+  const isRuntime=(n.cls||'').includes('runtime');
+  const isProcess=(n.cls||'').includes('process');
+  d.innerHTML=`
+    <div class="top">
+      <div class="glyph" style="color:${n.c};border:1px solid ${n.c}55;background:${n.c}1a">${n.g}</div>
+      <div><div class="name">${n.name}</div><div class="role">${n.role}</div></div>
+    </div>
+    <div class="stat"><span class="dot" style="background:${n.c};box-shadow:0 0 8px ${n.c}"></span><span class="msg">idle</span></div>
+    ${isRuntime?`<div class="subgrid">
+      <div class="module" data-mod="sessions"><div class="mk">sessions</div><div class="mv">none yet</div></div>
+      <div class="module" data-mod="adapter"><div class="mk">adapter</div><div class="mv">stream-json</div></div>
+      <div class="module" data-mod="queue"><div class="mk">queue</div><div class="mv">empty</div></div>
+      <div class="module" data-mod="health"><div class="mk">health</div><div class="mv">watching</div></div>
+    </div>`:''}
+    ${isProcess?`<div class="pipe" style="color:${n.c}"><span></span></div><span class="tag">stdin open</span>`:''}`;
+  stage.appendChild(d);
+  els[key]=d;
+  n.anchorY=n.side==='top'?n.y+(isRuntime?100:46):n.y-(isProcess?72:46);
+  n.busEdge=n.side==='top'?BUS_TOP:BUS_BOT;
+}
+
+for(const n of Object.values(nodes)){
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d',`M ${n.x} ${n.anchorY} L ${n.x} ${n.busEdge}`);
+  p.setAttribute('stroke','rgba(120,180,255,.13)');
+  p.setAttribute('stroke-width','2');
+  p.setAttribute('fill','none');
+  svg.appendChild(p);
+}
+const defs=document.createElementNS(SVGNS,'defs');
+defs.innerHTML=`<filter id="glow" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+svg.appendChild(defs);
+
+function pathFor(a,b){
+  return `M ${a.x} ${a.anchorY} L ${a.x} ${BUS_MID} L ${b.x} ${BUS_MID} L ${b.x} ${b.anchorY}`;
+}
+
+const packets=[];
+function spawnPacket(from,to,type,label){
+  const a=nodes[from], b=nodes[to];
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',pathFor(a,b));
+  path.setAttribute('fill','none');
+  path.setAttribute('stroke','none');
+  svg.appendChild(path);
+  const len=path.getTotalLength();
+
+  const trail=document.createElementNS(SVGNS,'path');
+  trail.setAttribute('d',pathFor(a,b));
+  trail.setAttribute('fill','none');
+  trail.setAttribute('stroke',C[type]);
+  trail.setAttribute('stroke-width','2.5');
+  trail.setAttribute('stroke-linecap','round');
+  trail.setAttribute('stroke-dasharray',`58 ${len}`);
+  trail.setAttribute('opacity','.82');
+  svg.appendChild(trail);
+
+  const dot=document.createElementNS(SVGNS,'circle');
+  dot.setAttribute('r','5');
+  dot.setAttribute('fill',C[type]);
+  dot.setAttribute('filter','url(#glow)');
+  svg.appendChild(dot);
+
+  let lbl=null;
+  if(label){
+    lbl=document.createElementNS(SVGNS,'text');
+    lbl.setAttribute('fill',C[type]);
+    lbl.setAttribute('font-size','10');
+    lbl.setAttribute('font-family','SF Mono,monospace');
+    lbl.setAttribute('text-anchor','middle');
+    lbl.textContent=label;
+    svg.appendChild(lbl);
+  }
+  flash(from);
+  packets.push({path,trail,dot,lbl,len,t:0,speed:.0076,to});
+}
+function tick(){
+  for(let i=packets.length-1;i>=0;i--){
+    const p=packets[i];
+    p.t+=p.speed;
+    if(p.t>=1){
+      flash(p.to);
+      p.path.remove(); p.trail.remove(); p.dot.remove(); if(p.lbl)p.lbl.remove();
+      packets.splice(i,1);
+      continue;
+    }
+    const pt=p.path.getPointAtLength(p.t*p.len);
+    p.dot.setAttribute('cx',pt.x);
+    p.dot.setAttribute('cy',pt.y);
+    p.trail.setAttribute('stroke-dashoffset',-p.t*p.len);
+    if(p.lbl){
+      p.lbl.setAttribute('x',pt.x);
+      p.lbl.setAttribute('y',pt.y-12);
+      p.lbl.setAttribute('opacity',p.t<.12?p.t/.12:p.t>.86?(1-p.t)/.14:1);
+    }
+  }
+  requestAnimationFrame(tick);
+}
+tick();
+
+function flash(key){
+  els[key].classList.add('flash');
+  setTimeout(()=>els[key].classList.remove('flash'),480);
+}
+function setMsg(key,text){els[key].querySelector('.msg').textContent=text;}
+function moduleText(key,text,hot=false){
+  const m=els.runtime.querySelector(`[data-mod="${key}"]`);
+  if(!m)return;
+  m.querySelector('.mv').textContent=text;
+  m.classList.toggle('hot',hot);
+}
+function show(key,yes=true){els[key].classList.toggle('hidden',!yes);}
+function dead(key,yes=true){els[key].classList.toggle('dead',yes);els[key].classList.toggle('paused',yes);}
+
+const statePanel=document.getElementById('statePanel');
+const steps=[
+  {
+    title:'Agent Mesh gets an API-looking surface',
+    desc:'The mesh does not touch OAuth tokens directly. It calls a local runtime endpoint, like <code>POST /sessions/auth-expert/messages</code>.',
+    term:'POST /sessions/auth-expert/messages\nbody: "review this auth bug"\n\nRuntime receives a local request.',
+    state:['mesh API','local HTTP','auth','Claude Code OAuth','expert','not started','worker','not started'],
+    actions(){spawnPacket('mesh','runtime','api','POST');setMsg('mesh','sent local API call');setMsg('runtime','received request');moduleText('queue','1 message',true);}
+  },
+  {
+    title:'Runtime reuses or creates a named session',
+    desc:'The runtime owns the session table. Agent Mesh sees a clean session name; the runtime decides whether a Claude process already exists.',
+    term:'session: auth-expert\nstatus: missing\nplan: create resident Claude process',
+    state:['mesh API','request accepted','auth','OAuth in keychain','expert','creating','worker','not started'],
+    actions(){spawnPacket('runtime','oauth','spawn','auth check');setMsg('runtime','checking session');setMsg('oauth','login available');moduleText('sessions','auth-expert',true);}
+  },
+  {
+    title:'Runtime starts Claude Code using OAuth login',
+    desc:'No API key is minted. The runtime launches Claude Code, and Claude Code uses the normal logged-in subscription credentials.',
+    term:'exec claude -p \\\n  --input-format stream-json \\\n  --output-format stream-json \\\n  --verbose\n\nstdin: open\nstdout: streaming',
+    state:['mesh API','waiting','auth','subscription login','expert','resident process','worker','not started'],
+    actions(){show('expert',true);spawnPacket('runtime','expert','spawn','spawn');spawnPacket('oauth','expert','spawn','OAuth');setMsg('expert','booting stream-json');setMsg('runtime','process spawned');moduleText('health','pid alive',true);}
+  },
+  {
+    title:'The important trick: stdin stays open',
+    desc:'Instead of piping one prompt and closing, the runtime keeps the input pipe open. Claude answers one message, then waits for the next.',
+    term:'message 1 -> stdin\nClaude answers\nstdin remains open\n\nmessage 2 can arrive later',
+    state:['mesh API','hidden behind runtime','auth','unchanged','expert','warm and waiting','worker','not started'],
+    actions(){spawnPacket('runtime','expert','api','msg 1');spawnPacket('expert','runtime','json','events');setMsg('expert','answering');setMsg('runtime','reading events');moduleText('adapter','JSON events',true);}
+  },
+  {
+    title:'Runtime turns messy process details into clean events',
+    desc:'Claude streams JSON. The runtime parses it, stores the Claude session id, and returns a simple answer shape to Agent Mesh.',
+    term:'event: assistant_delta\nevent: result\nclaude_session_id: 9f2...\n\nruntime response: answered',
+    state:['mesh API','answered','auth','unchanged','expert','warm after answer','worker','not started'],
+    actions(){spawnPacket('expert','runtime','json','result');spawnPacket('runtime','mesh','json','answered');setMsg('expert','warm idle');setMsg('mesh','got typed answer');moduleText('adapter','typed result',true);}
+  },
+  {
+    title:'Every useful fact gets checkpointed',
+    desc:'Warmth is nice, but durability comes from checkpoints. The runtime writes summaries, ticket state, and session ids to the mesh blackboard.',
+    term:'checkpoint:\n- claude session id\n- short summary\n- last answer\n- ticket state',
+    state:['mesh API','answer cached','auth','unchanged','expert','memory in RAM','worker','not started'],
+    actions(){spawnPacket('runtime','board','checkpoint','summary');setMsg('board','checkpoint saved');moduleText('sessions','auth-expert warm',true);}
+  },
+  {
+    title:'Workers can be task-scoped sessions, not dumb one-shots',
+    desc:'A worker can stay alive while its task is active. If it needs help, it asks through the runtime instead of opening a separate terminal.',
+    term:'create worker: api-worker-17\nmode: task scoped\ncan ask expert\nexits after task',
+    state:['mesh API','task active','auth','unchanged','expert','warm idle','worker','task session'],
+    actions(){show('worker',true);spawnPacket('runtime','worker','spawn','spawn');setMsg('worker','working');moduleText('sessions','expert + worker',true);}
+  },
+  {
+    title:'Worker asks expert without knowing process details',
+    desc:'The worker emits a question. Runtime routes it to the warm expert, gets the answer, then gives the worker a clean response.',
+    term:'worker asks: "which auth pattern?"\nruntime -> auth-expert\nexpert -> answer\nruntime -> worker',
+    state:['mesh API','routing ticket','auth','unchanged','expert','answering worker','worker','waiting'],
+    actions(){spawnPacket('worker','runtime','ask','ask');spawnPacket('runtime','expert','ask','question');setMsg('worker','waiting');setMsg('expert','answering');moduleText('queue','expert turn',true);}
+  },
+  {
+    title:'Then the worker resumes or exits cleanly',
+    desc:'The answer is injected back into the task session. The worker keeps going, finishes, and then the runtime closes that worker process.',
+    term:'answer -> worker stdin\nworker continues\nworker final result\nworker exits',
+    state:['mesh API','worker result','auth','unchanged','expert','still warm','worker','finishing'],
+    actions(){spawnPacket('expert','runtime','json','answer');spawnPacket('runtime','worker','json','answer');spawnPacket('worker','runtime','json','final');setMsg('worker','finalizing');setMsg('expert','warm idle');moduleText('queue','empty',false);}
+  },
+  {
+    title:'If the expert crashes, the runtime owns recovery',
+    desc:'A crash is not magic. The runtime notices the process died, restarts Claude with the saved session id, then reloads the blackboard summary.',
+    term:'health: pid missing\nrestart with saved session id\ninject blackboard context\nmark expert warm again',
+    state:['mesh API','unchanged','auth','unchanged','expert','recovering','worker','done'],
+    actions(){dead('expert',true);setMsg('expert','crashed');spawnPacket('board','runtime','recover','context');spawnPacket('runtime','expert','recover','restart');moduleText('health','restart',true);setTimeout(()=>{dead('expert',false);setMsg('expert','warm again');},1800);}
+  }
+];
+
+let idx=0, playing=true, timer=null;
+const num=document.getElementById('num'), title=document.getElementById('title'), desc=document.getElementById('desc'), dots=document.getElementById('dots');
+steps.forEach((_,i)=>{const d=document.createElement('i');d.onclick=()=>{go(i);pause();};dots.appendChild(d);});
+
+function render(){
+  const s=steps[idx];
+  num.textContent=String(idx+1);
+  title.textContent=s.title;
+  desc.innerHTML=s.desc;
+  terminalText.innerHTML=s.term.replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch])).replace(/(^|\n)([a-z_ -]+:)/g,(m,a,b)=>`${a}<b>${b}</b>`)+'<span class="cursor"></span>';
+  statePanel.innerHTML=`<h2>SESSION STATE</h2>${pairs(s.state).map(([k,v])=>`<div class="row"><span class="k">${k}</span><span>${pill(v)}</span></div>`).join('')}`;
+  [...dots.children].forEach((d,i)=>{d.className=i===idx?'on':i<idx?'done':'';});
+  clearHot();
+  s.actions();
+}
+function pairs(a){let out=[];for(let i=0;i<a.length;i+=2)out.push([a[i],a[i+1]]);return out;}
+function pill(v){
+  const cls=v.includes('warm')||v.includes('answered')||v.includes('saved')?'green':
+    v.includes('waiting')||v.includes('creating')||v.includes('task')?'amber':
+    v.includes('OAuth')||v.includes('routing')?'violet':
+    v.includes('recover')||v.includes('crash')?'dead':'orange';
+  return `<span class="pill ${cls}">${v}</span>`;
+}
+function clearHot(){els.runtime.querySelectorAll('.module').forEach(m=>m.classList.remove('hot'));}
+function go(n){idx=(n+steps.length)%steps.length;render();}
+function next(){go(idx+1);}
+function prev(){go(idx-1);}
+function pause(){playing=false;document.getElementById('play').textContent='Play';clearInterval(timer);}
+function play(){playing=true;document.getElementById('play').textContent='Pause';clearInterval(timer);timer=setInterval(next,5200);}
+
+document.getElementById('next').onclick=()=>{next();pause();};
+document.getElementById('prev').onclick=()=>{prev();pause();};
+document.getElementById('restart').onclick=()=>{go(0);play();};
+document.getElementById('play').onclick=()=>{playing?pause():play();};
+
+function fit(){
+  const scale=Math.min(window.innerWidth/1280, window.innerHeight/820);
+  stage.style.transform=`scale(${Math.max(.48, Math.min(1, scale))})`;
+}
+window.addEventListener('resize',fit);
+fit();
+render();
+play();
+</script>
+</body>
+</html>

@@ -27,3 +27,7 @@ Thumbs.db
 # Node (dashboard tooling, if added)
 node_modules/
 dist/
+
+# Python (spike scripts)
+__pycache__/
+*.pyc

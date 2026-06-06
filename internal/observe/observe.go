@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,6 +28,20 @@ import (
 
 const dialTimeout = 250 * time.Millisecond
 const runtimeTimeout = 2 * time.Second
+
+// Drift is a typed misalignment between the fact sources (filesystem,
+// registry, runtime IPC, pidfiles). Typed per the envelope results rule:
+// never free text in a machine contract.
+type Drift string
+
+const (
+	DriftGhostAgent       Drift = "ghost_agent"       // registry record, socket not dialable
+	DriftPresenceMismatch Drift = "presence_mismatch" // registry live, socket dialable, runtime silent
+	DriftStalePID         Drift = "stale_pid"         // registry/runtime pid not alive
+	DriftOrphanSocket     Drift = "orphan_socket"     // socket file, no registry record
+	DriftDeadPidfile      Drift = "dead_pidfile"      // pidfile whose pid is not alive
+	DriftOrphanPidfile    Drift = "orphan_pidfile"    // pidfile with live pid, no socket, no registry
+)
 
 // Snapshot is the full runtime observability contract shared by mesh ops and
 // meshd --mode observe.
@@ -46,24 +61,28 @@ type Meta struct {
 
 // CoordinatorInfo describes the mesh control-plane process and bus socket.
 type CoordinatorInfo struct {
-	PID         int    `json:"pid,omitempty"`
-	PIDAlive    bool   `json:"pidAlive"`
-	BusDialable bool   `json:"busDialable"`
-	LockPresent bool   `json:"lockPresent"`
-	LogPath     string `json:"logPath,omitempty"`
+	PID              int    `json:"pid,omitempty"`
+	PIDAlive         bool   `json:"pidAlive"`
+	BusSocketPresent bool   `json:"busSocketPresent"`
+	BusDialable      bool   `json:"busDialable"`
+	LockPresent      bool   `json:"lockPresent"`
+	LogPath          string `json:"logPath,omitempty"`
 }
 
 // SidecarInfo describes one agent daemon socket and how it lines up with the
-// registry.
+// registry and its pidfile.
 type SidecarInfo struct {
 	Name           string                    `json:"name"`
 	Socket         string                    `json:"socket"`
+	SocketPresent  bool                      `json:"socketPresent"`
 	SocketDialable bool                      `json:"socketDialable"`
 	PID            int                       `json:"pid,omitempty"`
 	PIDAlive       bool                      `json:"pidAlive"`
+	PIDFile        string                    `json:"pidFile,omitempty"`
+	PIDFilePID     int                       `json:"pidFilePid,omitempty"`
 	LogPath        string                    `json:"logPath,omitempty"`
 	Registry       *agentcard.RegistryRecord `json:"registry,omitempty"`
-	Drift          []string                  `json:"drift,omitempty"`
+	Drift          []Drift                   `json:"drift,omitempty"`
 }
 
 // ChildInfo is a child agent CLI process reported by a sidecar.
@@ -90,14 +109,17 @@ func Collect(cfg config.Config) (Snapshot, error) {
 		},
 	}
 
-	if pid, err := readPID(cfg.CoordinatorPID()); err == nil {
+	if pid, err := ReadPIDFile(cfg.CoordinatorPID()); err == nil {
 		snap.Coordinator.PID = pid
-		snap.Coordinator.PIDAlive = pidAlive(pid)
+		snap.Coordinator.PIDAlive = PIDAlive(pid)
 	}
 	if _, err := os.Stat(cfg.CoordinatorLock()); err == nil {
 		snap.Coordinator.LockPresent = true
 	}
-	snap.Coordinator.BusDialable = dialable(cfg.BusSocket())
+	if _, err := os.Stat(cfg.BusSocket()); err == nil {
+		snap.Coordinator.BusSocketPresent = true
+	}
+	snap.Coordinator.BusDialable = Dialable(cfg.BusSocket())
 
 	registry := map[string]agentcard.RegistryRecord{}
 	if snap.Coordinator.BusDialable {
@@ -108,28 +130,60 @@ func Collect(cfg config.Config) (Snapshot, error) {
 		}
 	}
 
+	// Sidecar pidfiles are the third fact source (issue #35): they make an
+	// agent visible even after registry eviction with a hung socket — or
+	// with no socket at all.
+	pidfilePaths, _ := filepath.Glob(filepath.Join(cfg.AgentsDir(), "*.pid"))
+	pidfiles := make(map[string]int, len(pidfilePaths)) // name → pid (0 if unparseable)
+	for _, path := range pidfilePaths {
+		name := strings.TrimSuffix(filepath.Base(path), ".pid")
+		pid, err := ReadPIDFile(path)
+		if err != nil {
+			pid = 0
+		}
+		pidfiles[name] = pid
+	}
+
 	socketPaths, _ := filepath.Glob(filepath.Join(cfg.AgentsDir(), "*.sock"))
-	seenSockets := make(map[string]struct{}, len(socketPaths))
+	seen := make(map[string]struct{}, len(socketPaths))
+
+	attachPidfile := func(info *SidecarInfo) {
+		pid, ok := pidfiles[info.Name]
+		if !ok {
+			return
+		}
+		info.PIDFile = cfg.AgentPIDFile(info.Name)
+		info.PIDFilePID = pid
+		if info.PID == 0 && pid > 0 {
+			info.PID = pid
+			info.PIDAlive = PIDAlive(pid)
+		}
+		// An unparseable pidfile (pid 0) is dead residue too.
+		if !PIDAlive(pid) {
+			info.Drift = append(info.Drift, DriftDeadPidfile)
+		}
+	}
 
 	for _, sockPath := range socketPaths {
 		name := strings.TrimSuffix(filepath.Base(sockPath), ".sock")
-		seenSockets[name] = struct{}{}
+		seen[name] = struct{}{}
 
 		info := SidecarInfo{
-			Name:    name,
-			Socket:  sockPath,
-			LogPath: filepath.Join(cfg.MeshDir, "logs", "sidecar-"+name+".log"),
+			Name:          name,
+			Socket:        sockPath,
+			SocketPresent: true,
+			LogPath:       filepath.Join(cfg.MeshDir, "logs", "sidecar-"+name+".log"),
 		}
-		info.SocketDialable = dialable(sockPath)
+		info.SocketDialable = Dialable(sockPath)
 
 		var runtime *meshapi.RuntimeResult
 		if info.SocketDialable {
 			if rt, err := queryRuntime(sockPath); err == nil {
 				runtime = &rt
 				info.PID = rt.SidecarPID
-				info.PIDAlive = pidAlive(rt.SidecarPID)
+				info.PIDAlive = PIDAlive(rt.SidecarPID)
 				for _, child := range rt.Children {
-					alive := child.State == "running" && pidAlive(child.PID)
+					alive := child.State == "running" && PIDAlive(child.PID)
 					snap.Children = append(snap.Children, ChildInfo{
 						Sidecar:   name,
 						PID:       child.PID,
@@ -147,32 +201,34 @@ func Collect(cfg config.Config) (Snapshot, error) {
 			info.Registry = &recCopy
 			if info.PID == 0 && rec.Card.PID > 0 {
 				info.PID = rec.Card.PID
-				info.PIDAlive = pidAlive(rec.Card.PID)
+				info.PIDAlive = PIDAlive(rec.Card.PID)
 			}
 			if rec.State == agentcard.PresenceLive {
 				if !info.SocketDialable {
-					info.Drift = append(info.Drift, "ghost_agent")
+					info.Drift = append(info.Drift, DriftGhostAgent)
 				} else if runtime == nil {
-					info.Drift = append(info.Drift, "presence_mismatch")
+					info.Drift = append(info.Drift, DriftPresenceMismatch)
 				}
 			}
 			if info.PID > 0 && !info.PIDAlive {
-				info.Drift = append(info.Drift, "stale_pid")
+				info.Drift = append(info.Drift, DriftStalePID)
 			}
 		} else {
-			info.Drift = append(info.Drift, "orphan_socket")
+			info.Drift = append(info.Drift, DriftOrphanSocket)
 			if info.PID > 0 && !info.PIDAlive {
-				info.Drift = append(info.Drift, "stale_pid")
+				info.Drift = append(info.Drift, DriftStalePID)
 			}
 		}
 
+		attachPidfile(&info)
 		snap.Sidecars = append(snap.Sidecars, info)
 	}
 
 	for name, rec := range registry {
-		if _, ok := seenSockets[name]; ok {
+		if _, ok := seen[name]; ok {
 			continue
 		}
+		seen[name] = struct{}{}
 		info := SidecarInfo{
 			Name:     name,
 			Socket:   cfg.AgentSocket(name),
@@ -181,12 +237,36 @@ func Collect(cfg config.Config) (Snapshot, error) {
 		}
 		if rec.Card.PID > 0 {
 			info.PID = rec.Card.PID
-			info.PIDAlive = pidAlive(rec.Card.PID)
+			info.PIDAlive = PIDAlive(rec.Card.PID)
 			if !info.PIDAlive {
-				info.Drift = append(info.Drift, "stale_pid")
+				info.Drift = append(info.Drift, DriftStalePID)
 			}
 		}
-		info.Drift = append(info.Drift, "ghost_agent")
+		info.Drift = append(info.Drift, DriftGhostAgent)
+		attachPidfile(&info)
+		snap.Sidecars = append(snap.Sidecars, info)
+	}
+
+	// Pidfile-only entries: no socket, no registry record — the previously
+	// invisible class (evicted from the registry, socket gone or never up,
+	// process possibly still alive).
+	pidfileNames := make([]string, 0, len(pidfiles))
+	for name := range pidfiles {
+		if _, ok := seen[name]; !ok {
+			pidfileNames = append(pidfileNames, name)
+		}
+	}
+	sort.Strings(pidfileNames)
+	for _, name := range pidfileNames {
+		info := SidecarInfo{
+			Name:    name,
+			Socket:  cfg.AgentSocket(name),
+			LogPath: filepath.Join(cfg.MeshDir, "logs", "sidecar-"+name+".log"),
+		}
+		attachPidfile(&info)
+		if info.PIDFilePID > 0 && info.PIDAlive {
+			info.Drift = append(info.Drift, DriftOrphanPidfile)
+		}
 		snap.Sidecars = append(snap.Sidecars, info)
 	}
 
@@ -202,7 +282,8 @@ func Collect(cfg config.Config) (Snapshot, error) {
 	return snap, nil
 }
 
-func readPID(path string) (int, error) {
+// ReadPIDFile parses a decimal pid from a pidfile.
+func ReadPIDFile(path string) (int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
@@ -214,7 +295,9 @@ func readPID(path string) (int, error) {
 	return pid, nil
 }
 
-func pidAlive(pid int) bool {
+// PIDAlive reports whether the pid exists (signal-0 probe). Note: an unreaped
+// zombie still counts as alive here; internal/ops uses ps state for teardown.
+func PIDAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
@@ -225,7 +308,8 @@ func pidAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-func dialable(path string) bool {
+// Dialable reports whether something accepts connections at the socket path.
+func Dialable(path string) bool {
 	conn, err := net.DialTimeout("unix", path, dialTimeout)
 	if err != nil {
 		return false

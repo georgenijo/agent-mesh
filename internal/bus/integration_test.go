@@ -253,14 +253,19 @@ func TestKVLazyExpiryWithoutJanitor(t *testing.T) {
 	_, path := newTestServer(t, Options{JanitorInterval: time.Hour})
 	c := dialTest(t, path, ClientOptions{})
 
-	if _, err := c.KVPut("leases", "worker", "alive", PutOptions{TTL: 50 * time.Millisecond}); err != nil {
+	// 250ms TTL: generous enough that the put+get round trips land well
+	// inside it even under a CI scheduler stall, so the pre-expiry existence
+	// check below cannot fail spuriously. Lazy expiry is what's under test,
+	// not tight timing — the parked janitor already guarantees every observed
+	// expiry is the read-side path.
+	if _, err := c.KVPut("leases", "worker", "alive", PutOptions{TTL: 250 * time.Millisecond}); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, err := c.KVGet("leases", "worker"); err != nil || !found {
 		t.Fatalf("key should exist before TTL: found=%v err=%v", found, err)
 	}
 
-	time.Sleep(80 * time.Millisecond) // past the TTL; janitor still an hour away
+	time.Sleep(300 * time.Millisecond) // past the TTL; janitor still an hour away
 
 	if _, found, err := c.KVGet("leases", "worker"); err != nil {
 		t.Fatal(err)

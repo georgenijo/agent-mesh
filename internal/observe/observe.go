@@ -84,6 +84,7 @@ type SidecarInfo struct {
 	PIDFilePID     int                       `json:"pidFilePid,omitempty"`
 	LogPath        string                    `json:"logPath,omitempty"`
 	Registry       *agentcard.RegistryRecord `json:"registry,omitempty"`
+	ClaimLosses    []meshapi.ClaimLoss       `json:"claimLosses,omitempty"`
 	Drift          []Drift                   `json:"drift,omitempty"`
 }
 
@@ -200,6 +201,7 @@ func Collect(cfg config.Config) (Snapshot, error) {
 				runtime = &rt
 				info.PID = rt.SidecarPID
 				info.PIDAlive = PIDAlive(rt.SidecarPID)
+				info.ClaimLosses = append([]meshapi.ClaimLoss(nil), rt.ClaimLosses...)
 				for _, child := range rt.Children {
 					alive := child.State == "running" && PIDAlive(child.PID)
 					snap.Children = append(snap.Children, ChildInfo{

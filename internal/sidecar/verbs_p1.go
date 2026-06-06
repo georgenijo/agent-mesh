@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
@@ -121,6 +122,10 @@ func (s *Sidecar) reestablishClaims() {
 		switch out.Result {
 		case envelope.ClaimLost:
 			s.forgetClaim(h.repo, h.path)
+			s.recordClaimLoss(meshapi.ClaimLoss{
+				Repo: h.repo, Path: h.path, Owner: out.Owner.Agent,
+				At: time.Now().UTC(), Reason: "reestablish_lost",
+			})
 			s.log.Info("claim not re-established (held by another agent)",
 				"repo", h.repo, "path", h.path, "owner", out.Owner.Agent)
 		case envelope.ClaimError:

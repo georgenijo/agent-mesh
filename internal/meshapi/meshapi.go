@@ -25,6 +25,10 @@ const (
 	VerbAnnounce = "announce"
 	VerbNote     = "note"
 	VerbContext  = "context"
+	VerbAsk      = "ask"
+	VerbPoll     = "poll"
+	VerbInbox    = "inbox"
+	VerbAnswer   = "answer"
 	VerbRuntime  = "runtime"
 )
 
@@ -192,7 +196,89 @@ type ChildProc struct {
 
 // RuntimeResult is the sidecar runtime snapshot for ops inspection.
 type RuntimeResult struct {
-	SidecarPID int         `json:"sidecarPid"`
-	Uptime     string      `json:"uptime"`
-	Children   []ChildProc `json:"children"`
+	SidecarPID  int         `json:"sidecarPid"`
+	Uptime      string      `json:"uptime"`
+	Children    []ChildProc `json:"children"`
+	ClaimLosses []ClaimLoss `json:"claimLosses,omitempty"`
+}
+
+// --- P2: async ask/answer --------------------------------------------------------
+
+const (
+	MaxQuestionLen    = 32768
+	MaxAnswerLen      = 32768
+	DefaultInboxLimit = 50
+)
+
+type AskArgs struct {
+	Role     string `json:"role,omitempty"`
+	To       string `json:"to,omitempty"`
+	Question string `json:"question"`
+	Context  string `json:"context,omitempty"`
+	TTL      string `json:"ttl,omitempty"`
+	Wait     bool   `json:"wait,omitempty"`
+}
+
+type AskVerbResult struct {
+	Ticket    string               `json:"ticket"`
+	Result    envelope.AskResult   `json:"result"`
+	State     envelope.TicketState `json:"state"`
+	Role      string               `json:"role,omitempty"`
+	To        string               `json:"to,omitempty"`
+	ExpiresAt time.Time            `json:"expiresAt"`
+}
+
+type PollArgs struct {
+	Ticket string `json:"ticket"`
+}
+
+type PollResult struct {
+	Ticket     string               `json:"ticket"`
+	Result     envelope.AskResult   `json:"result"`
+	State      envelope.TicketState `json:"state,omitempty"`
+	Answer     string               `json:"answer,omitempty"`
+	AnsweredBy string               `json:"answeredBy,omitempty"`
+	AnsweredAt time.Time            `json:"answeredAt,omitempty"`
+}
+
+type InboxArgs struct {
+	Limit int  `json:"limit,omitempty"`
+	Watch bool `json:"watch,omitempty"`
+}
+
+type InboxItem struct {
+	Ticket    string    `json:"ticket"`
+	From      string    `json:"from"`
+	Role      string    `json:"role,omitempty"`
+	To        string    `json:"to,omitempty"`
+	Question  string    `json:"question"`
+	Context   string    `json:"context,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+type InboxResult struct {
+	Items    []InboxItem `json:"items"`
+	Overflow bool        `json:"overflow,omitempty"`
+}
+
+type AnswerArgs struct {
+	Ticket string `json:"ticket"`
+	Answer string `json:"answer"`
+}
+
+type AnswerVerbResult struct {
+	Ticket string               `json:"ticket"`
+	Result envelope.AskResult   `json:"result"`
+	State  envelope.TicketState `json:"state"`
+}
+
+// ClaimLoss is sidecar-local observability for a claim the agent believed it
+// held but legitimately lost.
+type ClaimLoss struct {
+	Repo   string    `json:"repo"`
+	Path   string    `json:"path"`
+	Owner  string    `json:"owner,omitempty"`
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason"`
 }

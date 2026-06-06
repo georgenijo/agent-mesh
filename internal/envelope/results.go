@@ -13,7 +13,23 @@ const (
 	ClaimError   ClaimResult = "error"   // transport/store failure; retryable
 )
 
+// ReleaseResult is the outcome of a release attempt. Release is
+// delete-if-owner: releasing an already-gone claim is an idempotent success
+// (the fact is already true), and a claim held by someone else is not_owner —
+// never release-by-force.
+type ReleaseResult string
+
+const (
+	ReleaseReleased ReleaseResult = "released"  // freed, or already gone
+	ReleaseNotOwner ReleaseResult = "not_owner" // someone else holds it; nothing deleted
+	ReleaseError    ReleaseResult = "error"     // transport/store failure; retryable
+)
+
 // AskResult is the outcome of polling an ask ticket.
+//
+// Locked CLI exit-code mapping (ARCHITECTURE.md §4): AskPending → exit 3
+// (no-answer-yet), AskNoSuchTicket → exit 4. Pinned here so the CLI verbs
+// (#18) consume the mapping instead of reinventing it.
 type AskResult string
 
 const (
@@ -23,3 +39,32 @@ const (
 	AskExpired      AskResult = "expired"
 	AskNoSuchTicket AskResult = "no_such_ticket"
 )
+
+// TicketState is the lifecycle vocabulary of an ask ticket. The vocabulary is
+// wire contract — frozen here; the legal-transition table and reducer are the
+// ticket FSM's (#17). The tickets KV record is the one authority for a
+// ticket's current state.
+type TicketState string
+
+const (
+	TicketOpen      TicketState = "open"      // created, not yet routed
+	TicketRouted    TicketState = "routed"    // coordinator picked a responder
+	TicketAccepted  TicketState = "accepted"  // responder took it
+	TicketAnswered  TicketState = "answered"  // answer recorded
+	TicketClosed    TicketState = "closed"    // asker collected the answer
+	TicketExpired   TicketState = "expired"   // TTL ran out unanswered
+	TicketCancelled TicketState = "cancelled" // asker withdrew it
+)
+
+var ticketStates = map[TicketState]bool{
+	TicketOpen:      true,
+	TicketRouted:    true,
+	TicketAccepted:  true,
+	TicketAnswered:  true,
+	TicketClosed:    true,
+	TicketExpired:   true,
+	TicketCancelled: true,
+}
+
+// ValidTicketState reports whether s is a recognized ticket state.
+func ValidTicketState(s TicketState) bool { return ticketStates[s] }

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "kind": "register",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.register",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "card": {
+      "id": "codex-7",
+      "name": "codex-7",
+      "role": "auth",
+      "caps": [
+        "go",
+        "backend"
+      ],
+      "repo": "demo",
+      "cwd": "/repo",
+      "model": "opus",
+      "pid": 4242
+    }
+  }
+}

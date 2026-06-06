@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "status",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.status.codex-7",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "id": "codex-7",
+    "text": "building RRULE builder"
+  }
+}

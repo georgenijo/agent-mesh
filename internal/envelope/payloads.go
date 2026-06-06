@@ -146,6 +146,28 @@ func (p NotePayload) validate() error {
 	return nil
 }
 
+// TicketPayload is the ticket-FSM transition event (P2, KindTicket). An
+// observability tap only: the tickets KV record is the authority for ticket
+// state; this event lets the dashboard and e2e watch the lifecycle without
+// polling the KV. By is the agent that caused the transition; Reason carries
+// detail for expired/cancelled.
+type TicketPayload struct {
+	Ticket string      `json:"ticket"`
+	State  TicketState `json:"state"`
+	By     string      `json:"by,omitempty"`
+	Reason string      `json:"reason,omitempty"`
+}
+
+func (p TicketPayload) validate() error {
+	if err := requireField("ticket", p.Ticket); err != nil {
+		return err
+	}
+	if !ValidTicketState(p.State) {
+		return fmt.Errorf("unknown ticket state %q", p.State)
+	}
+	return nil
+}
+
 // payloadKinds maps each kind to its expected payload validator, so DecodeInto
 // can reject a payload that does not match the envelope's kind.
 type validator interface{ validate() error }
@@ -170,6 +192,8 @@ func payloadFor(kind Kind) validator {
 		return &AnswerPayload{}
 	case KindNote:
 		return &NotePayload{}
+	case KindTicket:
+		return &TicketPayload{}
 	default:
 		return nil
 	}

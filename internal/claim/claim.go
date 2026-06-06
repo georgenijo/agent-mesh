@@ -68,13 +68,15 @@ type Outcome struct {
 	Err    error
 }
 
-// ReleaseResult is the outcome of a release attempt.
-type ReleaseResult string
+// ReleaseResult is the outcome of a release attempt. The enum lives in
+// envelope beside ClaimResult — result enums have one home, the wire-contract
+// package — and is aliased here so call sites stay ergonomic.
+type ReleaseResult = envelope.ReleaseResult
 
 const (
-	Released     ReleaseResult = "released"  // the claim is gone (incl. already-gone)
-	NotOwner     ReleaseResult = "not_owner" // someone else holds it; nothing deleted
-	ReleaseError ReleaseResult = "error"     // transport/store failure; retryable
+	Released     = envelope.ReleaseReleased // the claim is gone (incl. already-gone)
+	NotOwner     = envelope.ReleaseNotOwner // someone else holds it; nothing deleted
+	ReleaseError = envelope.ReleaseError    // transport/store failure; retryable
 )
 
 // ReleaseOutcome is the result of a Release. Owner is filled on not_owner so

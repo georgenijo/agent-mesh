@@ -39,15 +39,27 @@ func New(cfg config.Config, addr string, log *slog.Logger) *Server {
 
 // Start binds HTTP and begins serving.
 func (s *Server) Start() error {
+	// Observe may be the first daemon up on a cold mesh; make sure MESH_DIR
+	// exists before writing run files into it.
+	if err := s.cfg.EnsureDirs(); err != nil {
+		return fmt.Errorf("observe: %w", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.serveIndex)
 	mux.HandleFunc("GET /api/snapshot", s.serveSnapshot)
 
-	ln, err := net.Listen("tcp", s.addr)
+	ln, err := ListenWithFallback(s.addr, s.log)
 	if err != nil {
 		return fmt.Errorf("observe: listen %s: %w", s.addr, err)
 	}
 	s.ln = ln
+
+	// Run-file protocol (see runfiles.go): pid first, bound addr last.
+	if err := WriteRunFiles(s.cfg.ObservePID(), s.cfg.ObserveAddrFile(), s.Addr()); err != nil {
+		ln.Close()
+		return fmt.Errorf("observe: %w", err)
+	}
 	s.httpSrv = &http.Server{Handler: mux}
 
 	go s.httpSrv.Serve(ln) //nolint:errcheck // closed on Stop
@@ -71,6 +83,7 @@ func (s *Server) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	s.httpSrv.Shutdown(ctx) //nolint:errcheck
+	RemoveRunFiles(s.cfg.ObservePID(), s.cfg.ObserveAddrFile())
 }
 
 // serveSnapshot returns the current runtime snapshot as JSON.

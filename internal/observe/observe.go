@@ -41,6 +41,7 @@ const (
 	DriftOrphanSocket     Drift = "orphan_socket"     // socket file, no registry record
 	DriftDeadPidfile      Drift = "dead_pidfile"      // pidfile whose pid is not alive
 	DriftOrphanPidfile    Drift = "orphan_pidfile"    // pidfile with live pid, no socket, no registry
+	DriftStaleAddrFile    Drift = "stale_addrfile"    // service addr file with no pidfile beside it
 )
 
 // Snapshot is the full runtime observability contract shared by mesh ops and
@@ -50,6 +51,7 @@ type Snapshot struct {
 	Coordinator CoordinatorInfo `json:"coordinator"`
 	Sidecars    []SidecarInfo   `json:"sidecars"`
 	Children    []ChildInfo     `json:"children"`
+	Services    []ServiceInfo   `json:"services,omitempty"`
 	Anomalies   []string        `json:"anomalies,omitempty"`
 }
 
@@ -83,6 +85,22 @@ type SidecarInfo struct {
 	LogPath        string                    `json:"logPath,omitempty"`
 	Registry       *agentcard.RegistryRecord `json:"registry,omitempty"`
 	Drift          []Drift                   `json:"drift,omitempty"`
+}
+
+// ServiceInfo describes an optional HTTP daemon (dashboard, observe) via its
+// run files (<name>.pid, <name>.addr — see runfiles.go). Addr is the REAL
+// bound address from the addr file; never dial the configured default, a
+// port-conflict fallback may have moved it.
+type ServiceInfo struct {
+	Name     string  `json:"name"` // "dashboard" | "observe"
+	PID      int     `json:"pid,omitempty"`
+	PIDAlive bool    `json:"pidAlive"`
+	PIDFile  string  `json:"pidFile,omitempty"`
+	Addr     string  `json:"addr,omitempty"`
+	AddrFile string  `json:"addrFile,omitempty"`
+	Dialable bool    `json:"dialable"`
+	LogPath  string  `json:"logPath,omitempty"`
+	Drift    []Drift `json:"drift,omitempty"`
 }
 
 // ChildInfo is a child agent CLI process reported by a sidecar.
@@ -270,6 +288,8 @@ func Collect(cfg config.Config) (Snapshot, error) {
 		snap.Sidecars = append(snap.Sidecars, info)
 	}
 
+	collectServices(cfg, &snap)
+
 	if len(socketPaths) > 0 && !snap.Coordinator.BusDialable {
 		snap.Anomalies = append(snap.Anomalies, "coordinator_down: sidecar sockets exist but bus is not dialable")
 	}
@@ -278,8 +298,55 @@ func Collect(cfg config.Config) (Snapshot, error) {
 			snap.Anomalies = append(snap.Anomalies, fmt.Sprintf("%s: %s", sc.Name, d))
 		}
 	}
+	for _, svc := range snap.Services {
+		for _, d := range svc.Drift {
+			snap.Anomalies = append(snap.Anomalies, fmt.Sprintf("%s: %s", svc.Name, d))
+		}
+	}
 
 	return snap, nil
+}
+
+// collectServices reads the optional HTTP daemons' run files. A service with
+// neither file is simply absent — a fresh mesh stays clean.
+func collectServices(cfg config.Config, snap *Snapshot) {
+	for _, svc := range []struct {
+		name, pidFile, addrFile string
+	}{
+		{"dashboard", cfg.DashboardPID(), cfg.DashboardAddrFile()},
+		{"observe", cfg.ObservePID(), cfg.ObserveAddrFile()},
+	} {
+		info := ServiceInfo{
+			Name:    svc.name,
+			LogPath: filepath.Join(cfg.MeshDir, "logs", svc.name+".log"),
+		}
+		havePid, haveAddr := false, false
+		if pid, err := ReadPIDFile(svc.pidFile); err == nil {
+			havePid = true
+			info.PIDFile = svc.pidFile
+			info.PID = pid
+			info.PIDAlive = PIDAlive(pid)
+		} else if _, statErr := os.Stat(svc.pidFile); statErr == nil {
+			havePid = true // present but garbage: dead residue
+			info.PIDFile = svc.pidFile
+		}
+		if addr, err := ReadAddrFile(svc.addrFile); err == nil {
+			haveAddr = true
+			info.AddrFile = svc.addrFile
+			info.Addr = addr
+			info.Dialable = DialableTCP(addr)
+		}
+		if !havePid && !haveAddr {
+			continue
+		}
+		if havePid && !info.PIDAlive {
+			info.Drift = append(info.Drift, DriftDeadPidfile)
+		}
+		if haveAddr && !havePid {
+			info.Drift = append(info.Drift, DriftStaleAddrFile)
+		}
+		snap.Services = append(snap.Services, info)
+	}
 }
 
 // ReadPIDFile parses a decimal pid from a pidfile.

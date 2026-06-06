@@ -150,6 +150,28 @@ func (c Config) StreamsDir() string { return filepath.Join(c.MeshDir, "streams")
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }
 
+// DashboardPID is written by the running dashboard for ops inspection.
+func (c Config) DashboardPID() string { return filepath.Join(c.MeshDir, "dashboard.pid") }
+
+// DashboardAddrFile holds the dashboard's real bound address (it may differ
+// from DashboardAddr after a port-conflict fallback or :0). The one authority
+// for "where is the UI" — the daemon's stdout goes to a logfile when spawned
+// detached.
+func (c Config) DashboardAddrFile() string { return filepath.Join(c.MeshDir, "dashboard.addr") }
+
+// DashboardLock is the flock file electing a single dashboard autostarter.
+func (c Config) DashboardLock() string { return filepath.Join(c.MeshDir, "dashboard.lock") }
+
+// ObservePID is written by the running observe server for ops inspection.
+func (c Config) ObservePID() string { return filepath.Join(c.MeshDir, "observe.pid") }
+
+// ObserveAddrFile holds the observe server's real bound address (see
+// DashboardAddrFile).
+func (c Config) ObserveAddrFile() string { return filepath.Join(c.MeshDir, "observe.addr") }
+
+// ObserveLock is the flock file electing a single observe autostarter.
+func (c Config) ObserveLock() string { return filepath.Join(c.MeshDir, "observe.lock") }
+
 // EnsureDirs creates the mesh directories with owner-only permissions.
 func (c Config) EnsureDirs() error {
 	for _, dir := range []string{c.MeshDir, c.AgentsDir()} {

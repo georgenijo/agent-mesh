@@ -55,6 +55,13 @@ type ResultEvent struct {
 	ModelUsage        json.RawMessage `json:"modelUsage"`
 	PermissionDenials json.RawMessage `json:"permission_denials"`
 	Raw               json.RawMessage `json:"-"`
+
+	// degraded is set by ParseEvent when a success-discriminator field
+	// (subtype / is_error / api_error_status) had an unexpected JSON type
+	// and silently kept its zero value. Degrade-don't-throw is safe for
+	// every field except the discriminators themselves: a zero-valued
+	// IsError must never turn an error result into a success.
+	degraded bool
 }
 
 // HasAPIError reports a non-null api_error_status — the spike's
@@ -66,16 +73,21 @@ func (r *ResultEvent) HasAPIError() bool {
 
 // Succeeded applies the spike's never-fake-success mapping rule: a result is
 // a success only when subtype is "success" AND is_error is false AND
-// api_error_status is null. Anything else maps to a typed error result.
+// api_error_status is null. Anything else — including a result whose
+// discriminator fields could not be decoded and so cannot be trusted — maps
+// to a typed error result.
 func (r *ResultEvent) Succeeded() bool {
-	return r.Subtype == ResultSuccess && !r.IsError && !r.HasAPIError()
+	return !r.degraded && r.Subtype == ResultSuccess && !r.IsError && !r.HasAPIError()
 }
 
 // ParseEvent decodes one stdout line into a typed event. It is deliberately
 // tolerant: unknown event types and unknown fields pass through untouched,
 // and a field with an unexpected type degrades to its zero value instead of
-// rejecting the line. Only a line that is not a JSON object at all returns
-// an error (wrapping ErrMalformedEvent) — the read loop skips those.
+// rejecting the line. The one exception is a result event's success
+// discriminators (subtype / is_error / api_error_status): if any of those is
+// type-degraded the result is marked untrustworthy and Succeeded() returns
+// false — never-fake-success. Only a line that is not a JSON object at all
+// returns an error (wrapping ErrMalformedEvent) — the read loop skips those.
 func ParseEvent(line []byte) (Event, error) {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
@@ -106,6 +118,19 @@ func ParseEvent(line []byte) (Event, error) {
 			if !errors.As(err, &typeErr) {
 				return Event{}, fmt.Errorf("%w: %v", ErrMalformedEvent, err)
 			}
+		}
+		// Re-decode just the success discriminators strictly: encoding/json
+		// reports only the FIRST type error and keeps going, so the tolerant
+		// decode above can silently zero is_error (fake success) while
+		// reporting some unrelated field. A struct holding only the
+		// discriminators can fail only on the discriminators.
+		var disc struct {
+			Subtype        string          `json:"subtype"`
+			IsError        bool            `json:"is_error"`
+			APIErrorStatus json.RawMessage `json:"api_error_status"`
+		}
+		if err := json.Unmarshal(raw, &disc); err != nil {
+			res.degraded = true
 		}
 		res.Raw = raw
 		ev.Result = &res

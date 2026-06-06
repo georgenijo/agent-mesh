@@ -64,6 +64,29 @@ func TestParseEventResultClassification(t *testing.T) {
 			line:      `{"type":"result","subtype":"success","is_error":false,"result":"x","api_error_status":429}`,
 			succeeded: false,
 		},
+		{
+			// is_error with a degenerate type must not zero-decode into a
+			// success — a result whose discriminators can't be trusted is
+			// never a success.
+			name:      "type-degraded is_error",
+			line:      `{"type":"result","subtype":"success","is_error":"true","result":"x","session_id":"s1"}`,
+			succeeded: false,
+		},
+		{
+			// encoding/json reports only the FIRST type error; an unrelated
+			// degraded field before is_error must not mask the discriminator
+			// degradation.
+			name:      "earlier type error masks degraded is_error",
+			line:      `{"type":"result","duration_ms":"slow","subtype":"success","is_error":"true","result":"x"}`,
+			succeeded: false,
+		},
+		{
+			// The flip side: a type error in a non-discriminator field alone
+			// degrades that field but must NOT invalidate a genuine success.
+			name:      "type-degraded non-discriminator field keeps success",
+			line:      `{"type":"result","subtype":"success","is_error":false,"duration_ms":"slow","result":"ok","api_error_status":null}`,
+			succeeded: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

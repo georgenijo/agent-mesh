@@ -18,6 +18,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-06: Claim loss is surfaced to the holder, never silent; no restart grace window
+
+**Decision:** Resolve #43: keep one-CAS-winner, lost-means-lost semantics — a rival that claims in the coordinator-restart gap legitimately wins, and there is no restart grace window. What changes: a holder whose claim is lost on **any** path (re-establishment loses after a coordinator bounce, eviction reclaim, any future race) must be **notified** — the sidecar emits a claim-lost event surfaced to the agent (hook-consumable and visible via its status surface), instead of silently dropping the claim from the held set. `TestClaimsReestablishedAfterCoordinatorRestart` is realigned to the documented semantics: it asserts the holder *observes the loss*, not that it always wins re-establishment.
+
+**Rationale:** The actual hazard in #43 is two agents editing one file while the original holder doesn't know it lost its lock — the silent forget, not the loss itself. A restart grace window would add special restart state for a rare event and close only one loss path; notification covers all of them and keeps CAS semantics honest (the claim was decided; the bug was not telling the loser). Test-encoding a guarantee the product doesn't make was the flake's root cause.
+
+**Status:** active
+
+**References:** #43, internal/sidecar/verbs_p1.go (reestablishClaims), internal/sidecar/verbs_p1_test.go; extends 2026-06-05 "Every claim and presence record is a TTL lease with reclaim-on-death"
+
+---
+
 ## 2026-06-06: `mesh up` = idempotent infra bring-up in autostart; ops scope unchanged
 
 **Decision:** One command — `mesh up [--dashboard-addr A] [--observe-addr A]` — idempotently brings up coordinator + dashboard + observe and prints their URLs. The spawn logic lives in `internal/autostart` (which already starts coordinators and sidecars); `internal/ops` stays inspect + teardown + janitor and never spawns, preserving the 2026-06-05 actuator-verbs scope. Supporting protocol: dashboard/observe write run files under MESH_DIR (`<name>.pid` first, then `<name>.addr` atomically with the REAL bound address — the addr file is both the readiness gate and the one authority for "where is the UI"), spawn carries the `--mesh-dir` argv ownership marker so `ops down/doctor/clean` cover the services, and a foreign holder on the configured port triggers an EADDRINUSE-only fallback to `127.0.0.1:0` (other listen errors stay fatal). "Already running" = pidfile alive AND addr dialable; a live-but-not-serving pid is a typed error, never a respawn.

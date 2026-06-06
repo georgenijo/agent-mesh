@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Mesh — Live Bus</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>AGENT&nbsp;MESH</h1>
+    <p>LIVE&nbsp;mesh.&gt;&nbsp;TAP&nbsp;·&nbsp;READ-ONLY&nbsp;OBSERVER</p>
+  </div>
+  <div class="metrics">
+    <div class="metric"><span>Live</span><strong id="liveMetric">0</strong></div>
+    <div class="metric"><span>Away</span><strong id="awayMetric">0</strong></div>
+    <div class="metric"><span>Claims</span><strong id="claimMetric">0</strong></div>
+    <div class="metric"><span>Notes</span><strong id="noteMetric">0</strong></div>
+    <div class="metric"><span>Observed</span><strong id="eventMetric">0</strong></div>
+  </div>
+  <div class="conn"><span id="connDot" class="dot"></span><span id="connText">connecting</span></div>
+</header>
+
+<section class="stagewrap" id="stagewrap" aria-label="Bus topology">
+  <div class="stage" id="stage">
+    <div class="legend" id="legend"></div>
+    <div class="bus"></div>
+    <div class="bus-label">◂&nbsp;◂&nbsp;◂&nbsp;&nbsp;&nbsp;M&nbsp;E&nbsp;S&nbsp;H&nbsp;.&nbsp;&gt;&nbsp;&nbsp;&nbsp;▸&nbsp;▸&nbsp;▸</div>
+    <svg class="routes" id="routes" viewBox="0 0 1280 720">
+      <defs>
+        <filter id="pktglow" x="-200%" y="-200%" width="500%" height="500%">
+          <feGaussianBlur stdDeviation="3.5" result="b"></feGaussianBlur>
+          <feMerge><feMergeNode in="b"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+        </filter>
+      </defs>
+      <g id="staticRoutes"></g>
+      <g id="packetLayer"></g>
+    </svg>
+    <div id="nodeLayer"></div>
+    <div class="overflow-chip" id="overflowChip" hidden></div>
+  </div>
+</section>
+
+<main class="panels">
+  <section class="panel">
+    <div class="panel-header"><h2>Agents</h2><span id="presencePill" class="pill">empty</span></div>
+    <div class="panel-body"><div id="agentList" class="list"></div></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><h2>Claims</h2><span id="claimsPill" class="pill">0 held</span></div>
+    <div class="panel-body">
+      <p id="claimsNotice" class="notice" hidden></p>
+      <div id="claimList" class="list"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><h2>Blackboard</h2><span id="notesPill" class="pill">0 notes</span></div>
+    <div class="panel-body"><div id="noteList" class="list"></div></div>
+  </section>
+
+  <section class="panel wide">
+    <div class="panel-header"><h2>Event Stream</h2><span id="streamPill" class="pill">idle</span></div>
+    <div class="panel-body">
+      <div class="filters">
+        <div class="kind-chips" id="kindChips"></div>
+        <input id="subjectFilter" type="text" placeholder="filter subject… e.g. mesh.status" autocomplete="off" spellcheck="false">
+        <label class="hb-toggle"><input type="checkbox" id="hbToggle"> heartbeats</label>
+      </div>
+      <div id="eventList" class="list events"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><h2>Tickets</h2><span id="ticketsPill" class="pill">P2</span></div>
+    <div class="panel-body"><div id="ticketList" class="list"></div></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><h2>Experts &amp; Workers</h2><span id="expertsPill" class="pill">P3</span></div>
+    <div class="panel-body"><div id="expertList" class="list"></div></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

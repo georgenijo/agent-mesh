@@ -21,6 +21,7 @@ func fastConfig(t *testing.T) config.Config {
 		AwayAfter:         150 * time.Millisecond,
 		EvictAfter:        400 * time.Millisecond,
 		RegistrationGrace: 100 * time.Millisecond,
+		ClaimTTL:          2 * time.Second,
 	}
 }
 

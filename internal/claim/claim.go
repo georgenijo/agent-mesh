@@ -100,9 +100,14 @@ type Held struct {
 //
 // Rejected with ErrBadPath: empty, "." (the repo root is not a claimable
 // path), and anything cleaning to ".." or starting "../" (escapes the repo
-// root). Absolute paths are allowed and kept as-is after Clean: P1 does not
-// resolve abs-vs-rel aliasing — the edit hook always passes exactly the path
-// the tool received, so both contenders spell it the same way.
+// root). Absolute paths are accepted and cleaned but NOT relativized here —
+// abs-vs-rel aliasing is resolved one layer up, at the sidecar, which knows
+// the agent's repo root (card.CWD) and folds an absolute in-tree path to its
+// repo-relative form before calling this. That matters because the two
+// contenders for a file do not always spell it the same way: the Claude Code
+// edit hook hands the tool an absolute file_path, while a human running
+// `mesh claim src/foo.go` passes a repo-relative one. Both must land on one
+// key or the lock is no lock at all.
 func NormalizePath(p string) (string, error) {
 	if strings.TrimSpace(p) == "" {
 		return "", fmt.Errorf("%w: empty", ErrBadPath)

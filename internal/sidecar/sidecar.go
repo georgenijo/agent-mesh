@@ -35,6 +35,12 @@ type Sidecar struct {
 	card       agentcard.Card
 	joined     bool
 	lastStatus string
+	// held tracks the claims this agent currently holds, keyed by
+	// claim.Key(repo, normPath), so they can be re-established if the
+	// coordinator restarts and its in-memory claims KV comes back empty
+	// (presence recovers the same way via re-register). Value is the
+	// (repo, path) needed to re-issue the claim.
+	held map[string]heldClaim
 
 	stop     chan struct{} // closes on Stop: ends background loops
 	done     chan struct{} // closes when a leave verb requests daemon exit
@@ -58,6 +64,7 @@ func New(cfg config.Config, card agentcard.Card, log *slog.Logger) (*Sidecar, er
 		cfg:  cfg,
 		log:  log,
 		card: card,
+		held: make(map[string]heldClaim),
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}, nil
@@ -71,9 +78,14 @@ func (s *Sidecar) Start() error {
 	}
 
 	cli, err := bus.Dial(s.cfg.BusSocket(), bus.ClientOptions{
-		// After a coordinator restart the registry is empty; re-registering
-		// on every reconnect is the documented way it repopulates.
-		OnReconnect: func() { s.register() },
+		// After a coordinator restart the registry AND the claims KV are
+		// empty (both in-memory); re-registering and re-claiming on every
+		// reconnect is how each repopulates. Order: register first so the
+		// agent exists, then re-take held claims.
+		OnReconnect: func() {
+			s.register()          //nolint:errcheck // best-effort; next beat retries
+			s.reestablishClaims() // re-take what we held before the drop
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("sidecar: connect bus at %s: %w", s.cfg.BusSocket(), err)

@@ -14,6 +14,15 @@
 #     bus down) → exit 0. Fail-open is deliberate: a coordination aid must
 #     never brick editing on a machine where the mesh is absent or broken.
 #
+# Identity: the hook claims as the agent named by $MESH_SOCKET (this session's
+# own sidecar socket). It MUST be set. Without it, `mesh` would fall back to
+# "the single socket under $MESH_DIR/agents" and silently claim as whatever
+# agent happens to be the only one on the machine — so a Claude Code session
+# that never joined would take claims under someone else's identity. Rather
+# than guess, the hook no-ops when $MESH_SOCKET is unset (a session not on the
+# mesh has no socket to point at). Export it from the same shell that ran
+# `mesh join` before launching the agent.
+#
 # Claims taken here are NOT auto-released by this hook (P1 limitation):
 # release happens via `mesh release`, `mesh leave`, or coordinator reclaim
 # when the holder's presence lease expires.
@@ -24,6 +33,10 @@ set -euo pipefail
 # allow the edit.
 command -v python3 >/dev/null 2>&1 || exit 0
 command -v mesh >/dev/null 2>&1 || exit 0
+
+# No explicit session socket → no-op. Claiming via the single-socket fallback
+# would take the claim as the wrong agent (see "Identity" above).
+[ -n "${MESH_SOCKET:-}" ] || exit 0
 
 # One embedded parser, two modes, so all JSON handling lives in one place:
 #   pre  — stdin: PreToolUse JSON → prints the absolute target path iff the

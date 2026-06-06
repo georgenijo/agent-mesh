@@ -9,12 +9,45 @@ package sidecar
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
 	"github.com/georgenijo/agent-mesh/internal/socket"
 )
+
+// repoRelative folds an absolute, in-tree claim path to its repo-relative
+// form so the two ways one file is spelled converge on a single claim key:
+// the Claude Code edit hook hands the tool an absolute file_path, while
+// `mesh claim src/foo.go` is repo-relative. Without this they key on
+// different strings and both win the create-only CAS — a lock two spellings
+// slip past. The repo root is the agent's card.CWD (captured at join). A
+// path that is relative already, or absolute but outside the repo root (no
+// common base to fold against), is returned unchanged for claim.NormalizePath
+// to canonicalize lexically.
+func (s *Sidecar) repoRelative(path string) string {
+	if !filepath.IsAbs(path) {
+		return path
+	}
+	s.mu.Lock()
+	cwd := s.card.CWD
+	s.mu.Unlock()
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return path
+	}
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return path
+	}
+	// Outside the repo root: keep the absolute spelling rather than emit a
+	// "../" path (which NormalizePath rejects as an escape).
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return path
+	}
+	return rel
+}
 
 // resolveRepo picks the repo identity for a P1 verb: explicit argument →
 // card repo → DefaultRepo. An explicit or card-carried repo that is not a
@@ -46,6 +79,58 @@ func (s *Sidecar) joinedID() (string, bool) {
 	return s.card.ID, s.joined
 }
 
+// heldClaim is a claim this agent holds, remembered so it can be re-taken
+// after a coordinator restart wipes the in-memory claims KV.
+type heldClaim struct {
+	repo string
+	path string // already NormalizePath'd
+}
+
+func (s *Sidecar) rememberClaim(repo, normPath string) {
+	s.mu.Lock()
+	s.held[claim.Key(repo, normPath)] = heldClaim{repo: repo, path: normPath}
+	s.mu.Unlock()
+}
+
+func (s *Sidecar) forgetClaim(repo, normPath string) {
+	s.mu.Lock()
+	delete(s.held, claim.Key(repo, normPath))
+	s.mu.Unlock()
+}
+
+// reestablishClaims re-takes every claim this agent believes it holds. Run
+// from OnReconnect: after a coordinator restart the claims KV is empty, so a
+// create-only Take succeeds and the agent keeps its locks across the bounce.
+// A claim another agent grabbed in the gap legitimately comes back lost — we
+// drop it from the held set rather than fight for it (lost means lost).
+func (s *Sidecar) reestablishClaims() {
+	s.mu.Lock()
+	id := s.card.ID
+	if !s.joined || len(s.held) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	pending := make([]heldClaim, 0, len(s.held))
+	for _, h := range s.held {
+		pending = append(pending, h)
+	}
+	s.mu.Unlock()
+
+	for _, h := range pending {
+		out := claim.Take(s.bus, id, h.repo, h.path, s.cfg.ClaimTTL)
+		switch out.Result {
+		case envelope.ClaimLost:
+			s.forgetClaim(h.repo, h.path)
+			s.log.Info("claim not re-established (held by another agent)",
+				"repo", h.repo, "path", h.path, "owner", out.Owner.Agent)
+		case envelope.ClaimError:
+			// Transport hiccup mid-recovery: keep it in the held set; the
+			// next reconnect or the steady-state heartbeat renewal retries.
+			s.log.Debug("claim re-establish failed; will retry", "path", h.path, "err", out.Err)
+		}
+	}
+}
+
 func (s *Sidecar) handleClaim(req socket.Request) socket.Response {
 	var args meshapi.ClaimArgs
 	if err := json.Unmarshal(req.Args, &args); err != nil {
@@ -59,7 +144,7 @@ func (s *Sidecar) handleClaim(req socket.Request) socket.Response {
 	if err != nil {
 		return socket.Fail(socket.CodeBadRequest, err.Error())
 	}
-	norm, err := claim.NormalizePath(args.Path)
+	norm, err := claim.NormalizePath(s.repoRelative(args.Path))
 	if err != nil {
 		return socket.Fail(socket.CodeBadRequest, err.Error())
 	}
@@ -67,6 +152,12 @@ func (s *Sidecar) handleClaim(req socket.Request) socket.Response {
 	out := claim.Take(s.bus, id, repo, norm, s.cfg.ClaimTTL)
 	if out.Result == envelope.ClaimError {
 		return socket.Fail(socket.CodeUnavailable, fmt.Sprintf("claim store: %v", out.Err))
+	}
+	if out.Result == envelope.ClaimClaimed {
+		// Remember what we hold so we can re-establish it if the coordinator
+		// restarts and the in-memory claims KV comes back empty (F5). Keyed
+		// on the normalized (repo, path) so re-take hits the same key.
+		s.rememberClaim(repo, norm)
 	}
 
 	// Fire-and-forget observability event. The KV record is the lock — the
@@ -101,7 +192,7 @@ func (s *Sidecar) handleRelease(req socket.Request) socket.Response {
 	if err != nil {
 		return socket.Fail(socket.CodeBadRequest, err.Error())
 	}
-	norm, err := claim.NormalizePath(args.Path)
+	norm, err := claim.NormalizePath(s.repoRelative(args.Path))
 	if err != nil {
 		return socket.Fail(socket.CodeBadRequest, err.Error())
 	}
@@ -109,6 +200,9 @@ func (s *Sidecar) handleRelease(req socket.Request) socket.Response {
 	out := claim.Release(s.bus, id, repo, norm)
 	if out.Result == claim.ReleaseError {
 		return socket.Fail(socket.CodeUnavailable, fmt.Sprintf("release store: %v", out.Err))
+	}
+	if out.Result == claim.Released {
+		s.forgetClaim(repo, norm)
 	}
 	return socket.OKData(meshapi.ReleaseVerbResult{
 		Result: meshapi.ReleaseResultKind(out.Result),

@@ -68,10 +68,11 @@ assert_contains() { # <name> <needle> <file>
 }
 
 # run <stub-mode> <json>: hook with stub mesh + real python3; sets $rc,
-# stderr in $TMP/err, stdout in $TMP/out.
+# stderr in $TMP/err, stdout in $TMP/out. MESH_SOCKET is set so the hook
+# identifies its agent (the no-socket no-op is exercised separately below).
 run() {
     rc=0
-    printf '%s' "$2" | env PATH="$STUB:$PATH" MESH_STUB_MODE="$1" \
+    printf '%s' "$2" | env PATH="$STUB:$PATH" MESH_STUB_MODE="$1" MESH_SOCKET="$TMP/agent.sock" \
         "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
 }
 
@@ -120,10 +121,18 @@ assert_contains "relative path -> joined with cwd" "/tmp/demo/sub/rel.go" "$MESH
 # --- MESH_REPO forwarded as --repo ---------------------------------------------
 : >"$MESH_STUB_LOG"
 rc=0
-printf '%s' "$EDIT_JSON" | env PATH="$STUB:$PATH" MESH_STUB_MODE=claimed MESH_REPO=myrepo \
+printf '%s' "$EDIT_JSON" | env PATH="$STUB:$PATH" MESH_STUB_MODE=claimed MESH_REPO=myrepo MESH_SOCKET="$TMP/agent.sock" \
     "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
 assert_eq "MESH_REPO -> exit 0" 0 "$rc"
 assert_contains "MESH_REPO -> --repo forwarded" "--repo myrepo" "$MESH_STUB_LOG"
+
+# --- no MESH_SOCKET → no-op, mesh never invoked (cannot identify the agent) ----
+: >"$MESH_STUB_LOG"
+rc=0
+printf '%s' "$EDIT_JSON" | env -u MESH_SOCKET PATH="$STUB:$PATH" MESH_STUB_MODE=lost \
+    "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
+assert_eq "no MESH_SOCKET -> exit 0" 0 "$rc"
+assert_eq "no MESH_SOCKET -> mesh not invoked" "" "$(cat "$MESH_STUB_LOG")"
 
 # --- garbage stdin → fail-open --------------------------------------------------
 rc=0

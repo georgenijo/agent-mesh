@@ -246,8 +246,28 @@ func TestP1AcceptanceFlow(t *testing.T) {
 	}
 	assertContextHasNote("before restart")
 
+	// A claim held before the restart must be re-established afterward (F5):
+	// the claims KV is in-memory, so the sidecar re-takes on reconnect.
+	if code, res := m.claimJSON(winner.agent, "src/bar.go", "demo"); code != 0 || res.Result != "claimed" {
+		t.Fatalf("pre-restart claim: exit %d result %q", code, res.Result)
+	}
+
 	// Hard-restart the coordinator: registry rebuilds from re-registration,
-	// notes must come back from $MESH_DIR/streams (disk persistence).
+	// notes must come back from $MESH_DIR/streams (disk persistence), and the
+	// winner's held claim must be re-taken so a peer still loses to it.
 	coord.restart()
 	assertContextHasNote("after restart")
+
+	m.eventually(5*time.Second, "held claim re-established after restart", func() bool {
+		code, res := m.claimJSON("late", "src/bar.go", "demo")
+		if code == 6 && res.Owner == winner.agent {
+			return true // winner's claim survived the bounce
+		}
+		if code == 0 {
+			// "late" won — not yet re-established (or never will be). Release
+			// so a retry can still observe re-establishment if it was slow.
+			m.run("release", "src/bar.go", "--repo", "demo", "--socket", m.agentSocket("late"))
+		}
+		return false
+	})
 }

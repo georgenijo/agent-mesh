@@ -494,6 +494,14 @@ func (s *Server) handleStream(f frame) frame {
 
 	st := s.streams[f.Stream]
 	if st == nil {
+		// A read of a stream that was never written allocates nothing: a
+		// read must not consume a stream slot, or read-only callers (mesh
+		// context on an empty repo, the dashboard tailing every repo it
+		// sees) would permanently exhaust the bounded slot budget. Only an
+		// append brings a stream into existence.
+		if f.Op == opStreamRead {
+			return frame{ID: f.ID, OK: true}
+		}
 		if len(s.streams) >= maxStoreNames {
 			return frame{ID: f.ID, Err: &frameError{Code: errCodeBadRequest, Message: "too many streams"}}
 		}

@@ -135,7 +135,9 @@ func (m *mesh) startCoordinator() {
 // startDashboard boots the dashboard process and returns its base URL.
 func (m *mesh) startDashboard() string {
 	m.t.Helper()
-	cmd := exec.Command(meshdBin, "--mode", "dashboard", "--addr", "127.0.0.1:0")
+	// --mesh-dir is the ops-plane ownership marker: the dashboard now writes
+	// a pidfile, so `ops down` must be able to argv-verify the pid as ours.
+	cmd := exec.Command(meshdBin, "--mode", "dashboard", "--addr", "127.0.0.1:0", "--mesh-dir", m.dir)
 	cmd.Env = m.env
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -234,6 +236,11 @@ func (m *mesh) teardown() {
 	for _, ch := range snap.Children {
 		if ch.Alive {
 			m.t.Errorf("child %d (%s) still alive after ops down", ch.PID, ch.Cmd)
+		}
+	}
+	for _, svc := range snap.Services {
+		if svc.PIDAlive {
+			m.t.Errorf("service %s pid %d still alive after ops down", svc.Name, svc.PID)
 		}
 	}
 }

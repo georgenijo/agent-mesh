@@ -43,6 +43,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {
+	case "up":
+		return runUp(rest, stdout, stderr)
 	case "join":
 		return runJoin(rest, stdout, stderr)
 	case "leave":
@@ -83,6 +85,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: mesh <command> [flags]
 
 commands:
+  up      [--dashboard-addr A] [--observe-addr A]
+          bring up coordinator + dashboard + observe; print URLs (idempotent)
   join    --name <id> --role <role> [--caps a,b,c] [--repo R] [--model M]
           register this agent on the mesh (autostarts its sidecar)
   leave   deregister and stop this agent's sidecar

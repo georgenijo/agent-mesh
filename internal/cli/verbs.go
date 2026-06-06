@@ -225,6 +225,14 @@ func runOps(args []string, stdout, stderr io.Writer) int {
 	c := snap.Coordinator
 	fmt.Fprintf(stdout, "coordinator: pid=%d alive=%t bus=%t lock=%t\n",
 		c.PID, c.PIDAlive, c.BusDialable, c.LockPresent)
+	for _, svc := range snap.Services {
+		drift := ""
+		if len(svc.Drift) > 0 {
+			drift = " drift=" + joinComma(svc.Drift)
+		}
+		fmt.Fprintf(stdout, "%s: pid=%d alive=%t addr=%s dialable=%t%s\n",
+			svc.Name, svc.PID, svc.PIDAlive, svc.Addr, svc.Dialable, drift)
+	}
 	if len(snap.Sidecars) == 0 {
 		fmt.Fprintln(stdout, "sidecars: none")
 	} else {

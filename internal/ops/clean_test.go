@@ -133,3 +133,51 @@ func TestCleanSkipsSymlinks(t *testing.T) {
 		t.Fatalf("symlink target touched: %v", err)
 	}
 }
+
+// TestCleanServiceRunFiles pins the service-residue rules: dead run files go;
+// a live service keeps BOTH its pidfile and addr file (the pidfile — never a
+// TCP dial — is the authority for the addr file too).
+func TestCleanServiceRunFiles(t *testing.T) {
+	cfg := config.Config{MeshDir: testsock.Dir(t)}
+	if err := cfg.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	// Dashboard: dead residue.
+	if err := os.WriteFile(cfg.DashboardPID(), []byte("999997\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.DashboardAddrFile(), []byte("127.0.0.1:8737\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Observe: "live" service (this test process's pid).
+	if err := os.WriteFile(cfg.ObservePID(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.ObserveAddrFile(), []byte("127.0.0.1:1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := Clean(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{cfg.DashboardPID(), cfg.DashboardAddrFile()} {
+		e, ok := findEntry(rep, path)
+		if !ok || e.Action != CleanRemoved {
+			t.Fatalf("%s: entry=%+v ok=%v, want removed", path, e, ok)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s still on disk", path)
+		}
+	}
+	for _, path := range []string{cfg.ObservePID(), cfg.ObserveAddrFile()} {
+		e, ok := findEntry(rep, path)
+		if !ok || e.Action != CleanKeptAlive {
+			t.Fatalf("%s: entry=%+v ok=%v, want kept_alive", path, e, ok)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s was removed despite a live pid", path)
+		}
+	}
+}

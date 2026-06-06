@@ -54,7 +54,7 @@ func TestOpsDownTearsDownFleet(t *testing.T) {
 	}
 }
 
-// TestOpsDoctorClassifies pins the doctor classifications and the exit-6
+// TestOpsDoctorClassifies pins the doctor classifications and the exit-7
 // contract end to end.
 func TestOpsDoctorClassifies(t *testing.T) {
 	m := newMesh(t)
@@ -68,14 +68,14 @@ func TestOpsDoctorClassifies(t *testing.T) {
 		return code == 0
 	})
 
-	// A pidfile pointing at a dead pid → exit 6 with a dead_pidfile finding.
+	// A pidfile pointing at a dead pid → exit 7 with a dead_pidfile finding.
 	ghostPidfile := m.agentPIDFile("ghost")
 	if err := os.WriteFile(ghostPidfile, []byte("999999\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	code, stdout, _ := m.run("ops", "doctor", "--json")
-	if code != 6 {
-		t.Fatalf("doctor with dead pidfile: exit %d, want 6\n%s", code, stdout)
+	if code != 7 {
+		t.Fatalf("doctor with dead pidfile: exit %d, want 7\n%s", code, stdout)
 	}
 	rep := parseDoctor(t, stdout)
 	if f, ok := findFinding(rep, "ghost"); !ok || f.State != ops.StateDeadPidfile {
@@ -92,7 +92,7 @@ func TestOpsDoctorClassifies(t *testing.T) {
 	}
 	m.eventually(3*time.Second, "doctor flags the killed sidecar", func() bool {
 		code, stdout, _ := m.run("ops", "doctor", "--json")
-		if code != 6 {
+		if code != 7 {
 			return false
 		}
 		f, ok := findFinding(parseDoctor(t, stdout), "patient")

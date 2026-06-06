@@ -19,7 +19,8 @@ import (
 )
 
 // Exit codes (ARCHITECTURE §4). 3 and 4 are reserved for the P2 ask/poll
-// verbs; P0 uses 0, 1, 2, 5.
+// verbs; P0 uses 0, 1, 2, 5; P1 adds 6 (claim lost — a legitimate race
+// outcome, distinct from error so scripts and hooks can branch on it).
 const (
 	ExitOK        = 0
 	ExitError     = 1
@@ -27,6 +28,7 @@ const (
 	ExitNoAnswer  = 3 // reserved: poll, no answer yet
 	ExitNoTicket  = 4 // reserved: no such ticket
 	ExitNotJoined = 5
+	ExitClaimLost = 6 // claim: another agent holds the path
 )
 
 const requestTimeout = 10 * time.Second

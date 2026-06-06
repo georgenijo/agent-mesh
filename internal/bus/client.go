@@ -479,6 +479,16 @@ func (c *Client) KVDelete(bucket, key string) error {
 	return err
 }
 
+// KVDeleteRev removes a key only if its live revision matches rev (rev must
+// be > 0). An absent or expired key is an idempotent success — the fact is
+// already gone. ErrCASLost means the key was rewritten since the caller read
+// it (e.g. a released-and-reclaimed claim): the caller no longer owns it and
+// must not delete.
+func (c *Client) KVDeleteRev(bucket, key string, rev uint64) error {
+	_, err := c.request(frame{Op: opKVDelete, Bucket: bucket, Key: key, Rev: &rev})
+	return err
+}
+
 // KVList returns all live (non-expired) keys in a bucket.
 func (c *Client) KVList(bucket string) (map[string]KVValue, error) {
 	resp, err := c.request(frame{Op: opKVList, Bucket: bucket})

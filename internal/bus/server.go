@@ -433,6 +433,18 @@ func (s *Server) handleKV(f frame) frame {
 		return frame{ID: f.ID, OK: true, NewRev: e.rev}
 
 	case opKVDelete:
+		// Guarded delete: nil = unconditional; rev>0 = delete only if the
+		// live revision matches (an absent/expired key is an idempotent
+		// success — the fact is already gone). rev=0 is meaningless here.
+		if f.Rev != nil {
+			if *f.Rev == 0 {
+				return frame{ID: f.ID, Err: &frameError{Code: errCodeBadRequest, Message: "delete rev must be > 0"}}
+			}
+			cur, exists := b.entries[f.Key]
+			if exists && !cur.expired(now) && cur.rev != *f.Rev {
+				return frame{ID: f.ID, Err: &frameError{Code: errCodeCASLost, Message: "revision mismatch"}}
+			}
+		}
 		delete(b.entries, f.Key) // idempotent
 		return frame{ID: f.ID, OK: true}
 

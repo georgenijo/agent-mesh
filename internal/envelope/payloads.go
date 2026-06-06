@@ -44,6 +44,7 @@ type StatusPayload struct {
 func (p StatusPayload) validate() error { return requireField("id", p.ID) }
 
 // AnnouncePayload broadcasts edit intent for conflict avoidance (P1).
+// Advisory only: a real edit additionally takes a CAS claim (#12).
 type AnnouncePayload struct {
 	ID     string   `json:"id"`
 	Intent string   `json:"intent"`
@@ -51,7 +52,12 @@ type AnnouncePayload struct {
 	Repo   string   `json:"repo,omitempty"`
 }
 
-func (p AnnouncePayload) validate() error { return requireField("id", p.ID) }
+func (p AnnouncePayload) validate() error {
+	if err := requireField("id", p.ID); err != nil {
+		return err
+	}
+	return requireField("intent", p.Intent)
+}
 
 // ClaimPayload records a CAS file/ticket claim event (P1).
 type ClaimPayload struct {
@@ -97,13 +103,48 @@ func (p AnswerPayload) validate() error {
 	return requireField("answer", p.Answer)
 }
 
-// NotePayload appends a decision to the durable blackboard (P1).
-type NotePayload struct {
-	Decision string `json:"decision"`
-	Repo     string `json:"repo,omitempty"`
+// NoteKind classifies a blackboard note (#15). Open-ended enough for P1;
+// anything unrecognized is rejected at the publish edge, not at read time.
+const (
+	NoteKindDecision = "decision"
+	NoteKindContext  = "context"
+	NoteKindSummary  = "summary"
+	NoteKindOther    = "other"
+)
+
+var noteKinds = map[string]bool{
+	NoteKindDecision: true,
+	NoteKindContext:  true,
+	NoteKindSummary:  true,
+	NoteKindOther:    true,
 }
 
-func (p NotePayload) validate() error { return requireField("decision", p.Decision) }
+// ValidNoteKind reports whether k is a recognized note kind.
+func ValidNoteKind(k string) bool { return noteKinds[k] }
+
+// NotePayload appends a decision to the durable blackboard (P1). ID is the
+// author agent id (sender-bound: must equal the envelope From). The envelope
+// TS is the note timestamp.
+type NotePayload struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision"`
+	Repo     string `json:"repo,omitempty"`
+	Kind     string `json:"kind,omitempty"`   // decision|context|summary|other; empty = decision
+	Ticket   string `json:"ticket,omitempty"` // optional ask-ticket linkage (P2)
+}
+
+func (p NotePayload) validate() error {
+	if err := requireField("id", p.ID); err != nil {
+		return err
+	}
+	if err := requireField("decision", p.Decision); err != nil {
+		return err
+	}
+	if p.Kind != "" && !ValidNoteKind(p.Kind) {
+		return fmt.Errorf("unknown note kind %q", p.Kind)
+	}
+	return nil
+}
 
 // payloadKinds maps each kind to its expected payload validator, so DecodeInto
 // can reject a payload that does not match the envelope's kind.

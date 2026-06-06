@@ -37,3 +37,6 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Test (race)
+        run: go test -race ./internal/...

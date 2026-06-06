@@ -18,6 +18,7 @@ const (
 	EnvAwayAfter         = "MESH_AWAY_AFTER"
 	EnvEvictAfter        = "MESH_EVICT_AFTER"
 	EnvRegistrationGrace = "MESH_REGISTRATION_GRACE"
+	EnvClaimTTL          = "MESH_CLAIM_TTL"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
 	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
 	EnvAgentSocket       = "MESH_SOCKET" // CLI → sidecar socket override
@@ -41,6 +42,7 @@ type Config struct {
 	AwayAfter         time.Duration // last beat older than this → away
 	EvictAfter        time.Duration // last beat older than this → evicted
 	RegistrationGrace time.Duration // no away/evict this soon after register
+	ClaimTTL          time.Duration // claim lease backstop; renewed each heartbeat
 	DashboardAddr     string
 	ObserveAddr       string
 }
@@ -74,6 +76,7 @@ func Load() (Config, error) {
 		{EnvAwayAfter, &cfg.AwayAfter},
 		{EnvEvictAfter, &cfg.EvictAfter},
 		{EnvRegistrationGrace, &cfg.RegistrationGrace},
+		{EnvClaimTTL, &cfg.ClaimTTL},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -104,6 +107,17 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: evict-after (%s) must be > away-after (%s)",
 			cfg.EvictAfter, cfg.AwayAfter)
 	}
+	// Claim lease backstop: like the registry record TTL, it must outlast
+	// every legitimate silent window (the eviction sweep is the primary
+	// release path; the TTL self-heals if the coordinator is down). Derived
+	// from EvictAfter unless explicitly set.
+	if cfg.ClaimTTL == 0 {
+		cfg.ClaimTTL = 2 * (cfg.EvictAfter + cfg.RegistrationGrace)
+	}
+	if cfg.ClaimTTL <= cfg.HeartbeatInterval {
+		return Config{}, fmt.Errorf("config: claim-ttl (%s) must be > heartbeat interval (%s)",
+			cfg.ClaimTTL, cfg.HeartbeatInterval)
+	}
 	return cfg, nil
 }
 
@@ -121,6 +135,10 @@ func (c Config) AgentSocket(name string) string {
 // CoordinatorLock is the flock file used to elect a single coordinator
 // autostarter when several sidecars race to boot one.
 func (c Config) CoordinatorLock() string { return filepath.Join(c.MeshDir, "coordinator.lock") }
+
+// StreamsDir holds the bus server's durable stream files (one JSONL per
+// stream). Owned by the coordinator-embedded bus server only.
+func (c Config) StreamsDir() string { return filepath.Join(c.MeshDir, "streams") }
 
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }

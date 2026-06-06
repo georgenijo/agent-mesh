@@ -19,6 +19,7 @@ import (
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 )
@@ -26,11 +27,15 @@ import (
 // coordinatorID is the From id the coordinator uses on the bus.
 const coordinatorID = "coordinator"
 
-// AuditEntry is one presence-transition record appended to the audit stream.
+// AuditEntry is one transition record appended to the audit stream.
+// Presence entries track an agent's lifecycle; claim entries track the
+// coordinator freeing a departed agent's claims (Path/Repo identify which).
 type AuditEntry struct {
-	Kind  string    `json:"kind"` // "presence"
-	ID    string    `json:"id"`
-	Event string    `json:"event"` // registered | left | away | recovered | evicted
+	Kind  string    `json:"kind"`  // "presence" | "claim"
+	ID    string    `json:"id"`    // the agent
+	Event string    `json:"event"` // presence: registered|left|away|recovered|evicted; claim: released|reclaimed
+	Path  string    `json:"path,omitempty"`
+	Repo  string    `json:"repo,omitempty"`
 	TS    time.Time `json:"ts"`
 }
 
@@ -65,7 +70,10 @@ func (c *Coordinator) Start() error {
 	if err := c.cfg.EnsureDirs(); err != nil {
 		return err
 	}
-	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{})
+	// StreamDir makes the bus's durable subjects (the blackboard, the audit
+	// trail) survive a coordinator restart — the registry deliberately does
+	// not: it repopulates from sidecar re-registration.
+	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{StreamDir: c.cfg.StreamsDir()})
 	if err := c.srv.Start(); err != nil {
 		return fmt.Errorf("coordinator: start bus: %w", err)
 	}
@@ -202,6 +210,10 @@ func (c *Coordinator) handleLeave(env envelope.Envelope) {
 		return
 	}
 	c.audit(p.ID, "left")
+	// A graceful leave frees the agent's claims immediately — the sidecar is
+	// gone, so nothing will renew them, and waiting out the TTL would block
+	// peers from paths nobody is editing.
+	c.releaseClaims(p.ID, "released")
 }
 
 func (c *Coordinator) handleHeartbeat(env envelope.Envelope) {
@@ -313,6 +325,12 @@ func (c *Coordinator) sweep() {
 				continue
 			}
 			c.audit(id, "evicted")
+			// Reclaim the dead agent's claims before announcing the leave,
+			// so anything reacting to mesh.leave already sees the paths free.
+			// This sweep is the prompt reclaim path (locked decision: TTL
+			// leases with reclaim-on-death); the claims-bucket TTL is only
+			// the backstop for when the coordinator itself is down.
+			c.releaseClaims(id, "reclaimed")
 			c.publishEvict(id)
 		case silentFor > c.cfg.AwayAfter && rec.State == agentcard.PresenceLive:
 			rec.State = agentcard.PresenceAway
@@ -367,5 +385,18 @@ func (c *Coordinator) audit(id, event string) {
 	entry := AuditEntry{Kind: "presence", ID: id, Event: event, TS: time.Now().UTC()}
 	if _, err := c.cli.StreamAppend(envelope.StreamAudit, entry); err != nil {
 		c.log.Warn("audit append failed", "id", id, "event", event, "err", err)
+	}
+}
+
+// releaseClaims frees every claim held by a departed agent and audits each
+// path released. Best-effort by design: a claim that cannot be freed here is
+// collected by the claims-bucket TTL, so a failure must degrade, not wedge
+// the reducer/sweep.
+func (c *Coordinator) releaseClaims(id, event string) {
+	for _, rec := range claim.ReleaseAllOwnedBy(c.cli, id) {
+		entry := AuditEntry{Kind: "claim", ID: id, Event: event, Path: rec.Path, Repo: rec.Repo, TS: time.Now().UTC()}
+		if _, err := c.cli.StreamAppend(envelope.StreamAudit, entry); err != nil {
+			c.log.Warn("claim audit append failed", "id", id, "event", event, "path", rec.Path, "err", err)
+		}
 	}
 }

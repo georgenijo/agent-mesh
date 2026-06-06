@@ -29,7 +29,7 @@ func TestRoundTripEveryKind(t *testing.T) {
 		{KindClaim, &ClaimPayload{ID: "codex-7", Path: "a.tsx", Result: ClaimClaimed}, &ClaimPayload{}},
 		{KindAsk, &AskPayload{Ticket: "T1", Role: "auth", Q: "RLS recursion fix?"}, &AskPayload{}},
 		{KindAnswer, &AnswerPayload{Ticket: "T1", Answer: "use is_admin() SECURITY DEFINER"}, &AnswerPayload{}},
-		{KindNote, &NotePayload{Decision: "events store UTC", Repo: "stbasils"}, &NotePayload{}},
+		{KindNote, &NotePayload{ID: "codex-7", Decision: "events store UTC", Repo: "stbasils", Kind: NoteKindDecision, Ticket: "T1"}, &NotePayload{}},
 	}
 
 	for _, tc := range cases {

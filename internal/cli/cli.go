@@ -19,7 +19,8 @@ import (
 )
 
 // Exit codes (ARCHITECTURE §4). 3 and 4 are reserved for the P2 ask/poll
-// verbs; P0 uses 0, 1, 2, 5.
+// verbs; P0 uses 0, 1, 2, 5; P1 adds 6 (claim lost — a legitimate race
+// outcome, distinct from error so scripts and hooks can branch on it).
 const (
 	ExitOK        = 0
 	ExitError     = 1
@@ -27,6 +28,7 @@ const (
 	ExitNoAnswer  = 3 // reserved: poll, no answer yet
 	ExitNoTicket  = 4 // reserved: no such ticket
 	ExitNotJoined = 5
+	ExitClaimLost = 6 // claim: another agent holds the path
 )
 
 const requestTimeout = 10 * time.Second
@@ -47,6 +49,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runWho(rest, stdout, stderr)
 	case "status":
 		return runStatus(rest, stdout, stderr)
+	case "claim":
+		return runClaim(rest, stdout, stderr)
+	case "release":
+		return runRelease(rest, stdout, stderr)
+	case "announce":
+		return runAnnounce(rest, stdout, stderr)
+	case "note":
+		return runNote(rest, stdout, stderr)
+	case "context":
+		return runContext(rest, stdout, stderr)
 	case "ops":
 		return runOps(rest, stdout, stderr)
 	case "version":
@@ -76,12 +88,19 @@ commands:
   status  "<text>"   post what this agent is doing now
   ops     runtime health snapshot (coordinator, sidecars, drift)
 
+  claim    <path> [--repo R]   take the CAS lock on a path (exit 6 if lost)
+  release  <path> [--repo R]   release a claim this agent holds
+  announce "<intent>" [--paths a,b] [--repo R]   broadcast advisory intent
+  note     "<text>" [--repo R] [--kind K] [--ticket T]   append to blackboard
+  context  [--repo R]          replay the repo's blackboard history
+
 common flags:
   --json            machine-readable output
   --socket <path>   sidecar socket (default: $MESH_SOCKET, else the single
                     socket under $MESH_DIR/agents)
 
-exit codes: 0 ok · 1 error · 2 usage · 3 no-answer-yet · 4 no-such-ticket · 5 not-joined
+exit codes: 0 ok · 1 error · 2 usage · 3 no-answer-yet · 4 no-such-ticket ·
+            5 not-joined · 6 claim-lost
 `)
 }
 

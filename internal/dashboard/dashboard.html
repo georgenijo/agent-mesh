@@ -835,6 +835,7 @@
   const state = {
     agents: [],
     events: [],
+    claims: [],
     selectedAgent: "",
     filter: "all",
     connected: false,
@@ -1003,6 +1004,19 @@
 
   function workItems() {
     const items = [];
+    // Authoritative held claims from the claims KV (pushed each tick) —
+    // the lock truth, including TTL expiry and coordinator reclaim.
+    for (const held of state.claims) {
+      items.push({
+        owner: held.agent,
+        kind: "claim",
+        title: held.path || "claim",
+        detail: held.repo || "",
+        state: "held",
+        priority: 3,
+        ts: held.ts,
+      });
+    }
     for (const env of state.events) {
       const payload = env.payload || {};
       if (env.kind === "status" && payload.text) {
@@ -1317,6 +1331,8 @@
         state.agents = msg.agents || [];
       } else if (msg.type === "event") {
         ingestEnvelope(msg.envelope);
+      } else if (msg.type === "claims") {
+        state.claims = msg.claims || [];
       }
       render();
     };

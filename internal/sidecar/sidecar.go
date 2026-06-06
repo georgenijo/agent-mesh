@@ -18,6 +18,7 @@ import (
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
@@ -35,7 +36,13 @@ type Sidecar struct {
 	card       agentcard.Card
 	joined     bool
 	lastStatus string
-	startedAt  time.Time
+	// held tracks the claims this agent currently holds, keyed by
+	// claim.Key(repo, normPath), so they can be re-established if the
+	// coordinator restarts and its in-memory claims KV comes back empty
+	// (presence recovers the same way via re-register). Value is the
+	// (repo, path) needed to re-issue the claim.
+	held      map[string]heldClaim
+	startedAt time.Time
 
 	childrenMu sync.Mutex
 	children   []meshapi.ChildProc
@@ -62,6 +69,7 @@ func New(cfg config.Config, card agentcard.Card, log *slog.Logger) (*Sidecar, er
 		cfg:       cfg,
 		log:       log,
 		card:      card,
+		held:      make(map[string]heldClaim),
 		startedAt: time.Now(),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
@@ -76,9 +84,14 @@ func (s *Sidecar) Start() error {
 	}
 
 	cli, err := bus.Dial(s.cfg.BusSocket(), bus.ClientOptions{
-		// After a coordinator restart the registry is empty; re-registering
-		// on every reconnect is the documented way it repopulates.
-		OnReconnect: func() { s.register() },
+		// After a coordinator restart the registry AND the claims KV are
+		// empty (both in-memory); re-registering and re-claiming on every
+		// reconnect is how each repopulates. Order: register first so the
+		// agent exists, then re-take held claims.
+		OnReconnect: func() {
+			s.register()          //nolint:errcheck // best-effort; next beat retries
+			s.reestablishClaims() // re-take what we held before the drop
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("sidecar: connect bus at %s: %w", s.cfg.BusSocket(), err)
@@ -184,6 +197,12 @@ func (s *Sidecar) heartbeatLoop() {
 			if err := s.bus.Publish(env); err != nil {
 				s.log.Debug("heartbeat publish failed", "err", err)
 			}
+			// Claims are TTL leases renewed on the same beat as presence
+			// (locked decision: reclaim-on-death). A renewal that loses its
+			// CAS is a claim legitimately reclaimed — skipped, not retried.
+			if _, err := claim.RenewOwned(s.bus, id, s.cfg.ClaimTTL); err != nil {
+				s.log.Debug("claim renewal failed", "err", err)
+			}
 		}
 	}
 }
@@ -202,6 +221,16 @@ func (s *Sidecar) handle(req socket.Request) socket.Response {
 		return s.handleStatus(req)
 	case meshapi.VerbWho:
 		return s.handleWho()
+	case meshapi.VerbClaim:
+		return s.handleClaim(req)
+	case meshapi.VerbRelease:
+		return s.handleRelease(req)
+	case meshapi.VerbAnnounce:
+		return s.handleAnnounce(req)
+	case meshapi.VerbNote:
+		return s.handleNote(req)
+	case meshapi.VerbContext:
+		return s.handleContext(req)
 	case meshapi.VerbRuntime:
 		return s.handleRuntime()
 	default:

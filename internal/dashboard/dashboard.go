@@ -23,6 +23,7 @@ import (
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 )
@@ -46,6 +47,10 @@ type Dashboard struct {
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
 	roster  []agentcard.RegistryRecord
+	claims  []claim.Held
+	// noteSeq tracks the last replayed seq per notes stream, so each tick
+	// broadcasts only new blackboard entries (replay and live are one path).
+	noteSeq map[string]uint64
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -64,6 +69,7 @@ func New(cfg config.Config, addr string, log *slog.Logger) *Dashboard {
 		addr:    addr,
 		log:     log,
 		clients: make(map[chan []byte]struct{}),
+		noteSeq: make(map[string]uint64),
 		stop:    make(chan struct{}),
 	}
 }
@@ -86,6 +92,8 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /", d.serveIndex)
 	mux.HandleFunc("GET /events", d.serveSSE)
 	mux.HandleFunc("GET /api/roster", d.serveRoster)
+	mux.HandleFunc("GET /api/claims", d.serveClaims)
+	mux.HandleFunc("GET /api/notes", d.serveNotes)
 
 	ln, err := net.Listen("tcp", d.addr)
 	if err != nil {
@@ -166,6 +174,70 @@ func (d *Dashboard) rosterLoop() {
 				continue
 			}
 			d.broadcast(msg)
+			d.tickClaims()
+			d.tickNotes(roster)
+		}
+	}
+}
+
+// tickClaims snapshots the authoritative claims KV and pushes it. The KV is
+// the lock — claim events on the tap show attempts, this shows truth (TTL
+// expiry and coordinator reclaim included).
+func (d *Dashboard) tickClaims() {
+	held, err := claim.ListAll(d.bus)
+	if err != nil {
+		return
+	}
+	d.mu.Lock()
+	d.claims = held
+	d.mu.Unlock()
+	if msg, err := json.Marshal(map[string]any{"type": "claims", "claims": held}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// tickNotes tails every visible repo's blackboard stream and broadcasts new
+// entries as ordinary note events — replayed history and live notes reach
+// browsers through one path, reading the one durable authority. Repos are
+// discovered from agent cards and live claims (the bus has no list-streams
+// op, deliberately: streams are named by the shared subject taxonomy).
+func (d *Dashboard) tickNotes(roster []agentcard.RegistryRecord) {
+	repos := map[string]bool{envelope.DefaultRepo: true}
+	for _, rec := range roster {
+		if envelope.ValidRepo(rec.Card.Repo) {
+			repos[rec.Card.Repo] = true
+		}
+	}
+	d.mu.Lock()
+	for _, h := range d.claims {
+		if envelope.ValidRepo(h.Record.Repo) {
+			repos[h.Record.Repo] = true
+		}
+	}
+	d.mu.Unlock()
+
+	for repo := range repos {
+		stream := envelope.StreamNotes(repo)
+		d.mu.Lock()
+		from := d.noteSeq[stream] + 1
+		d.mu.Unlock()
+		entries, err := d.bus.StreamRead(stream, from)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			env, err := envelope.Decode(e.Data)
+			if err != nil || env.Kind != envelope.KindNote {
+				continue // malformed record never breaks the observer
+			}
+			if msg, merr := json.Marshal(map[string]any{"type": "event", "envelope": env}); merr == nil {
+				d.broadcast(msg)
+			}
+			d.mu.Lock()
+			if e.Seq > d.noteSeq[stream] {
+				d.noteSeq[stream] = e.Seq
+			}
+			d.mu.Unlock()
 		}
 	}
 }
@@ -223,6 +295,50 @@ func (d *Dashboard) serveRoster(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"agents": roster}) //nolint:errcheck
+}
+
+// serveClaims returns the authoritative claims snapshot (one source of
+// truth: the claims KV).
+func (d *Dashboard) serveClaims(w http.ResponseWriter, _ *http.Request) {
+	held, err := claim.ListAll(d.bus)
+	if err != nil {
+		d.mu.Lock()
+		held = d.claims // last good snapshot; bus may be reconnecting
+		d.mu.Unlock()
+	}
+	if held == nil {
+		held = []claim.Held{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"claims": held}) //nolint:errcheck
+}
+
+// serveNotes replays a repo's blackboard stream (?repo=R, default repo when
+// omitted) as decoded note envelopes.
+func (d *Dashboard) serveNotes(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		repo = envelope.DefaultRepo
+	}
+	if !envelope.ValidRepo(repo) {
+		http.Error(w, "invalid repo id", http.StatusBadRequest)
+		return
+	}
+	entries, err := d.bus.StreamRead(envelope.StreamNotes(repo), 0)
+	if err != nil {
+		http.Error(w, "bus unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	notes := make([]envelope.Envelope, 0, len(entries))
+	for _, e := range entries {
+		env, err := envelope.Decode(e.Data)
+		if err != nil || env.Kind != envelope.KindNote {
+			continue
+		}
+		notes = append(notes, env)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"repo": repo, "notes": notes}) //nolint:errcheck
 }
 
 func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {

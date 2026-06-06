@@ -370,6 +370,38 @@ func TestStoreNamesValidatedAndCapped(t *testing.T) {
 	}
 }
 
+// TestStreamReadDoesNotAllocateSlot is the F4 regression: reading a stream
+// that was never written must not consume a stream slot. mesh context on an
+// empty repo and the dashboard tailing every repo it sees both issue reads;
+// if each allocated a slot, the bounded budget would leak until exhausted and
+// real appends would start failing.
+func TestStreamReadDoesNotAllocateSlot(t *testing.T) {
+	_, path := newTestServer(t, Options{})
+	c := dialTest(t, path, ClientOptions{})
+
+	// Read far more distinct never-written streams than the slot cap. Each
+	// returns empty; none may allocate.
+	for i := 0; i < maxStoreNames*3; i++ {
+		entries, err := c.StreamRead(fmt.Sprintf("notes-r%d", i), 0)
+		if err != nil {
+			t.Fatalf("read of empty stream %d errored: %v", i, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("empty stream %d returned %d entries", i, len(entries))
+		}
+	}
+
+	// The slot budget is untouched: a real append still succeeds, and reading
+	// it back works.
+	if _, err := c.StreamAppend("audit", "x"); err != nil {
+		t.Fatalf("append after many empty reads failed (slot leak): %v", err)
+	}
+	entries, err := c.StreamRead("audit", 0)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("append/read after empty reads: entries=%d err=%v", len(entries), err)
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

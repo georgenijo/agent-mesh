@@ -6,6 +6,30 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: P0 transport = Go + coordinator-embedded star bus over a unix socket
+
+**Decision:** Resolve the reopened transport/language fork for P0: the language stays **Go**; the transport is a **coordinator-embedded local bus/store (star topology)** over a permissioned unix socket, implemented in `internal/bus` — pub/sub with NATS-style subject matching (`*`, `>`), KV buckets with revision-CAS and per-key TTL leases, and bounded in-memory streams. No embedded NATS server and no external broker for P0. The JetStream-contingent specifics of earlier active decisions (CAS as the single claim primitive, TTL leases with reclaim-on-death, "the durable record" as the one authority) map onto bus KV/stream equivalents unchanged.
+
+**Rationale:** Issue #5 required settling the fork before coding the spine, and the P0 build directive specified Go plus a "local bus/store spine sufficient for P0". A star bus over one unix socket avoids the distributed tax (broker process, credentials, ops) while preserving the transport-independent invariants — one versioned envelope, one authority per fact, typed result enums, async-never-block — so a later swap to NATS/JetStream (if lateral peer comms or multi-host arrive) is mechanical: the `bus.Client` API is the seam.
+
+**Status:** active
+
+**References:** internal/bus, docs/repo-layout.md, #5, #8; supersedes 2026-06-05 "Transport reopened (bus vs star) and language under review"
+
+---
+
+## 2026-06-05: Persistent experts = a resident stream-json claude process; --resume is recovery-only
+
+**Decision:** A warm/persistent expert is a long-lived `claude -p --input-format stream-json --output-format stream-json --verbose` process owned by the expert's sidecar, which holds the child's stdin pipe open, writes one user-message per routed ask, and reads typed JSON from stdout. "Warm" = conversation context held in the running process's RAM. `--resume <session-id>` (reload the session jsonl from `~/.claude/projects/`) is the crash-recovery / cold-start path only — not steady state; a respawned expert rehydrates via `--resume` + `mesh context`, with the blackboard as the durable backstop. Ephemeral workers stay one-shot `claude -p`. Prefer structured stream-json over PTY-driven interactive sessions; PTY/tmux is a fallback only for CLIs lacking a structured streaming mode. Resolves fork A (warm-expert mechanism: resident stream-json vs Agent SDK vs resume).
+
+**Rationale:** `claude -p` is one-shot and `--resume` reloads from disk and pays a prompt-cache miss after the ~5min TTL, so resume is not true warmth. A resident streaming process keeps context in RAM for lowest per-ask latency and real continuity — proven in the M0 spike: one resident process answered a second-turn recall correctly (`num_turns=2`, single `session_id`). Cost is supervising a child (restart, memory, compaction), acceptable because experts amortize across many tickets. Structured stdout preserves the never-scrape-prose / one-versioned-envelope invariant.
+
+**Status:** active
+
+**References:** docs/spikes/M0-feasibility.md, docs/mockups/agent-startup.html, ARCHITECTURE.md §11, #27
+
+---
+
 ## 2026-06-05: Pivot to an autonomous, hands-off product (Mode B)
 
 **Decision:** Agent Mesh is a service + UI where the user drops a ticket/issue and the system **autonomously** triages it, spawns a team of agents, executes, and reports — the user watches and drives nothing. This **supersedes** the original "opt-in per message, agents work solo 95%" framing ("Mode A": a human driving long-lived agents that the mesh merely assists). `ARCHITECTURE.md` §1 vision/principles and the build-phase plan are to be re-derived for the autonomous model.
@@ -42,13 +66,13 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
-## 2026-06-05: Transport reopened (bus vs star) and language under review
+## 2026-06-05: Transport reopened (bus vs star) and language under review *(resolved)*
 
 **Decision:** The autonomous model is a coordinator-spawned **tree**, not a flat peer mesh, so a full NATS broker is no longer assumed. Choose between (a) a lighter **coordinator + role-router + durable store** (star) and (b) a **NATS/JetStream bus** — deferring the bus until lateral peer comms or multi-host genuinely require it. This **supersedes** "Build meshd/mesh in Go with an embedded NATS server" (the embedded-NATS commitment is dropped pending this choice), and **reopens the language** (Go vs TS — a star + store + websocket is equally comfortable in TS). JetStream-dependent specifics in other still-active entries (CAS-lock, TTL-lease, "the JetStream record" as authority, the Go repo layout) are **contingent** on this choice.
 
 **Rationale:** "Don't pay the distributed tax until distributed." A coordinator that spawns and knows every agent already has discovery/presence; the bus's headline strengths (flat discovery, dynamic peer membership) mostly don't apply until workers/experts talk laterally at scale. Keep the transport-independent invariants (one versioned envelope, one authority per fact, async ask→ticket, durable blackboard) regardless.
 
-**Status:** active
+**Status:** superseded by 2026-06-05 (P0 transport: Go + coordinator-embedded star bus)
 
 **References:** docs/mockups/topology-hybrid.html, docs/components.md
 

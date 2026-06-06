@@ -4,12 +4,24 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Current state
 
-**Pre-implementation.** The repo holds a design spec, supporting docs, and HTML prototypes — no source code, build system, tests, or package manifest exist yet. It is a git repo (GitHub: `georgenijo/agent-mesh`).
+**P0 implemented (presence walking skeleton).** Go module `github.com/georgenijo/agent-mesh`, zero external dependencies, stdlib only. The spine is real: `mesh join/leave/who/status` work end-to-end across separate processes — CLI → sidecar unix socket → coordinator-embedded bus → registry KV — with heartbeat leases, two-tier eviction (live → away → evict), autostart, and a read-only SSE dashboard. P1 (announce + claims + blackboard) and P2 (ask/answer) are not built yet. GitHub: `georgenijo/agent-mesh`.
 
-- `ARCHITECTURE.md` — the full system design (the source of truth; read it before building anything).
-- `docs/mockups/dashboard-bus.html` — a self-contained, dependency-free dashboard prototype. Open it directly in a browser (`open docs/mockups/dashboard-bus.html`); it runs a scripted, animated NATS-bus visualization with no server or build step. Per the spec (Phase P4) this is intended to become the production dashboard, with the scripted feed replaced by a live WebSocket tap on `mesh.>`.
+### Build / test commands (same as CI)
 
-When implementation starts, add the real build/lint/test commands to this file.
+```sh
+make build       # bin/meshd + bin/mesh
+make test        # all unit tests + cross-process e2e (test/e2e, ~4s)
+make test-race   # unit tests with the race detector
+make e2e         # just the cross-process e2e suite, verbose
+make vet         # go vet ./...
+make fmt         # gofmt -l -w .
+make ci          # exactly what CI runs: fmt-check + build + vet + test
+```
+
+CI (`.github/workflows/ci.yml`) runs gofmt-check, `go build ./...`, `go vet ./...`, `go test ./...` on every push to main and every PR.
+
+- `ARCHITECTURE.md` — the full system design. ⚠️ §1/§11/§12 partly predate the autonomous-pivot and the P0 star-bus decision; `docs/decisions/DECISIONS.md` (newest-first) wins on conflict.
+- `docs/mockups/dashboard-bus.html` — design prototype for the eventual P4 production dashboard (the P0 observer is `internal/dashboard`).
 
 ## What Agent Mesh is
 

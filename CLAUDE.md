@@ -4,12 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**Pre-implementation.** The repo holds a design spec, supporting docs, and HTML prototypes — no source code, build system, tests, or package manifest exist yet. It is a git repo (GitHub: `georgenijo/agent-mesh`).
+**P0 implemented (presence walking skeleton).** Go module `github.com/georgenijo/agent-mesh`, zero external dependencies, stdlib only. The spine is real: `mesh join/leave/who/status` work end-to-end across separate processes — CLI → sidecar unix socket → coordinator-embedded bus → registry KV — with heartbeat leases, two-tier eviction (live → away → evict), autostart, and a read-only SSE dashboard. P1 (announce + claims + blackboard) and P2 (ask/answer) are not built yet. GitHub: `georgenijo/agent-mesh`.
 
-- `ARCHITECTURE.md` — the full system design (the source of truth; read it before building anything).
-- `docs/mockups/dashboard-bus.html` — a self-contained, dependency-free dashboard prototype. Open it directly in a browser (`open docs/mockups/dashboard-bus.html`); it runs a scripted, animated NATS-bus visualization with no server or build step. Per the spec (Phase P4) this is intended to become the production dashboard, with the scripted feed replaced by a live WebSocket tap on `mesh.>`.
+### Build / test commands
 
-When implementation starts, add the real build/lint/test commands to this file.
+```sh
+make build       # bin/meshd + bin/mesh
+make test        # all unit tests + cross-process e2e (test/e2e, ~4s)
+make test-race   # unit tests with the race detector
+make e2e         # just the cross-process e2e suite, verbose
+make vet         # go vet ./...
+make fmt         # gofmt -l -w .
+make ci          # exactly what CI runs: fmt-check + build + vet + test
+```
+
+Try it: `make build && PATH="$PWD/bin:$PATH" MESH_DIR=/tmp/mymesh mesh join --name me --role builder` — `mesh join` autostarts the sidecar and coordinator; `meshd --mode dashboard` serves the live observer.
+
+### Where things live
+
+- `cmd/{meshd,mesh}` — thin entrypoints (daemon modes: sidecar | coordinator | dashboard).
+- `internal/envelope` — the wire contract: versioned envelope, kinds, typed result enums, UUIDv7 ids, subject taxonomy. **Every message goes through this package.**
+- `internal/bus` — the P0 transport: coordinator-embedded star bus over a unix socket (pub/sub + KV CAS/TTL + bounded streams). The `bus.Client` API is the seam if NATS ever replaces it (see DECISIONS.md).
+- `internal/socket` — one-shot CLI↔sidecar request/reply.
+- `internal/sidecar`, `internal/coordinator`, `internal/dashboard`, `internal/cli`, `internal/agentcard`, `internal/meshapi`, `internal/autostart`, `internal/config`.
+- `test/e2e` — cross-process acceptance tests (real binaries, real sockets — the "done" gate).
+- `ARCHITECTURE.md` — the full system design. ⚠️ §1/§11/§12 partly predate the autonomous-pivot and the P0 star-bus decision; `docs/decisions/DECISIONS.md` (newest-first) wins on conflict.
+- `docs/mockups/dashboard-bus.html` — design prototype for the eventual P4 production dashboard (the P0 observer is `internal/dashboard`).
 
 ## What Agent Mesh is
 

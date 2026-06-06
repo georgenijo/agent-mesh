@@ -1,0 +1,270 @@
+// Package dashboard is the read-only observer: it taps mesh.> on the bus,
+// snapshots the registry, and bridges both to a browser.
+//
+// P0 deviation from issue #10: the browser bridge is SSE (EventSource), not
+// WebSocket — same observer semantics, zero dependencies, native in every
+// browser. P4 (the production dashboard) can revisit.
+//
+// The dashboard never publishes to the mesh: its bus client only subscribes
+// and reads KV. Disconnecting it affects nothing.
+package dashboard
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/georgenijo/agent-mesh/internal/agentcard"
+	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/config"
+	"github.com/georgenijo/agent-mesh/internal/envelope"
+)
+
+//go:embed dashboard.html
+var indexHTML []byte
+
+// rosterInterval is how often the registry snapshot is refreshed and pushed.
+const rosterInterval = 1 * time.Second
+
+// Dashboard serves the live observer UI.
+type Dashboard struct {
+	cfg  config.Config
+	addr string
+	log  *slog.Logger
+
+	bus     *bus.Client
+	httpSrv *http.Server
+	ln      net.Listener
+
+	mu      sync.Mutex
+	clients map[chan []byte]struct{}
+	roster  []agentcard.RegistryRecord
+
+	stop chan struct{}
+	wg   sync.WaitGroup
+}
+
+// New creates a dashboard listening on addr (default cfg.DashboardAddr).
+func New(cfg config.Config, addr string, log *slog.Logger) *Dashboard {
+	if addr == "" {
+		addr = cfg.DashboardAddr
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Dashboard{
+		cfg:     cfg,
+		addr:    addr,
+		log:     log,
+		clients: make(map[chan []byte]struct{}),
+		stop:    make(chan struct{}),
+	}
+}
+
+// Start connects the tap and begins serving HTTP.
+func (d *Dashboard) Start() error {
+	cli, err := bus.Dial(d.cfg.BusSocket(), bus.ClientOptions{})
+	if err != nil {
+		return fmt.Errorf("dashboard: connect bus: %w", err)
+	}
+	d.bus = cli
+
+	// Tap everything; forward each envelope to connected browsers.
+	if _, err := cli.Subscribe(envelope.PatternAll, d.onEvent); err != nil {
+		cli.Close()
+		return fmt.Errorf("dashboard: subscribe: %w", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", d.serveIndex)
+	mux.HandleFunc("GET /events", d.serveSSE)
+	mux.HandleFunc("GET /api/roster", d.serveRoster)
+
+	ln, err := net.Listen("tcp", d.addr)
+	if err != nil {
+		cli.Close()
+		return fmt.Errorf("dashboard: listen %s: %w", d.addr, err)
+	}
+	d.ln = ln
+	d.httpSrv = &http.Server{Handler: mux}
+
+	d.wg.Add(2)
+	go func() {
+		defer d.wg.Done()
+		d.httpSrv.Serve(ln) //nolint:errcheck // closed on Stop
+	}()
+	go d.rosterLoop()
+
+	d.log.Info("dashboard started", "addr", d.Addr())
+	return nil
+}
+
+// Addr returns the bound listen address (useful when addr was :0).
+func (d *Dashboard) Addr() string {
+	if d.ln == nil {
+		return d.addr
+	}
+	return d.ln.Addr().String()
+}
+
+// Stop shuts down HTTP and the bus tap.
+func (d *Dashboard) Stop() {
+	select {
+	case <-d.stop:
+		return
+	default:
+		close(d.stop)
+	}
+	if d.httpSrv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		d.httpSrv.Shutdown(ctx) //nolint:errcheck
+		cancel()
+	}
+	d.wg.Wait()
+	if d.bus != nil {
+		d.bus.Close()
+	}
+}
+
+// onEvent forwards one tapped envelope to all SSE clients.
+func (d *Dashboard) onEvent(env envelope.Envelope) {
+	msg, err := json.Marshal(map[string]any{"type": "event", "envelope": env})
+	if err != nil {
+		return
+	}
+	d.broadcast(msg)
+}
+
+// rosterLoop periodically reads the authoritative registry and pushes the
+// snapshot. Polling the KV (rather than deriving counts from events) keeps
+// the dashboard a pure reader of the one authority.
+func (d *Dashboard) rosterLoop() {
+	defer d.wg.Done()
+	ticker := time.NewTicker(rosterInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-d.stop:
+			return
+		case <-ticker.C:
+			roster, err := d.fetchRoster()
+			if err != nil {
+				continue // bus reconnecting; try next tick
+			}
+			d.mu.Lock()
+			d.roster = roster
+			d.mu.Unlock()
+			msg, err := json.Marshal(map[string]any{"type": "roster", "agents": roster})
+			if err != nil {
+				continue
+			}
+			d.broadcast(msg)
+		}
+	}
+}
+
+func (d *Dashboard) fetchRoster() ([]agentcard.RegistryRecord, error) {
+	keys, err := d.bus.KVList(envelope.BucketRegistry)
+	if err != nil {
+		return nil, err
+	}
+	roster := make([]agentcard.RegistryRecord, 0, len(keys))
+	for _, kv := range keys {
+		var rec agentcard.RegistryRecord
+		if err := json.Unmarshal(kv.Value, &rec); err != nil {
+			continue
+		}
+		roster = append(roster, rec)
+	}
+	sort.Slice(roster, func(i, j int) bool { return roster[i].Card.Name < roster[j].Card.Name })
+	return roster, nil
+}
+
+func (d *Dashboard) broadcast(msg []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for ch := range d.clients {
+		select {
+		case ch <- msg:
+		default: // slow browser: drop the frame, never block the tap
+		}
+	}
+}
+
+// --- HTTP handlers ---------------------------------------------------------------
+
+func (d *Dashboard) serveIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML) //nolint:errcheck
+}
+
+func (d *Dashboard) serveRoster(w http.ResponseWriter, _ *http.Request) {
+	d.mu.Lock()
+	roster := d.roster
+	d.mu.Unlock()
+	if roster == nil {
+		// First tick may not have run yet; read directly.
+		if fresh, err := d.fetchRoster(); err == nil {
+			roster = fresh
+		} else {
+			roster = []agentcard.RegistryRecord{}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"agents": roster}) //nolint:errcheck
+}
+
+func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := make(chan []byte, 64)
+	d.mu.Lock()
+	d.clients[ch] = struct{}{}
+	roster := d.roster
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		delete(d.clients, ch)
+		d.mu.Unlock()
+	}()
+
+	// Initial snapshot so the page renders without waiting a tick.
+	if roster != nil {
+		if msg, err := json.Marshal(map[string]any{"type": "roster", "agents": roster}); err == nil {
+			fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+			flusher.Flush()
+		}
+	}
+
+	for {
+		select {
+		case <-d.stop:
+			return
+		case <-r.Context().Done():
+			return
+		case msg := <-ch:
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", msg); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}

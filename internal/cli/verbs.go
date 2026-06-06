@@ -1,0 +1,195 @@
+package cli
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"text/tabwriter"
+	"time"
+
+	"github.com/georgenijo/agent-mesh/internal/agentcard"
+	"github.com/georgenijo/agent-mesh/internal/autostart"
+	"github.com/georgenijo/agent-mesh/internal/config"
+	"github.com/georgenijo/agent-mesh/internal/meshapi"
+	"github.com/georgenijo/agent-mesh/internal/socket"
+)
+
+func runJoin(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("join", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	name := fs.String("name", "", "agent name (required)")
+	role := fs.String("role", "", "agent role (required)")
+	caps := fs.String("caps", "", "comma-separated capability tokens")
+	repo := fs.String("repo", "", "repository this agent works on")
+	model := fs.String("model", "", "model the agent runs")
+	sock := fs.String("socket", "", "sidecar socket path override")
+	noAutostart := fs.Bool("no-autostart", false, "fail instead of spawning a sidecar")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	if *name == "" || *role == "" {
+		fmt.Fprintln(stderr, "mesh join: --name and --role are required")
+		return ExitUsage
+	}
+	if !agentcard.ValidName(*name) {
+		fmt.Fprintf(stderr, "mesh join: invalid name %q (want [A-Za-z0-9_-]{1,64})\n", *name)
+		return ExitUsage
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	cwd, _ := os.Getwd() //nolint:errcheck
+	card := agentcard.Card{
+		ID: *name, Name: *name, Role: *role,
+		Caps: splitCaps(*caps), Repo: *repo, CWD: cwd, Model: *model,
+	}
+
+	socketPath := *sock
+	if socketPath == "" {
+		socketPath = cfg.AgentSocket(*name)
+	}
+
+	// Autostart the sidecar when nothing is listening yet.
+	spawned := false
+	if _, err := socket.Do(socketPath, socket.Request{Verb: meshapi.VerbPing}, time.Second); err != nil {
+		if *noAutostart {
+			fmt.Fprintf(stderr, "mesh: no sidecar at %s and --no-autostart given\n", socketPath)
+			return ExitNotJoined
+		}
+		if err := autostart.SpawnSidecar(cfg, card); err != nil {
+			fmt.Fprintln(stderr, "mesh:", err)
+			return ExitError
+		}
+		spawned = true
+	}
+
+	resp, code, err := doVerb(socketPath, meshapi.VerbJoin, meshapi.JoinArgs{Card: card})
+	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
+		var res meshapi.JoinResult
+		// "Rejoined" from a sidecar this very command spawned is just the
+		// boot registration — report it as a fresh join.
+		if !spawned && json.Unmarshal(resp.Data, &res) == nil && res.Rejoined {
+			fmt.Fprintf(w, "rejoined mesh as %s (role %s)\n", card.Name, card.Role)
+			return
+		}
+		fmt.Fprintf(w, "joined mesh as %s (role %s)\n", card.Name, card.Role)
+		fmt.Fprintf(w, "sidecar socket: %s\n", socketPath)
+	})
+}
+
+func runLeave(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("leave", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	sock := fs.String("socket", "", "sidecar socket path override")
+	reason := fs.String("reason", "", "leave reason")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	socketPath, code, err := resolveSocket(cfg, *sock)
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return code
+	}
+	resp, code, err := doVerb(socketPath, meshapi.VerbLeave, meshapi.LeaveArgs{Reason: *reason})
+	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
+		fmt.Fprintln(w, "left mesh")
+	})
+}
+
+func runStatus(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	sock := fs.String("socket", "", "sidecar socket path override")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	positional, err := parseFlagsAnywhere(fs, args)
+	if err != nil {
+		return ExitUsage
+	}
+	if len(positional) != 1 || positional[0] == "" {
+		fmt.Fprintln(stderr, `usage: mesh status "<text>"`)
+		return ExitUsage
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	socketPath, code, err := resolveSocket(cfg, *sock)
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return code
+	}
+	resp, code, err := doVerb(socketPath, meshapi.VerbStatus, meshapi.StatusArgs{Text: positional[0]})
+	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
+		fmt.Fprintln(w, "ok")
+	})
+}
+
+func runWho(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("who", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	sock := fs.String("socket", "", "sidecar socket path override")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	socketPath, code, err := resolveSocket(cfg, *sock)
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return code
+	}
+	resp, code, err := doVerb(socketPath, meshapi.VerbWho, nil)
+	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
+		var res meshapi.WhoResult
+		if err := json.Unmarshal(resp.Data, &res); err != nil {
+			fmt.Fprintln(stderr, "mesh: bad who response:", err)
+			return
+		}
+		if len(res.Agents) == 0 {
+			fmt.Fprintln(w, "no agents on the mesh")
+			return
+		}
+		tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "NAME\tROLE\tSTATE\tSTATUS\tCAPS")
+		for _, a := range res.Agents {
+			status := a.LastStatus
+			if status == "" {
+				status = "-"
+			}
+			caps := "-"
+			if len(a.Card.Caps) > 0 {
+				caps = joinComma(a.Card.Caps)
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", a.Card.Name, a.Card.Role, a.State, status, caps)
+		}
+		tw.Flush() //nolint:errcheck
+	})
+}
+
+func joinComma(items []string) string {
+	out := ""
+	for i, s := range items {
+		if i > 0 {
+			out += ","
+		}
+		out += s
+	}
+	return out
+}

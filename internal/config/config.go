@@ -1,0 +1,126 @@
+// Package config resolves Agent Mesh paths and timing knobs.
+//
+// Everything is overridable via environment variables so tests and e2e runs
+// can use temp dirs and fast clocks without touching production defaults.
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// Env variable names.
+const (
+	EnvMeshDir           = "MESH_DIR"
+	EnvHeartbeatInterval = "MESH_HEARTBEAT_INTERVAL"
+	EnvAwayAfter         = "MESH_AWAY_AFTER"
+	EnvEvictAfter        = "MESH_EVICT_AFTER"
+	EnvRegistrationGrace = "MESH_REGISTRATION_GRACE"
+	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
+	EnvAgentSocket       = "MESH_SOCKET" // CLI → sidecar socket override
+	EnvMeshdBin          = "MESH_MESHD"  // path to meshd for autostart
+)
+
+// Defaults.
+const (
+	DefaultHeartbeatInterval = 5 * time.Second
+	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
+	DefaultEvictAfter        = 60 * time.Second
+	DefaultRegistrationGrace = 10 * time.Second
+	DefaultDashboardAddr     = "127.0.0.1:8737"
+)
+
+// Config carries resolved paths and timings for all meshd modes and the CLI.
+type Config struct {
+	MeshDir           string
+	HeartbeatInterval time.Duration
+	AwayAfter         time.Duration // last beat older than this → away
+	EvictAfter        time.Duration // last beat older than this → evicted
+	RegistrationGrace time.Duration // no away/evict this soon after register
+	DashboardAddr     string
+}
+
+// Load resolves config from the environment with defaults.
+func Load() (Config, error) {
+	cfg := Config{
+		HeartbeatInterval: DefaultHeartbeatInterval,
+		AwayAfter:         DefaultAwayAfter,
+		EvictAfter:        DefaultEvictAfter,
+		RegistrationGrace: DefaultRegistrationGrace,
+		DashboardAddr:     DefaultDashboardAddr,
+	}
+
+	if dir := os.Getenv(EnvMeshDir); dir != "" {
+		cfg.MeshDir = dir
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("config: resolve home dir: %w", err)
+		}
+		cfg.MeshDir = filepath.Join(home, ".mesh")
+	}
+
+	for _, d := range []struct {
+		env string
+		dst *time.Duration
+	}{
+		{EnvHeartbeatInterval, &cfg.HeartbeatInterval},
+		{EnvAwayAfter, &cfg.AwayAfter},
+		{EnvEvictAfter, &cfg.EvictAfter},
+		{EnvRegistrationGrace, &cfg.RegistrationGrace},
+	} {
+		raw := os.Getenv(d.env)
+		if raw == "" {
+			continue
+		}
+		dur, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %s=%q: %w", d.env, raw, err)
+		}
+		if dur <= 0 {
+			return Config{}, fmt.Errorf("config: %s must be positive, got %q", d.env, raw)
+		}
+		*d.dst = dur
+	}
+
+	if addr := os.Getenv(EnvDashboardAddr); addr != "" {
+		cfg.DashboardAddr = addr
+	}
+
+	if cfg.AwayAfter < cfg.HeartbeatInterval {
+		return Config{}, fmt.Errorf("config: away-after (%s) must be >= heartbeat interval (%s)",
+			cfg.AwayAfter, cfg.HeartbeatInterval)
+	}
+	if cfg.EvictAfter <= cfg.AwayAfter {
+		return Config{}, fmt.Errorf("config: evict-after (%s) must be > away-after (%s)",
+			cfg.EvictAfter, cfg.AwayAfter)
+	}
+	return cfg, nil
+}
+
+// BusSocket is the coordinator-owned bus socket path.
+func (c Config) BusSocket() string { return filepath.Join(c.MeshDir, "bus.sock") }
+
+// AgentsDir holds per-agent sidecar sockets.
+func (c Config) AgentsDir() string { return filepath.Join(c.MeshDir, "agents") }
+
+// AgentSocket is the sidecar socket path for the named agent.
+func (c Config) AgentSocket(name string) string {
+	return filepath.Join(c.AgentsDir(), name+".sock")
+}
+
+// CoordinatorLock is the flock file used to elect a single coordinator
+// autostarter when several sidecars race to boot one.
+func (c Config) CoordinatorLock() string { return filepath.Join(c.MeshDir, "coordinator.lock") }
+
+// EnsureDirs creates the mesh directories with owner-only permissions.
+func (c Config) EnsureDirs() error {
+	for _, dir := range []string{c.MeshDir, c.AgentsDir()} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("config: create %s: %w", dir, err)
+		}
+	}
+	return nil
+}

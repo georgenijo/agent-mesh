@@ -21,12 +21,18 @@ const (
 	EnvClaimTTL          = "MESH_CLAIM_TTL"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
 	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
-	EnvAgentSocket       = "MESH_SOCKET" // CLI → sidecar socket override
-	EnvMeshdBin          = "MESH_MESHD"  // path to meshd for autostart
+	EnvAgentSocket       = "MESH_SOCKET"     // CLI → sidecar socket override
+	EnvMeshdBin          = "MESH_MESHD"      // path to meshd for autostart
+	EnvExpertCLI         = "MESH_EXPERT_CLI" // agent CLI an expert responder drives (default "claude")
 )
 
 // Defaults.
 const (
+	// DefaultExpertCLI is the agent CLI an expert responder drives when
+	// MESH_EXPERT_CLI is unset. A literal (not internal/runtime.DefaultBinary)
+	// so config carries no dependency on the runtime package.
+	DefaultExpertCLI = "claude"
+
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
 	DefaultEvictAfter        = 60 * time.Second
@@ -45,6 +51,7 @@ type Config struct {
 	ClaimTTL          time.Duration // claim lease backstop; renewed each heartbeat
 	DashboardAddr     string
 	ObserveAddr       string
+	ExpertCLI         string // agent CLI an expert responder drives (meshd --mode expert)
 }
 
 // Load resolves config from the environment with defaults.
@@ -56,6 +63,7 @@ func Load() (Config, error) {
 		RegistrationGrace: DefaultRegistrationGrace,
 		DashboardAddr:     DefaultDashboardAddr,
 		ObserveAddr:       DefaultObserveAddr,
+		ExpertCLI:         DefaultExpertCLI,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -97,6 +105,9 @@ func Load() (Config, error) {
 	}
 	if addr := os.Getenv(EnvObserveAddr); addr != "" {
 		cfg.ObserveAddr = addr
+	}
+	if cli := os.Getenv(EnvExpertCLI); cli != "" {
+		cfg.ExpertCLI = cli
 	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {

@@ -9,8 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **P0 (presence):** `mesh join/leave/who/status`, autostart, read-only SSE dashboard.
 - **P1 (conflict avoidance + blackboard, #12–#16):** `mesh claim/release` (CAS file-claims; typed `claimed|lost|error`; exit 6 on lost; TTL leases with reclaim-on-death and re-establishment across a coordinator restart; paths canonicalized repo-relative so a hook's absolute path and a manual relative path collide on one key), `mesh announce` (advisory pub/sub), `mesh note/context` (durable per-repo blackboard streams persisted to `$MESH_DIR/streams/<name>.jsonl`, replayed across restarts). Claude Code `PreToolUse` claim-guard hook in `hooks/claude-code/`. Dashboard shows live claims + notes.
 - **Ops plane:** `mesh ops` + `meshd --mode observe`.
+- **P2 (async ask/answer, #17–#22):** `mesh ask/poll/inbox/answer` across real processes — role-routed asks CAS-accept exactly one responder; the asker never blocks (ticket returned immediately, answer collected via `poll`). Tickets KV is the one authority.
+- **Expert responder loop (first non-manual slice of #27):** `mesh expert serve --name N --role R` (a foreground `meshd --mode expert`) joins as a role-owning expert and auto-answers its accepted asks through a resident `internal/runtime` stream-json child (`MESH_EXPERT_CLI`, default `claude`) — no human runs `inbox`/`answer`. Same single answer path; no fake-success.
 
-P2 (ask/answer) is not built yet. GitHub: `georgenijo/agent-mesh`.
+GitHub: `georgenijo/agent-mesh`.
 
 ### Build / test commands
 

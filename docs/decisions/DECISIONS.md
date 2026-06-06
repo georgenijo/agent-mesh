@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-06: Expert responder loop = role-owning sidecar + inbox-draining loop over the runtime proxy (first non-manual P2 slice of #27)
+
+**Decision:** An *expert* is an ordinary role-owning sidecar plus a responder loop, not a new agent type. `Sidecar.ServeExpert` (`internal/sidecar/expert.go`) polls the agent's own already-accepted inbox — the existing role-ask subscription auto-accepts role-routed tickets via `handleIncomingAsk`, so the loop only *drains* what is accepted — and answers each ticket through `internal/runtime.Proxy`, the resident stream-json child. The child binary is swappable via `MESH_EXPERT_CLI` (default `claude`), so CI fakes the LLM (`test/e2e/fakeclaude`) while production drives real `claude`. Answers commit through the one existing path (`recordAndPublishAnswer`, factored out of `handleAnswer`): **tickets KV stays the sole authority, no coordinator answer-payload path, no fake-success** — only a `runtime.TurnAnswered` writes an answer; lost/error turns are skipped and poison tickets are tracked in-memory and left to TTL expiry (no new FSM state). Surface: `meshd --mode expert` (the daemon, autostarts the coordinator like `--mode sidecar`) plus a thin foreground `mesh expert serve` that execs it with the `--mesh-dir` ownership marker so `mesh ops down` tears it (and its tracked runtime child) down. Best-effort crash recovery: on `ErrProcessExited` the loop's runtime fn tries `proxy.Restart` (`--resume`) once.
+
+**Rationale:** This is the smallest honest dogfood after P2 — the manual `mesh inbox`/`mesh answer` step was the only thing between a routed ask and an automatic answer, and the auto-accept + single answer path already existed, so the slice is a loop plus a swappable runtime binary, not new machinery. Keeping the loop in `internal/sidecar` (where `ticketStore`/`publishTicket`/`TrackChild` live) behind an `ExpertFunc` seam keeps `internal/runtime` out of the sidecar package (no import cycle) and the runtime wiring in `cmd/meshd`. Faking only the LLM binary — not the proxy — exercises the real stream-json process boundary end-to-end in CI without an API key, honoring never-scrape-prose / one-authority / async-never-block.
+
+**Status:** active
+
+**References:** internal/sidecar/expert.go, internal/sidecar/verbs_p2.go (recordAndPublishAnswer), cmd/meshd/main.go (runExpert), internal/cli/expert.go, internal/config (MESH_EXPERT_CLI), internal/runtime, test/e2e/expert_test.go, test/e2e/fakeclaude; #27, #19, #20; extends 2026-06-05 "#27 persistent experts land as a prep slice" and "Persistent experts = a resident stream-json claude process"
+
+---
+
 ## 2026-06-06: `mesh up` = idempotent infra bring-up in autostart; ops scope unchanged
 
 **Decision:** One command — `mesh up [--dashboard-addr A] [--observe-addr A]` — idempotently brings up coordinator + dashboard + observe and prints their URLs. The spawn logic lives in `internal/autostart` (which already starts coordinators and sidecars); `internal/ops` stays inspect + teardown + janitor and never spawns, preserving the 2026-06-05 actuator-verbs scope. Supporting protocol: dashboard/observe write run files under MESH_DIR (`<name>.pid` first, then `<name>.addr` atomically with the REAL bound address — the addr file is both the readiness gate and the one authority for "where is the UI"), spawn carries the `--mesh-dir` argv ownership marker so `ops down/doctor/clean` cover the services, and a foreign holder on the configured port triggers an EADDRINUSE-only fallback to `127.0.0.1:0` (other listen errors stay fatal). "Already running" = pidfile alive AND addr dialable; a live-but-not-serving pid is a typed error, never a respawn.

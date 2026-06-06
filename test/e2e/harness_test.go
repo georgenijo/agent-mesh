@@ -23,8 +23,9 @@ import (
 )
 
 var (
-	meshBin  string
-	meshdBin string
+	meshBin       string
+	meshdBin      string
+	fakeClaudeBin string
 )
 
 // TestMain delegates to testMain because os.Exit skips deferred cleanup —
@@ -43,9 +44,11 @@ func testMain(m *testing.M) int {
 
 	meshBin = filepath.Join(binDir, "mesh")
 	meshdBin = filepath.Join(binDir, "meshd")
+	fakeClaudeBin = filepath.Join(binDir, "fakeclaude")
 	for target, pkg := range map[string]string{
-		meshBin:  "github.com/georgenijo/agent-mesh/cmd/mesh",
-		meshdBin: "github.com/georgenijo/agent-mesh/cmd/meshd",
+		meshBin:       "github.com/georgenijo/agent-mesh/cmd/mesh",
+		meshdBin:      "github.com/georgenijo/agent-mesh/cmd/meshd",
+		fakeClaudeBin: "github.com/georgenijo/agent-mesh/test/e2e/fakeclaude",
 	} {
 		cmd := exec.Command("go", "build", "-o", target, pkg)
 		cmd.Stderr = os.Stderr
@@ -76,6 +79,7 @@ func newMesh(t *testing.T) *mesh {
 		env: append(os.Environ(),
 			"MESH_DIR="+dir,
 			"MESH_MESHD="+meshdBin,
+			"MESH_EXPERT_CLI="+fakeClaudeBin,
 			"MESH_HEARTBEAT_INTERVAL=100ms",
 			"MESH_AWAY_AFTER=400ms",
 			"MESH_EVICT_AFTER=1200ms",
@@ -130,6 +134,30 @@ func (m *mesh) startCoordinator() {
 		logf.Close()
 	})
 	m.waitDialable(filepath.Join(m.dir, "bus.sock"), 5*time.Second)
+}
+
+// startExpert launches `mesh expert serve` as a background foreground-style
+// process: it execs meshd --mode expert, which joins the role and drives the
+// fake claude runtime. Teardown is the shared ops-down path; a Kill cleanup is
+// the backstop. It waits until the expert's sidecar socket accepts connections.
+func (m *mesh) startExpert(name, role string) {
+	m.t.Helper()
+	logf, err := os.Create(filepath.Join(m.dir, "expert-"+name+".log"))
+	if err != nil {
+		m.t.Fatal(err)
+	}
+	cmd := exec.Command(meshBin, "expert", "serve", "--name", name, "--role", role, "--repo", "demo")
+	cmd.Env = m.env
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		m.t.Fatal(err)
+	}
+	m.t.Cleanup(func() {
+		cmd.Process.Kill() //nolint:errcheck
+		cmd.Wait()         //nolint:errcheck
+		logf.Close()
+	})
+	m.waitDialable(m.agentSocket(name), 10*time.Second)
 }
 
 // startDashboard boots the dashboard process and returns its base URL.
@@ -250,6 +278,8 @@ func (m *mesh) dumpLogsOnFailure() {
 		return
 	}
 	matches, _ := filepath.Glob(filepath.Join(m.dir, "logs", "*.log")) //nolint:errcheck
+	experts, _ := filepath.Glob(filepath.Join(m.dir, "expert-*.log"))  //nolint:errcheck
+	matches = append(matches, experts...)
 	matches = append(matches, filepath.Join(m.dir, "coordinator-e2e.log"))
 	for _, path := range matches {
 		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {

@@ -12,7 +12,8 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 )
 
-// Verbs implemented in P0 + P1. P2 adds ask/poll/inbox/answer here.
+// Verbs implemented in P0 + P1, plus the ops runtime probe. P2 adds
+// ask/poll/inbox/answer here.
 const (
 	VerbPing     = "ping"
 	VerbJoin     = "join"
@@ -24,6 +25,7 @@ const (
 	VerbAnnounce = "announce"
 	VerbNote     = "note"
 	VerbContext  = "context"
+	VerbRuntime  = "runtime"
 )
 
 // MaxStatusLen bounds a status line in bytes. Status text is fanned out to
@@ -178,4 +180,19 @@ type ContextNote struct {
 type ContextResult struct {
 	Repo  string        `json:"repo"`
 	Notes []ContextNote `json:"notes"`
+}
+
+// ChildProc is one child agent CLI process tracked by the sidecar.
+type ChildProc struct {
+	PID       int       `json:"pid"`
+	Cmd       string    `json:"cmd"`
+	StartedAt time.Time `json:"startedAt"`
+	State     string    `json:"state"` // running | exited
+}
+
+// RuntimeResult is the sidecar runtime snapshot for ops inspection.
+type RuntimeResult struct {
+	SidecarPID int         `json:"sidecarPid"`
+	Uptime     string      `json:"uptime"`
+	Children   []ChildProc `json:"children"`
 }

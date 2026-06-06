@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -40,7 +41,11 @@ type Sidecar struct {
 	// coordinator restarts and its in-memory claims KV comes back empty
 	// (presence recovers the same way via re-register). Value is the
 	// (repo, path) needed to re-issue the claim.
-	held map[string]heldClaim
+	held      map[string]heldClaim
+	startedAt time.Time
+
+	childrenMu sync.Mutex
+	children   []meshapi.ChildProc
 
 	stop     chan struct{} // closes on Stop: ends background loops
 	done     chan struct{} // closes when a leave verb requests daemon exit
@@ -61,12 +66,13 @@ func New(cfg config.Config, card agentcard.Card, log *slog.Logger) (*Sidecar, er
 		log = slog.Default()
 	}
 	return &Sidecar{
-		cfg:  cfg,
-		log:  log,
-		card: card,
-		held: make(map[string]heldClaim),
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		cfg:       cfg,
+		log:       log,
+		card:      card,
+		held:      make(map[string]heldClaim),
+		startedAt: time.Now(),
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 	}, nil
 }
 
@@ -225,6 +231,8 @@ func (s *Sidecar) handle(req socket.Request) socket.Response {
 		return s.handleNote(req)
 	case meshapi.VerbContext:
 		return s.handleContext(req)
+	case meshapi.VerbRuntime:
+		return s.handleRuntime()
 	default:
 		return socket.Fail(socket.CodeBadRequest, fmt.Sprintf("unknown verb %q", req.Verb))
 	}
@@ -355,4 +363,47 @@ func (s *Sidecar) handleWho() socket.Response {
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].Card.Name < agents[j].Card.Name })
 	return socket.OKData(meshapi.WhoResult{Agents: agents})
+}
+
+func (s *Sidecar) handleRuntime() socket.Response {
+	s.mu.Lock()
+	pid := s.card.PID
+	if pid == 0 {
+		pid = os.Getpid()
+	}
+	started := s.startedAt
+	s.mu.Unlock()
+
+	s.childrenMu.Lock()
+	children := append([]meshapi.ChildProc(nil), s.children...)
+	s.childrenMu.Unlock()
+
+	return socket.OKData(meshapi.RuntimeResult{
+		SidecarPID: pid,
+		Uptime:     time.Since(started).Round(time.Millisecond).String(),
+		Children:   children,
+	})
+}
+
+// TrackChild records a child agent CLI process owned by this sidecar.
+func (s *Sidecar) TrackChild(cmd string, pid int) {
+	s.childrenMu.Lock()
+	defer s.childrenMu.Unlock()
+	s.children = append(s.children, meshapi.ChildProc{
+		PID:       pid,
+		Cmd:       cmd,
+		StartedAt: time.Now().UTC(),
+		State:     "running",
+	})
+}
+
+// MarkChildExited marks a tracked child process as exited.
+func (s *Sidecar) MarkChildExited(pid int) {
+	s.childrenMu.Lock()
+	defer s.childrenMu.Unlock()
+	for i := range s.children {
+		if s.children[i].PID == pid {
+			s.children[i].State = "exited"
+		}
+	}
 }

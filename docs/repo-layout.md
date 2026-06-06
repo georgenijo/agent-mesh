@@ -31,6 +31,7 @@ agent-mesh/
 │   ├── sidecar/                # §2 per-agent daemon: NATS conn, heartbeat, ticket/claim cache
 │   ├── coordinator/            # §3 control plane: registry, presence/lease, routing, policy, audit
 │   ├── dashboard/              # §5 read-only observer: mesh.> tap + WS bridge + static serving
+│   ├── observe/                # §5b ops plane: runtime snapshot collector + HTTP observe server
 │   ├── cli/                    # §4 verb implementations (the body behind cmd/mesh)
 │   ├── agentcard/              # agent card + registry types (role, caps)
 │   ├── ticket/                 # ask-ticket FSM (states + legal transitions as data)

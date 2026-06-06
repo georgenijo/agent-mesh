@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>mesh observe</title>
+  <style>
+    body { font-family: ui-monospace, monospace; margin: 1.5rem; background: #0b0f14; color: #d8e1ea; }
+    h1 { font-size: 1rem; font-weight: 600; margin: 0 0 0.5rem; }
+    .meta { color: #7b8da0; font-size: 0.85rem; margin-bottom: 1rem; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+    th, td { border: 1px solid #243040; padding: 0.4rem 0.6rem; text-align: left; }
+    th { background: #141c26; }
+    .ok { color: #6ee7a8; }
+    .bad { color: #f87171; }
+    .warn { color: #fbbf24; }
+    #anomalies { margin-top: 1rem; color: #fbbf24; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>mesh runtime observe</h1>
+  <div class="meta" id="meta">loading…</div>
+  <table>
+    <thead>
+      <tr><th>component</th><th>pid</th><th>alive</th><th>dialable</th><th>state</th><th>drift</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="anomalies"></div>
+  <script>
+    function yn(v, good) {
+      const cls = v ? (good ? "ok" : "bad") : "warn";
+      const text = v ? "yes" : "no";
+      return `<span class="${cls}">${text}</span>`;
+    }
+    async function refresh() {
+      const res = await fetch("/api/snapshot");
+      const snap = await res.json();
+      document.getElementById("meta").textContent =
+        `${snap.meta.meshDir} · collected ${snap.meta.collectedAt}`;
+      const rows = [];
+      const c = snap.coordinator;
+      rows.push(`<tr>
+        <td>coordinator</td>
+        <td>${c.pid || "-"}</td>
+        <td>${yn(c.pidAlive, true)}</td>
+        <td>${yn(c.busDialable, true)}</td>
+        <td>${c.lockPresent ? "lock" : "-"}</td>
+        <td>-</td>
+      </tr>`);
+      for (const s of snap.sidecars || []) {
+        const state = s.registry ? s.registry.state : "-";
+        rows.push(`<tr>
+          <td>sidecar:${s.name}</td>
+          <td>${s.pid || "-"}</td>
+          <td>${yn(s.pidAlive, true)}</td>
+          <td>${yn(s.socketDialable, true)}</td>
+          <td>${state}</td>
+          <td>${(s.drift || []).join(", ") || "-"}</td>
+        </tr>`);
+      }
+      for (const ch of snap.children || []) {
+        rows.push(`<tr>
+          <td>child:${ch.sidecar}</td>
+          <td>${ch.pid}</td>
+          <td>${yn(ch.alive, true)}</td>
+          <td>-</td>
+          <td>${ch.state}</td>
+          <td>${ch.cmd}</td>
+        </tr>`);
+      }
+      document.getElementById("rows").innerHTML = rows.join("");
+      const an = snap.anomalies || [];
+      document.getElementById("anomalies").textContent =
+        an.length ? an.join("\n") : "";
+    }
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

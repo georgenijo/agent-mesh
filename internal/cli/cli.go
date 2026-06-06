@@ -59,6 +59,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runNote(rest, stdout, stderr)
 	case "context":
 		return runContext(rest, stdout, stderr)
+	case "ops":
+		return runOps(rest, stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "mesh", Version)
 		return ExitOK
@@ -84,6 +86,7 @@ commands:
   leave   deregister and stop this agent's sidecar
   who     show the roster (presence + latest status)
   status  "<text>"   post what this agent is doing now
+  ops     runtime health snapshot (coordinator, sidecars, drift)
 
   claim    <path> [--repo R]   take the CAS lock on a path (exit 6 if lost)
   release  <path> [--repo R]   release a claim this agent holds

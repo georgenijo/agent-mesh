@@ -13,6 +13,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/autostart"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
+	"github.com/georgenijo/agent-mesh/internal/observe"
 	"github.com/georgenijo/agent-mesh/internal/socket"
 )
 
@@ -181,6 +182,73 @@ func runWho(args []string, stdout, stderr io.Writer) int {
 		}
 		tw.Flush() //nolint:errcheck
 	})
+}
+
+func runOps(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ops", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	snap, err := observe.Collect(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	if *jsonOut {
+		b, err := json.Marshal(snap)
+		if err != nil {
+			fmt.Fprintln(stderr, "mesh:", err)
+			return ExitError
+		}
+		fmt.Fprintln(stdout, string(b))
+		return ExitOK
+	}
+	fmt.Fprintf(stdout, "mesh runtime (%s)\n", snap.Meta.MeshDir)
+	c := snap.Coordinator
+	fmt.Fprintf(stdout, "coordinator: pid=%d alive=%t bus=%t lock=%t\n",
+		c.PID, c.PIDAlive, c.BusDialable, c.LockPresent)
+	if len(snap.Sidecars) == 0 {
+		fmt.Fprintln(stdout, "sidecars: none")
+	} else {
+		tw := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "SIDECAR\tPID\tALIVE\tSOCKET\tSTATE\tDRIFT")
+		for _, sc := range snap.Sidecars {
+			state := "-"
+			if sc.Registry != nil {
+				state = string(sc.Registry.State)
+			}
+			drift := "-"
+			if len(sc.Drift) > 0 {
+				drift = joinComma(sc.Drift)
+			}
+			fmt.Fprintf(tw, "%s\t%d\t%t\t%t\t%s\t%s\n",
+				sc.Name, sc.PID, sc.PIDAlive, sc.SocketDialable, state, drift)
+		}
+		tw.Flush() //nolint:errcheck
+	}
+	if len(snap.Children) > 0 {
+		tw := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "CHILD\tSIDECAR\tPID\tALIVE\tSTATE\tCMD")
+		for _, ch := range snap.Children {
+			fmt.Fprintf(tw, "%d\t%s\t%d\t%t\t%s\t%s\n",
+				ch.PID, ch.Sidecar, ch.PID, ch.Alive, ch.State, ch.Cmd)
+		}
+		tw.Flush() //nolint:errcheck
+	}
+	if len(snap.Anomalies) > 0 {
+		fmt.Fprintln(stdout, "anomalies:")
+		for _, a := range snap.Anomalies {
+			fmt.Fprintf(stdout, "  - %s\n", a)
+		}
+	}
+	return ExitOK
 }
 
 func joinComma(items []string) string {

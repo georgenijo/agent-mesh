@@ -6,6 +6,30 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: P4 dashboard tap ships as SSE on the existing /events contract, present-day events only
+
+**Decision:** The #31 production dashboard (`web/`, served read-only at `/ui/` by the dashboard server) consumes the existing SSE `/events` contract — data-only frames discriminated by the JSON `type` field (`event` | `roster` | `claims`) — not the WebSocket transport the issue text named. Scope is what the mesh emits today: presence roster, status, heartbeats, announce, claims (rebuilt wholesale from the authoritative claims-KV snapshot frame, never derived from claim/leave envelopes), and blackboard notes. P2 tickets and P3 experts/workers get honest placeholder panels that populate only from real envelopes — nothing invented.
+
+**Rationale:** Go's stdlib has no WebSocket and the zero-dependency constraint is locked; the P0 observer's SSE contract is already proven and now contract-tested (`TestSSEPresenceLifecycleContract`). Rendering ticket/expert lifecycles before P2/P3 emit traffic would mean fake data. #31's WebSocket + ticket-lifecycle acceptance items are deferred to when P2/P3 land, not dropped.
+
+**Status:** active
+
+**References:** web/, internal/dashboard/webui.go, #31, #40
+
+---
+
+## 2026-06-05: #27 persistent experts land as a prep slice — internal/runtime proxy only, wiring waits for P2
+
+**Decision:** The resident-expert runtime ships as the self-contained `internal/runtime` package: a Proxy supervising one long-lived `claude -p --input-format stream-json --output-format stream-json --verbose` child (held-open stdin, typed events tolerant of unknown shapes, one in-flight ask, typed child-death errors, `--resume` as recovery-only, bounded close). No sidecar wiring, no role routing — those wait for P2's #19/#20. One adopted hardening beyond the locked resident-process decision: a result whose success discriminators (`subtype`/`is_error`/`api_error_status`) are type-degraded is never a success, and a cancelled ask's late result is dropped (stream-json results carry no correlation id) so it cannot misroute the next ask.
+
+**Rationale:** #27's full acceptance depends on role routing and inbox caching that don't exist yet; building the supervision boundary now, against the spike-verified contract and a fake re-exec child, de-risks the hard part (process lifecycle under failure) without coupling to unbuilt P2 machinery. Package name shadows Go's `runtime` — importers alias; noted in the package doc.
+
+**Status:** active
+
+**References:** internal/runtime, docs/spikes/M0-feasibility.md, #27, #19, #20; extends 2026-06-05 "Persistent experts = a resident stream-json claude process"
+
+---
+
 ## 2026-06-05: Claim paths are canonicalized repo-relative at the sidecar
 
 **Decision:** A claim path is folded to its repo-relative form before it becomes a claim key: the sidecar relativizes an absolute in-tree path against the agent's `card.CWD`, then `claim.NormalizePath` cleans it (slash form, reject `..` escapes), and `Key(repo, path)` joins the parts with a NUL byte. `NormalizePath` itself does not relativize (it has no repo root); that one job lives at the sidecar, which does. Absolute paths outside the repo root are kept absolute (no common base to fold against).

@@ -71,6 +71,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runInbox(rest, stdout, stderr)
 	case "answer":
 		return runAnswer(rest, stdout, stderr)
+	case "expert":
+		return runExpert(rest, stdout, stderr)
 	case "ops":
 		return runOps(rest, stdout, stderr)
 	case "version":
@@ -116,6 +118,9 @@ commands:
   poll     <ticket>             exit 3 until answered, 4 if missing
   inbox    [--limit N] [--watch] list accepted questions for this agent
   answer   <ticket> "<answer>"  answer an accepted ticket
+
+  expert serve --name <id> --role <role> [--caps a,b] [--repo R] [--model M]
+          run a resident expert that auto-answers role-routed asks (foreground)
 
 common flags:
   --json            machine-readable output

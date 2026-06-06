@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-06: Expert responder loop = role-owning sidecar + inbox-draining loop over the runtime proxy (first non-manual P2 slice of #27)
+
+**Decision:** An *expert* is an ordinary role-owning sidecar plus a responder loop, not a new agent type. `Sidecar.ServeExpert` (`internal/sidecar/expert.go`) polls the agent's own already-accepted inbox — the existing role-ask subscription auto-accepts role-routed tickets via `handleIncomingAsk`, so the loop only *drains* what is accepted — and answers each ticket through `internal/runtime.Proxy`, the resident stream-json child. The child binary is swappable via `MESH_EXPERT_CLI` (default `claude`), so CI fakes the LLM (`test/e2e/fakeclaude`) while production drives real `claude`. Answers commit through the one existing path (`recordAndPublishAnswer`, factored out of `handleAnswer`): **tickets KV stays the sole authority, no coordinator answer-payload path, no fake-success** — only a `runtime.TurnAnswered` writes an answer; lost/error turns are skipped and poison tickets are tracked in-memory and left to TTL expiry (no new FSM state). Surface: `meshd --mode expert` (the daemon, autostarts the coordinator like `--mode sidecar`) plus a thin foreground `mesh expert serve` that execs it with the `--mesh-dir` ownership marker so `mesh ops down` tears it (and its tracked runtime child) down. Best-effort crash recovery: on `ErrProcessExited` the loop's runtime fn tries `proxy.Restart` (`--resume`) once.
+
+**Rationale:** This is the smallest honest dogfood after P2 — the manual `mesh inbox`/`mesh answer` step was the only thing between a routed ask and an automatic answer, and the auto-accept + single answer path already existed, so the slice is a loop plus a swappable runtime binary, not new machinery. Keeping the loop in `internal/sidecar` (where `ticketStore`/`publishTicket`/`TrackChild` live) behind an `ExpertFunc` seam keeps `internal/runtime` out of the sidecar package (no import cycle) and the runtime wiring in `cmd/meshd`. Faking only the LLM binary — not the proxy — exercises the real stream-json process boundary end-to-end in CI without an API key, honoring never-scrape-prose / one-authority / async-never-block.
+
+**Status:** active
+
+**References:** internal/sidecar/expert.go, internal/sidecar/verbs_p2.go (recordAndPublishAnswer), cmd/meshd/main.go (runExpert), internal/cli/expert.go, internal/config (MESH_EXPERT_CLI), internal/runtime, test/e2e/expert_test.go, test/e2e/fakeclaude; #27, #19, #20; extends 2026-06-05 "#27 persistent experts land as a prep slice" and "Persistent experts = a resident stream-json claude process"
+
+---
+
 ## 2026-06-06: Claim loss is surfaced to the holder, never silent; no restart grace window
 
 **Decision:** Resolve #43: keep one-CAS-winner, lost-means-lost semantics — a rival that claims in the coordinator-restart gap legitimately wins, and there is no restart grace window. What changes: a holder whose claim is lost on **any** path (re-establishment loses after a coordinator bounce, eviction reclaim, any future race) must be **notified** — the sidecar emits a claim-lost event surfaced to the agent (hook-consumable and visible via its status surface), instead of silently dropping the claim from the held set. `TestClaimsReestablishedAfterCoordinatorRestart` is realigned to the documented semantics: it asserts the holder *observes the loss*, not that it always wins re-establishment.

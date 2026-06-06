@@ -242,12 +242,26 @@ func (s *Sidecar) handleAnswer(req socket.Request) socket.Response {
 	if !joined {
 		return socket.Fail(socket.CodeNotJoined, "agent has not joined")
 	}
-	rec, err := s.ticketStore().Answer(args.Ticket, id, args.Answer)
+	rec, err := s.recordAndPublishAnswer(id, args.Ticket, args.Answer)
 	if err != nil {
 		if errors.Is(err, ticket.ErrNoSuchTicket) {
 			return socket.OKData(meshapi.AnswerVerbResult{Ticket: args.Ticket, Result: envelope.AskNoSuchTicket})
 		}
 		return socket.Fail(socket.CodeBadRequest, err.Error())
+	}
+	return socket.OKData(meshapi.AnswerVerbResult{Ticket: rec.Ticket, Result: envelope.AskAnswered, State: rec.State})
+}
+
+// recordAndPublishAnswer commits an answer to the tickets KV (the one
+// authority) and publishes the derived KindAnswer envelope back to the asker's
+// sidecar. It is the single answer path shared by the `answer` verb and the
+// expert responder loop (expert.go): a typed CAS-guarded transition, never a
+// coordinator-mediated answer payload. ticket.Store.Answer enforces
+// AcceptedBy==id, so an agent can only answer what it accepted.
+func (s *Sidecar) recordAndPublishAnswer(id, ticketID, answer string) (ticket.Record, error) {
+	rec, err := s.ticketStore().Answer(ticketID, id, answer)
+	if err != nil {
+		return ticket.Record{}, err
 	}
 	s.publishTicket(rec.Ticket, envelope.TicketAnswered, id, "")
 	env, err := envelope.New(envelope.KindAnswer, id, envelope.SubjectAnswer(rec.Ticket),
@@ -256,7 +270,7 @@ func (s *Sidecar) handleAnswer(req socket.Request) socket.Response {
 		env.To = rec.Asker
 		_ = s.bus.Publish(env)
 	}
-	return socket.OKData(meshapi.AnswerVerbResult{Ticket: rec.Ticket, Result: envelope.AskAnswered, State: rec.State})
+	return rec, nil
 }
 
 func pollAnswered(rec ticket.Record) meshapi.PollResult {

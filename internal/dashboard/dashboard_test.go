@@ -157,8 +157,9 @@ func TestSSEStreamsLiveStatusEvent(t *testing.T) {
 // TestSSEPresenceLifecycleContract locks the P0 observer contract: the full
 // two-tier lifecycle (live → away → evicted) asserted over the HTTP stream a
 // browser actually consumes, not via KV reads. The stream uses data-only SSE
-// frames — the discriminator is the JSON `type` field ("event" | "roster"),
-// never an SSE `event:` name.
+// frames — the discriminator is the JSON `type` field ("event" | "roster" |
+// "claims", the last added by P1's claims snapshot), never an SSE `event:`
+// name.
 func TestSSEPresenceLifecycleContract(t *testing.T) {
 	cfg, cli, d := startStackEvery(t, 25*time.Millisecond)
 	const id = "lifer"
@@ -206,8 +207,8 @@ func TestSSEPresenceLifecycleContract(t *testing.T) {
 				scanErr <- fmt.Errorf("frame payload is not JSON: %v", err)
 				return
 			}
-			if f.Type != "event" && f.Type != "roster" {
-				scanErr <- fmt.Errorf("frame type %q, want \"event\" or \"roster\"", f.Type)
+			if f.Type != "event" && f.Type != "roster" && f.Type != "claims" {
+				scanErr <- fmt.Errorf("frame type %q, want \"event\", \"roster\" or \"claims\"", f.Type)
 				return
 			}
 			wantBlank = true

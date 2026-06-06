@@ -17,6 +17,7 @@ import (
 
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/observe"
 )
 
 // coordinator is a restartable coordinator process handle. The P0 helper
@@ -254,20 +255,42 @@ func TestP1AcceptanceFlow(t *testing.T) {
 
 	// Hard-restart the coordinator: registry rebuilds from re-registration,
 	// notes must come back from $MESH_DIR/streams (disk persistence), and the
-	// winner's held claim must be re-taken so a peer still loses to it.
+	// pre-restart holder either re-takes its held claim or observes that it
+	// legitimately lost to a peer in the restart gap (#43).
 	coord.restart()
 	assertContextHasNote("after restart")
 
-	m.eventually(5*time.Second, "held claim re-established after restart", func() bool {
+	m.eventually(5*time.Second, "held claim re-established or loss observed after restart", func() bool {
 		code, res := m.claimJSON("late", "src/bar.go", "demo")
 		if code == 6 && res.Owner == winner.agent {
 			return true // winner's claim survived the bounce
 		}
 		if code == 0 {
-			// "late" won — not yet re-established (or never will be). Release
-			// so a retry can still observe re-establishment if it was slow.
-			m.run("release", "src/bar.go", "--repo", "demo", "--socket", m.agentSocket("late"))
+			return m.sawClaimLoss(winner.agent, "src/bar.go", "late")
 		}
 		return false
 	})
+}
+
+func (m *mesh) sawClaimLoss(agent, path, owner string) bool {
+	m.t.Helper()
+	code, stdout, _ := m.run("ops", "--json")
+	if code != 0 {
+		return false
+	}
+	var snap observe.Snapshot
+	if json.Unmarshal([]byte(stdout), &snap) != nil {
+		return false
+	}
+	for _, sc := range snap.Sidecars {
+		if sc.Name != agent {
+			continue
+		}
+		for _, loss := range sc.ClaimLosses {
+			if loss.Path == path && loss.Owner == owner && loss.Reason == "reestablish_lost" {
+				return true
+			}
+		}
+	}
+	return false
 }

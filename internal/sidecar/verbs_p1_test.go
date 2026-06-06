@@ -80,11 +80,11 @@ func TestClaimAbsAndRelCollide(t *testing.T) {
 	}
 }
 
-// TestClaimsReestablishedAfterCoordinatorRestart is the F5 regression: the
-// claims KV is in-memory in the coordinator, so a restart wipes it. The
-// sidecar must re-take its held claims on reconnect (as presence re-registers)
-// — otherwise a held lock silently vanishes and another agent can grab the
-// file the first agent is still editing.
+// TestClaimsReestablishedAfterCoordinatorRestart is the F5/#43 regression:
+// the claims KV is in-memory in the coordinator, so a restart wipes it. A
+// holder may re-take the claim, or a rival may legitimately win in the
+// restart gap. Both are legal; the holder must observe a loss instead of
+// silently forgetting it.
 func TestClaimsReestablishedAfterCoordinatorRestart(t *testing.T) {
 	cfg := fastConfig(t)
 
@@ -109,9 +109,8 @@ func TestClaimsReestablishedAfterCoordinatorRestart(t *testing.T) {
 	}
 	t.Cleanup(coord2.Stop)
 
-	// After the sidecar reconnects and re-establishes, a different agent
-	// claiming the same path must LOSE to the holder. Poll: reconnect +
-	// re-register + re-take take a few backoff cycles.
+	// After reconnect, either the holder re-establishes first, or "other"
+	// wins the restart gap and the holder records an observable loss.
 	other := startSidecarCard(t, cfg, agentcard.Card{Name: "other", Role: "builder", Repo: "demo", CWD: cfg.MeshDir})
 	_ = other
 	deadline := time.Now().Add(5 * time.Second)
@@ -121,13 +120,31 @@ func TestClaimsReestablishedAfterCoordinatorRestart(t *testing.T) {
 			break // holder re-established its claim across the restart
 		}
 		if res.Result == envelope.ClaimClaimed {
-			// "other" won — the holder's claim was NOT re-established. Release
-			// so a retry can observe re-establishment if it was merely slow.
-			do(t, cfg, "other", meshapi.VerbRelease, meshapi.ReleaseArgs{Path: "src/foo.go"})
+			if observedClaimLoss(t, cfg, "holder", "src/foo.go", "other") {
+				break
+			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("holder's claim was not re-established after coordinator restart (last result %q owner %q)", res.Result, res.Owner)
+			t.Fatalf("holder neither re-established nor observed loss after coordinator restart (last result %q owner %q)", res.Result, res.Owner)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func observedClaimLoss(t *testing.T, cfg config.Config, agent, path, owner string) bool {
+	t.Helper()
+	resp := do(t, cfg, agent, meshapi.VerbRuntime, nil)
+	if !resp.OK {
+		t.Fatalf("runtime failed: %+v", resp)
+	}
+	var rt meshapi.RuntimeResult
+	if err := json.Unmarshal(resp.Data, &rt); err != nil {
+		t.Fatal(err)
+	}
+	for _, loss := range rt.ClaimLosses {
+		if loss.Path == path && loss.Owner == owner && loss.Reason == "reestablish_lost" {
+			return true
+		}
+	}
+	return false
 }

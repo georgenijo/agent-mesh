@@ -69,7 +69,8 @@ const (
 
 // Streams (bounded).
 const (
-	StreamAudit = "audit"
+	StreamAudit   = "audit"
+	StreamTickets = "ticket-events"
 )
 
 // StreamNotes is the per-repo durable blackboard stream name.

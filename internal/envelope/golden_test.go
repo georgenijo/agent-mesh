@@ -202,6 +202,7 @@ func TestContractStrings(t *testing.T) {
 		{"BucketClaims", BucketClaims, "claims"},
 		{"BucketTickets", BucketTickets, "tickets"},
 		{"StreamAudit", StreamAudit, "audit"},
+		{"StreamTickets", StreamTickets, "ticket-events"},
 		{"StreamNotes", StreamNotes("demo"), "notes-demo"},
 		// Repo identity.
 		{"DefaultRepo", DefaultRepo, "default"},

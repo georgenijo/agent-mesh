@@ -23,6 +23,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/observe"
 )
 
 var (
@@ -30,11 +31,17 @@ var (
 	meshdBin string
 )
 
+// TestMain delegates to testMain because os.Exit skips deferred cleanup —
+// the direct form leaked one meshbin temp dir per run (issue #34).
 func TestMain(m *testing.M) {
+	os.Exit(testMain(m))
+}
+
+func testMain(m *testing.M) int {
 	binDir, err := os.MkdirTemp("", "meshbin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(binDir)
 
@@ -48,10 +55,10 @@ func TestMain(m *testing.M) {
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n", pkg, err)
-			os.Exit(1)
+			return 1
 		}
 	}
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 // mesh is one test mesh: an isolated MESH_DIR with fast presence timings.
@@ -80,7 +87,7 @@ func newMesh(t *testing.T) *mesh {
 		),
 	}
 	t.Cleanup(func() {
-		m.killSidecars()
+		m.teardown()
 		m.dumpLogsOnFailure()
 		os.RemoveAll(dir)
 	})
@@ -113,7 +120,9 @@ func (m *mesh) startCoordinator() {
 	if err != nil {
 		m.t.Fatal(err)
 	}
-	cmd := exec.Command(meshdBin, "--mode", "coordinator")
+	// --mesh-dir makes this explicitly-launched coordinator visible to the
+	// ops-plane ownership check (and to the raw-ps ground-truth test).
+	cmd := exec.Command(meshdBin, "--mode", "coordinator", "--mesh-dir", m.dir)
 	cmd.Env = m.env
 	cmd.Stdout, cmd.Stderr = logf, logf
 	if err := cmd.Start(); err != nil {
@@ -200,21 +209,35 @@ func (m *mesh) agentSocket(name string) string {
 	return filepath.Join(m.dir, "agents", name+".sock")
 }
 
-func (m *mesh) killSidecars() {
-	// Best-effort: find sidecar pids via the registry if the bus is alive.
-	cli, err := bus.Dial(filepath.Join(m.dir, "bus.sock"), bus.ClientOptions{DialTimeout: 300 * time.Millisecond})
-	if err != nil {
+// teardown dogfoods the ops plane (issue #35): `mesh ops down` replaces the
+// old registry-dependent killSidecars, which silently leaked sidecars when
+// the bus was already dead (issue #33). The zero-alive assertion goes through
+// `mesh ops --json`; TestOpsDownGroundTruthPS guards the circularity.
+func (m *mesh) teardown() {
+	if code, stdout, stderr := m.run("ops", "down", "--json", "--timeout", "2s"); code != 0 {
+		m.t.Errorf("ops down: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	code, stdout, stderr := m.run("ops", "--json")
+	if code != 0 {
+		m.t.Errorf("ops snapshot after down: exit %d\nstderr: %s", code, stderr)
 		return
 	}
-	defer cli.Close()
-	keys, err := cli.KVList(envelope.BucketRegistry)
-	if err != nil {
+	var snap observe.Snapshot
+	if err := json.Unmarshal([]byte(stdout), &snap); err != nil {
+		m.t.Errorf("ops --json unparseable: %v\n%s", err, stdout)
 		return
 	}
-	for _, kv := range keys {
-		var rec agentcard.RegistryRecord
-		if json.Unmarshal(kv.Value, &rec) == nil && rec.Card.PID > 0 {
-			syscall.Kill(rec.Card.PID, syscall.SIGKILL) //nolint:errcheck
+	if snap.Coordinator.PIDAlive {
+		m.t.Errorf("coordinator pid %d still alive after ops down", snap.Coordinator.PID)
+	}
+	for _, sc := range snap.Sidecars {
+		if sc.PIDAlive {
+			m.t.Errorf("sidecar %s pid %d still alive after ops down", sc.Name, sc.PID)
+		}
+	}
+	for _, ch := range snap.Children {
+		if ch.Alive {
+			m.t.Errorf("child %d (%s) still alive after ops down", ch.PID, ch.Cmd)
 		}
 	}
 }

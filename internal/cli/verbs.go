@@ -190,6 +190,8 @@ func runOps(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "doctor":
 			return runOpsDoctor(args[1:], stdout, stderr)
+		case "down":
+			return runOpsDown(args[1:], stdout, stderr)
 		}
 	}
 	fs := flag.NewFlagSet("ops", flag.ContinueOnError)

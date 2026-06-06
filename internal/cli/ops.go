@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"text/tabwriter"
+	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/observe"
@@ -63,6 +64,60 @@ func runOpsDoctor(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if rep.Verdict != ops.VerdictClean {
+		return ExitDirty
+	}
+	return ExitOK
+}
+
+func runOpsDown(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ops down", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "JSON output")
+	meshDir := fs.String("mesh", "", "mesh directory to tear down (default $MESH_DIR)")
+	timeout := fs.Duration("timeout", 5*time.Second, "SIGTERM grace before SIGKILL escalation")
+	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	if *meshDir != "" {
+		cfg.MeshDir = *meshDir
+	}
+	rep, err := ops.Down(cfg, ops.DownOptions{TermTimeout: *timeout})
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	if *jsonOut {
+		b, err := json.Marshal(rep)
+		if err != nil {
+			fmt.Fprintln(stderr, "mesh:", err)
+			return ExitError
+		}
+		fmt.Fprintln(stdout, string(b))
+	} else {
+		verdict := "clean"
+		if !rep.Clean {
+			verdict = "dirty"
+		}
+		fmt.Fprintf(stdout, "mesh down (%s): %s\n", rep.Meta.MeshDir, verdict)
+		if len(rep.Targets) > 0 {
+			tw := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "PID\tKIND\tNAME\tOUTCOME\tDETAIL")
+			for _, t := range rep.Targets {
+				detail := t.Detail
+				if detail == "" {
+					detail = "-"
+				}
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", t.PID, t.Kind, t.Name, t.Outcome, detail)
+			}
+			tw.Flush() //nolint:errcheck
+		}
+	}
+	if !rep.Clean {
 		return ExitDirty
 	}
 	return ExitOK

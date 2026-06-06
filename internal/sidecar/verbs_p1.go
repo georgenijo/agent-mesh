@@ -68,6 +68,17 @@ func (s *Sidecar) handleClaim(req socket.Request) socket.Response {
 	if out.Result == envelope.ClaimError {
 		return socket.Fail(socket.CodeUnavailable, fmt.Sprintf("claim store: %v", out.Err))
 	}
+
+	// Fire-and-forget observability event. The KV record is the lock — the
+	// one authority; this only lets taps watch contention. A publish failure
+	// must never turn a decided claim into an error.
+	if env, err := envelope.New(envelope.KindClaim, id, envelope.SubjectClaim(repo),
+		&envelope.ClaimPayload{ID: id, Path: norm, Repo: repo, Result: out.Result}); err == nil {
+		if perr := s.bus.Publish(env); perr != nil {
+			s.log.Debug("claim event publish failed", "err", perr)
+		}
+	}
+
 	return socket.OKData(meshapi.ClaimVerbResult{
 		Result: out.Result,
 		Path:   norm,

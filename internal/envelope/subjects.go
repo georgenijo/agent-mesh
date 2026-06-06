@@ -24,12 +24,18 @@ func SubjectAnnounce(repo string) string { return "mesh.announce." + repo }
 // consumers see this one.
 func SubjectNote(repo string) string { return "mesh.note." + repo }
 
+// SubjectClaim names the observability event published after a claim
+// attempt. The claims KV record is the lock — the one authority; this event
+// only lets taps (dashboard, e2e) watch contention without polling the KV.
+func SubjectClaim(repo string) string { return "mesh.claim." + repo }
+
 // Subscription patterns.
 const (
 	PatternAll        = "mesh.>"
 	PatternHeartbeats = "mesh.heartbeat.>"
 	PatternStatuses   = "mesh.status.>"
 	PatternAnnounces  = "mesh.announce.>"
+	PatternClaims     = "mesh.claim.>"
 )
 
 // KV buckets. One authority per fact: the registry bucket is the single

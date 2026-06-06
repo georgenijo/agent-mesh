@@ -31,14 +31,16 @@ import (
 //go:embed dashboard.html
 var indexHTML []byte
 
-// rosterInterval is how often the registry snapshot is refreshed and pushed.
-const rosterInterval = 1 * time.Second
-
 // Dashboard serves the live observer UI.
 type Dashboard struct {
 	cfg  config.Config
 	addr string
 	log  *slog.Logger
+
+	// rosterEvery is how often the registry snapshot is refreshed and
+	// pushed. New sets the production default; white-box tests tighten it
+	// before Start so lifecycle transitions land between ticks.
+	rosterEvery time.Duration
 
 	bus     *bus.Client
 	httpSrv *http.Server
@@ -65,12 +67,13 @@ func New(cfg config.Config, addr string, log *slog.Logger) *Dashboard {
 		log = slog.Default()
 	}
 	return &Dashboard{
-		cfg:     cfg,
-		addr:    addr,
-		log:     log,
-		clients: make(map[chan []byte]struct{}),
-		noteSeq: make(map[string]uint64),
-		stop:    make(chan struct{}),
+		cfg:         cfg,
+		addr:        addr,
+		log:         log,
+		rosterEvery: 1 * time.Second,
+		clients:     make(map[chan []byte]struct{}),
+		noteSeq:     make(map[string]uint64),
+		stop:        make(chan struct{}),
 	}
 }
 
@@ -94,6 +97,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/roster", d.serveRoster)
 	mux.HandleFunc("GET /api/claims", d.serveClaims)
 	mux.HandleFunc("GET /api/notes", d.serveNotes)
+	mountWebUI(mux)
 
 	ln, err := net.Listen("tcp", d.addr)
 	if err != nil {
@@ -155,7 +159,7 @@ func (d *Dashboard) onEvent(env envelope.Envelope) {
 // the dashboard a pure reader of the one authority.
 func (d *Dashboard) rosterLoop() {
 	defer d.wg.Done()
-	ticker := time.NewTicker(rosterInterval)
+	ticker := time.NewTicker(d.rosterEvery)
 	defer ticker.Stop()
 	for {
 		select {

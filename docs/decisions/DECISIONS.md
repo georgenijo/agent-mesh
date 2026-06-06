@@ -30,6 +30,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: Ops plane gains scoped actuator verbs (doctor / down / clean)
+
+**Decision:** Extend `mesh ops` beyond the read-only snapshot with three actuator verbs: **`mesh ops doctor`** (classify runtime state — healthy / orphan / stale-socket / dead-pidfile; nonzero exit when dirty), **`mesh ops down [--mesh DIR | --all]`** (graceful fleet teardown: SIGTERM the pidfile∪registry union, SIGKILL escalation after a timeout), **`mesh ops clean`** (remove stale sockets/pidfiles under MESH_DIR — mesh-owned paths only, never roams $TMPDIR). Kills are scoped by **ownership** (pidfiles + argv-matched MESH_DIR), never by process-name match. The e2e harness dogfoods `ops down` + `ops --json` for its zero-leak assertion, guarded by one raw-`ps` ground-truth test. Scope stops at inspect + teardown + janitor — no watch mode, no restart/respawn; anything that *starts* processes belongs to the coordinator (P3 scheduler).
+
+**Rationale:** Dogfood proof from a live session: an agent diagnosing leaked e2e sidecars (#33, #34) had to fall back to raw `ps`/`pkill`/`rm` — the exact unscoped, untyped surface the product thesis ("CLI at the edge is the agent API") exists to replace. Ownership-scoped kills are required because multiple meshes coexist per machine (every e2e run is one); a name-based `pkill` nukes them all. A nonzero `doctor` exit extends the existing exit-code taxonomy so agents and CI gate cheaply.
+
+**Status:** active
+
+**References:** internal/observe, #33, #34; extends 2026-06-05 "Runtime observability = separate ops plane"
+
+---
+
 ## 2026-06-05: Runtime observability = separate ops plane (`mesh ops` + `meshd --mode observe`)
 
 **Decision:** Add a dedicated runtime observability layer in `internal/observe`, separate from the product dashboard. Primary surface is **`mesh ops [--json]`** (no join required); secondary surface is **`meshd --mode observe`** on `127.0.0.1:8739` (`GET /api/snapshot` + minimal HTML). The collector compares filesystem facts (coordinator.pid, bus.sock, agent sockets, logs) against the registry KV and sidecar `runtime` IPC. Child agent CLI PIDs are reported by the sidecar (`TrackChild`/`MarkChildExited`), not OS process-tree scraping.

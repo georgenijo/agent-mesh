@@ -13,10 +13,12 @@ import (
 type ArtifactKind string
 
 const (
-	ArtifactAgentSocket  ArtifactKind = "agent_socket"
-	ArtifactAgentPidfile ArtifactKind = "agent_pidfile"
-	ArtifactBusSocket    ArtifactKind = "bus_socket"
-	ArtifactCoordPidfile ArtifactKind = "coordinator_pidfile"
+	ArtifactAgentSocket     ArtifactKind = "agent_socket"
+	ArtifactAgentPidfile    ArtifactKind = "agent_pidfile"
+	ArtifactBusSocket       ArtifactKind = "bus_socket"
+	ArtifactCoordPidfile    ArtifactKind = "coordinator_pidfile"
+	ArtifactServicePidfile  ArtifactKind = "service_pidfile"
+	ArtifactServiceAddrFile ArtifactKind = "service_addrfile"
 )
 
 // CleanAction is the per-artifact janitor outcome.
@@ -126,6 +128,41 @@ func Clean(cfg config.Config) (CleanReport, error) {
 			entry.Action, entry.Reason = unlink(cfg.CoordinatorPID())
 		}
 		rep.Entries = append(rep.Entries, entry)
+	}
+
+	// Service run files (dashboard/observe). The pidfile is the liveness
+	// authority for BOTH files: never TCP-dial to decide keep/remove — a
+	// foreign listener on the recorded port must not preserve our residue.
+	// Lock files are left alone, same rationale as coordinator.lock.
+	for _, svc := range []struct{ pidFile, addrFile string }{
+		{cfg.DashboardPID(), cfg.DashboardAddrFile()},
+		{cfg.ObservePID(), cfg.ObserveAddrFile()},
+	} {
+		alive := pidfileAlive(svc.pidFile)
+		if _, err := os.Lstat(svc.pidFile); err == nil {
+			entry := CleanEntry{Path: svc.pidFile, Kind: ArtifactServicePidfile}
+			switch {
+			case !plainArtifact(svc.pidFile, false):
+				entry.Action, entry.Reason = CleanSkipped, "not a regular file"
+			case alive:
+				entry.Action = CleanKeptAlive
+			default:
+				entry.Action, entry.Reason = unlink(svc.pidFile)
+			}
+			rep.Entries = append(rep.Entries, entry)
+		}
+		if _, err := os.Lstat(svc.addrFile); err == nil {
+			entry := CleanEntry{Path: svc.addrFile, Kind: ArtifactServiceAddrFile}
+			switch {
+			case !plainArtifact(svc.addrFile, false):
+				entry.Action, entry.Reason = CleanSkipped, "not a regular file"
+			case alive:
+				entry.Action, entry.Reason = CleanKeptAlive, "service pid alive"
+			default:
+				entry.Action, entry.Reason = unlink(svc.addrFile)
+			}
+			rep.Entries = append(rep.Entries, entry)
+		}
 	}
 
 	return rep, nil

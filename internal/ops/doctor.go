@@ -22,10 +22,11 @@ import (
 type HealthState string
 
 const (
-	StateHealthy     HealthState = "healthy"      // all fact sources agree
-	StateOrphan      HealthState = "orphan"       // process alive, registry doesn't know it
-	StateStaleSocket HealthState = "stale_socket" // socket file present, nothing serving it
-	StateDeadPidfile HealthState = "dead_pidfile" // pidfile present, pid dead
+	StateHealthy       HealthState = "healthy"        // all fact sources agree
+	StateOrphan        HealthState = "orphan"         // process alive, registry doesn't know it
+	StateStaleSocket   HealthState = "stale_socket"   // socket file present, nothing serving it
+	StateDeadPidfile   HealthState = "dead_pidfile"   // pidfile present, pid dead
+	StateStaleAddrFile HealthState = "stale_addrfile" // service addr file with no pidfile beside it
 )
 
 // Verdict is the aggregate doctor outcome.
@@ -66,6 +67,11 @@ func Diagnose(snap observe.Snapshot) DoctorReport {
 	if f, ok := diagnoseCoordinator(snap.Coordinator); ok {
 		rep.Findings = append(rep.Findings, f)
 	}
+	for _, svc := range snap.Services {
+		if f, ok := diagnoseService(svc); ok {
+			rep.Findings = append(rep.Findings, f)
+		}
+	}
 	for _, sc := range snap.Sidecars {
 		rep.Findings = append(rep.Findings, diagnoseSidecar(sc))
 	}
@@ -97,6 +103,29 @@ func diagnoseCoordinator(c observe.CoordinatorInfo) (Finding, bool) {
 		f.State = StateOrphan
 		f.Detail = "coordinator process alive but the bus is not dialable"
 	case c.PIDAlive || c.BusDialable:
+		f.State = StateHealthy
+	default:
+		return Finding{}, false // nothing to classify
+	}
+	return f, true
+}
+
+// diagnoseService classifies one optional HTTP daemon (dashboard, observe)
+// from its run files. Absent entirely (collectServices emitted nothing) it
+// never reaches here; first match wins.
+func diagnoseService(s observe.ServiceInfo) (Finding, bool) {
+	f := Finding{Entity: s.Name, PID: s.PID}
+	switch {
+	case s.PIDFile != "" && !s.PIDAlive:
+		f.State = StateDeadPidfile
+		f.Detail = fmt.Sprintf("%s points at a dead process", s.PIDFile)
+	case s.PIDAlive && !s.Dialable:
+		f.State = StateOrphan
+		f.Detail = fmt.Sprintf("%s process alive but %s is not dialable", s.Name, s.Addr)
+	case s.AddrFile != "" && s.PIDFile == "":
+		f.State = StateStaleAddrFile
+		f.Detail = fmt.Sprintf("%s exists with no pidfile beside it", s.AddrFile)
+	case s.PIDAlive && s.Dialable:
 		f.State = StateHealthy
 	default:
 		return Finding{}, false // nothing to classify

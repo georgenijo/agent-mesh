@@ -21,6 +21,7 @@ const (
 	KindCoordinator TargetKind = "coordinator"
 	KindSidecar     TargetKind = "sidecar"
 	KindChild       TargetKind = "child"
+	KindService     TargetKind = "service" // dashboard / observe HTTP daemons
 )
 
 // TargetSource is the fact source a target pid came from.
@@ -183,6 +184,14 @@ func gatherTargets(snap observe.Snapshot) []DownTarget {
 
 	if snap.Coordinator.PID > 0 {
 		add(snap.Coordinator.PID, KindCoordinator, "coordinator", SourcePidfile)
+	}
+	// Services (dashboard/observe) ride the pre-coordinator SIGTERM bucket via
+	// the partition default and are argv-ownership-verified like sidecars —
+	// `mesh up` spawns them with the --mesh-dir marker.
+	for _, svc := range snap.Services {
+		if svc.PID > 0 {
+			add(svc.PID, KindService, svc.Name, SourcePidfile)
+		}
 	}
 	for _, sc := range snap.Sidecars {
 		if sc.PIDFilePID > 0 {

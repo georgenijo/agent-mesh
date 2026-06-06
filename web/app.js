@@ -8,13 +8,14 @@
 //   {"type":"event","envelope":{schemaVersion,kind,id,from,to,subject,ts,payload}}
 //
 // Invariants honoured here (docs/decisions/DECISIONS.md):
-//   - One authority per fact: presence counts are ALWAYS recomputed from the
-//     latest roster frame, never from accumulated UI counters. On reconnect
-//     the next roster frame rebuilds presence wholesale.
-//   - Never fake data: views derived from the event log (claims, notes,
-//     tickets) only show envelopes this page actually observed, and say so
-//     in their empty states. Ticket / expert panels are placeholders until
-//     P2/P3 emit real traffic — they render nothing invented.
+//   - One authority per fact: presence is ALWAYS rebuilt from the latest
+//     roster frame and held claims from the latest claims-KV snapshot frame,
+//     never from accumulated UI counters or event-derived state. On
+//     reconnect the next frames rebuild both wholesale.
+//   - Never fake data: views derived from the event log (notes, tickets)
+//     only show envelopes this page actually observed, and say so in their
+//     empty states. Ticket / expert panels are placeholders until P2/P3
+//     emit real traffic — they render nothing invented.
 //   - Read-only: this script issues no mutating request; its only server
 //     interaction is the EventSource GET.
 "use strict";
@@ -43,9 +44,6 @@ const KIND_COLOR = {
   other: "#8a98aa",
 };
 
-// Claim results from internal/envelope/results.go.
-const CLAIM_CLAIMED = "claimed";
-
 const MAX_EVENTS = 500; // raw log ring buffer
 const MAX_NOTES = 100;
 const MAX_TICKETS = 100;
@@ -60,7 +58,7 @@ const ROSTER_STALE_MS = 3500; // server pushes a roster frame every 1s
 const state = {
   connected: false,
   everConnected: false,
-  reconnectNotice: false, // claims view was reset after a dropped connection
+  claimsSnapshotted: false, // first authoritative claims frame has arrived
   agents: [], // latest roster frame verbatim — the one presence authority
   rosterAt: 0, // ms clock of the last roster frame
   events: [], // raw envelope log, oldest first
@@ -141,6 +139,25 @@ function onRoster(agents) {
   scheduleRender();
 }
 
+// onClaims replaces the held-claims view wholesale from the dashboard's
+// authoritative claims-KV snapshot frame (one source of truth: the claims
+// bucket; this view is never derived from claim/leave envelopes).
+function onClaims(held) {
+  if (!Array.isArray(held)) return;
+  state.claims.clear();
+  for (const h of held) {
+    if (!h || !h.path) continue;
+    state.claims.set(claimKey(h), {
+      holder: h.agent || "",
+      path: h.path,
+      repo: h.repo || "",
+      ts: h.ts,
+    });
+  }
+  state.claimsSnapshotted = true;
+  scheduleRender();
+}
+
 function onEnvelope(env) {
   if (!env || typeof env !== "object" || !env.kind) return;
   state.events.push(env);
@@ -160,31 +177,11 @@ function claimKey(p) {
 function deriveFromEnvelope(env) {
   const p = env.payload || {};
   switch (env.kind) {
-    case "claim":
-      // Only a typed "claimed" result is a held claim; "lost"/"error"
-      // attempts stay in the log but never appear as held.
-      if (p.path && p.result === CLAIM_CLAIMED) {
-        state.claims.set(claimKey(p), {
-          holder: p.id || env.from || "",
-          path: p.path,
-          repo: p.repo || "",
-          ts: env.ts,
-        });
-      }
-      break;
-    case "leave":
-      // A departed holder — graceful or evicted — no longer holds claims:
-      // claims are TTL leases renewed by the holder's sidecar heartbeat
-      // (TTL-lease decision: reclaim-on-death), so they cannot outlive the
-      // holder's presence. There is no release kind on the wire today; a
-      // graceful-release event shape is P1 work, and held rows otherwise
-      // persist until their holder leaves.
-      if (p.id) {
-        for (const [key, claim] of state.claims) {
-          if (claim.holder === p.id) state.claims.delete(key);
-        }
-      }
-      break;
+    // Claim and leave envelopes render in the event stream and animate on
+    // the stage, but the held-claims view is NOT derived from them: the
+    // dashboard pushes an authoritative claims-KV snapshot frame
+    // (type:"claims") and onClaims replaces the view wholesale. One
+    // authority per fact.
     case "note":
       state.notes.unshift({ from: env.from || "", decision: p.decision || "", repo: p.repo || "", ts: env.ts });
       if (state.notes.length > MAX_NOTES) state.notes.pop();
@@ -241,14 +238,9 @@ function connect() {
   const es = new EventSource("/events");
 
   es.onopen = () => {
-    if (state.everConnected) {
-      // Reconnected: the next roster frame is authoritative for presence.
-      // Held claims were derived from events and may have missed claim or
-      // leave traffic while disconnected — reset rather than show
-      // possibly-stale locks.
-      state.claims.clear();
-      state.reconnectNotice = true;
-    }
+    // Reconnects self-heal: the next roster frame is authoritative for
+    // presence and the next claims frame replaces the held-claims view
+    // wholesale, so nothing here needs resetting.
     state.everConnected = true;
     setConnected(true, "live");
     scheduleRender();
@@ -263,6 +255,7 @@ function connect() {
     }
     if (msg.type === "roster") onRoster(msg.agents);
     else if (msg.type === "event") onEnvelope(msg.envelope);
+    else if (msg.type === "claims") onClaims(msg.claims);
   };
 
   es.onerror = () => {
@@ -598,16 +591,11 @@ function renderAgents() {
 }
 
 function renderClaims() {
-  const notice = byId("claimsNotice");
-  if (state.reconnectNotice) {
-    notice.hidden = false;
-    notice.textContent = "Reconnected: held-claims view was reset and is re-derived from events since reconnect (claim and leave traffic during the gap may have been missed). The roster above is authoritative for presence.";
-  } else {
-    notice.hidden = true;
-  }
   const list = byId("claimList");
   if (!state.claims.size) {
-    list.innerHTML = '<div class="empty">No held claims observed.<br>Claims are derived from claim and leave envelopes seen since this page connected — there is no snapshot of earlier claims.</div>';
+    list.innerHTML = state.claimsSnapshotted
+      ? '<div class="empty">No held claims.</div>'
+      : '<div class="empty">Waiting for the claims snapshot…</div>';
     return;
   }
   const rows = Array.from(state.claims.values()).sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));

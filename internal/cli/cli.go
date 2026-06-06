@@ -49,6 +49,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runWho(rest, stdout, stderr)
 	case "status":
 		return runStatus(rest, stdout, stderr)
+	case "claim":
+		return runClaim(rest, stdout, stderr)
+	case "release":
+		return runRelease(rest, stdout, stderr)
+	case "announce":
+		return runAnnounce(rest, stdout, stderr)
+	case "note":
+		return runNote(rest, stdout, stderr)
+	case "context":
+		return runContext(rest, stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "mesh", Version)
 		return ExitOK
@@ -75,12 +85,19 @@ commands:
   who     show the roster (presence + latest status)
   status  "<text>"   post what this agent is doing now
 
+  claim    <path> [--repo R]   take the CAS lock on a path (exit 6 if lost)
+  release  <path> [--repo R]   release a claim this agent holds
+  announce "<intent>" [--paths a,b] [--repo R]   broadcast advisory intent
+  note     "<text>" [--repo R] [--kind K] [--ticket T]   append to blackboard
+  context  [--repo R]          replay the repo's blackboard history
+
 common flags:
   --json            machine-readable output
   --socket <path>   sidecar socket (default: $MESH_SOCKET, else the single
                     socket under $MESH_DIR/agents)
 
-exit codes: 0 ok · 1 error · 2 usage · 3 no-answer-yet · 4 no-such-ticket · 5 not-joined
+exit codes: 0 ok · 1 error · 2 usage · 3 no-answer-yet · 4 no-such-ticket ·
+            5 not-joined · 6 claim-lost
 `)
 }
 

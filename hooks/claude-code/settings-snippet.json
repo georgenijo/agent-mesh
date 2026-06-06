@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/agent-mesh/hooks/claude-code/mesh-claim-guard.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

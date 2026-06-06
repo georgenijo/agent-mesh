@@ -18,6 +18,12 @@ func SubjectHeartbeat(id string) string  { return "mesh.heartbeat." + id }
 func SubjectStatus(id string) string     { return "mesh.status." + id }
 func SubjectAnnounce(repo string) string { return "mesh.announce." + repo }
 
+// SubjectNote names a note envelope's subject. Notes are not published —
+// they are appended to the durable per-repo stream (the one authority for
+// blackboard history) — but every envelope carries a subject, and replay
+// consumers see this one.
+func SubjectNote(repo string) string { return "mesh.note." + repo }
+
 // Subscription patterns.
 const (
 	PatternAll        = "mesh.>"

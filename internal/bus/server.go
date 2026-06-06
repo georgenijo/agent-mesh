@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,6 +34,14 @@ type Options struct {
 	// 256). A consumer that falls this far behind is disconnected rather
 	// than buffered in unbounded RAM (audit Avoid #8).
 	OutboundDepth int
+	// StreamDir, when non-empty, persists every stream to
+	// <StreamDir>/<stream>.jsonl so durable subjects (the blackboard)
+	// survive a coordinator restart; see persist.go for the durability
+	// contract. Empty keeps streams purely in-memory (the P0 behavior).
+	StreamDir string
+	// Logger receives persistence warnings (corrupt lines, disk errors).
+	// nil defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 func (o Options) withDefaults() Options {
@@ -45,6 +54,9 @@ func (o Options) withDefaults() Options {
 	if o.OutboundDepth <= 0 {
 		o.OutboundDepth = 256
 	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
 	return o
 }
 
@@ -53,12 +65,13 @@ type Server struct {
 	path string
 	opts Options
 
-	mu      sync.Mutex
-	ln      net.Listener
-	closed  bool
-	kv      map[string]*kvBucket
-	streams map[string]*streamBuf
-	conns   map[*serverConn]struct{}
+	mu          sync.Mutex
+	ln          net.Listener
+	closed      bool
+	kv          map[string]*kvBucket
+	streams     map[string]*streamBuf
+	streamFiles map[string]*streamFile // on-disk mirrors; unused when StreamDir is empty
+	conns       map[*serverConn]struct{}
 
 	janitorDone chan struct{}
 	wg          sync.WaitGroup
@@ -92,6 +105,7 @@ func NewServer(socketPath string, opts Options) *Server {
 		opts:        opts.withDefaults(),
 		kv:          make(map[string]*kvBucket),
 		streams:     make(map[string]*streamBuf),
+		streamFiles: make(map[string]*streamFile),
 		conns:       make(map[*serverConn]struct{}),
 		janitorDone: make(chan struct{}),
 	}
@@ -102,6 +116,13 @@ func NewServer(socketPath string, opts Options) *Server {
 func (s *Server) Start() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("bus: create socket dir: %w", err)
+	}
+	// Replay persisted streams before binding the socket, so no client can
+	// append while history is still loading.
+	if s.opts.StreamDir != "" {
+		if err := s.loadStreams(); err != nil {
+			return err
+		}
 	}
 	ln, err := listenUnix(s.path)
 	if err != nil {
@@ -170,6 +191,7 @@ func (s *Server) Stop() {
 		c.close()
 	}
 	s.wg.Wait()
+	s.closeStreamFiles()
 	os.Remove(s.path)
 }
 
@@ -490,6 +512,11 @@ func (s *Server) handleStream(f frame) frame {
 			n := copy(st.entries, st.entries[over:])
 			st.entries = st.entries[:n]
 			st.firstSeq = st.entries[0].Seq
+		}
+		if s.opts.StreamDir != "" {
+			// Under the same lock as the in-memory append, so the on-disk
+			// order matches seq order.
+			s.persistAppend(f.Stream, st, entry)
 		}
 		return frame{ID: f.ID, OK: true, Seq: entry.Seq}
 

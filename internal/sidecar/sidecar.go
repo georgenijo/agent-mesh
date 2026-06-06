@@ -17,6 +17,7 @@ import (
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
@@ -178,6 +179,12 @@ func (s *Sidecar) heartbeatLoop() {
 			if err := s.bus.Publish(env); err != nil {
 				s.log.Debug("heartbeat publish failed", "err", err)
 			}
+			// Claims are TTL leases renewed on the same beat as presence
+			// (locked decision: reclaim-on-death). A renewal that loses its
+			// CAS is a claim legitimately reclaimed — skipped, not retried.
+			if _, err := claim.RenewOwned(s.bus, id, s.cfg.ClaimTTL); err != nil {
+				s.log.Debug("claim renewal failed", "err", err)
+			}
 		}
 	}
 }
@@ -196,6 +203,16 @@ func (s *Sidecar) handle(req socket.Request) socket.Response {
 		return s.handleStatus(req)
 	case meshapi.VerbWho:
 		return s.handleWho()
+	case meshapi.VerbClaim:
+		return s.handleClaim(req)
+	case meshapi.VerbRelease:
+		return s.handleRelease(req)
+	case meshapi.VerbAnnounce:
+		return s.handleAnnounce(req)
+	case meshapi.VerbNote:
+		return s.handleNote(req)
+	case meshapi.VerbContext:
+		return s.handleContext(req)
 	default:
 		return socket.Fail(socket.CodeBadRequest, fmt.Sprintf("unknown verb %q", req.Verb))
 	}

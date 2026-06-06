@@ -57,7 +57,7 @@ Four planes, joined by a NATS bus. Understanding the **control-plane / data-plan
 
 ### The `mesh` CLI is the entire agent-facing API
 
-`join`/`leave`, `who`/`status`/`announce`, `ask`/`poll`/`inbox`/`answer`, `note`/`context`. Every command takes `--json`. Exit codes carry meaning: `0` ok, `3` no-answer-yet, `4` no-such-ticket, `5` not-joined. See `ARCHITECTURE.md` §4 for the full surface and §5 for the subject → payload → listener table.
+`join`/`leave`, `who`/`status`/`announce`, `ask`/`poll`/`inbox`/`answer`, `note`/`context`. Every command takes `--json`. Exit codes carry meaning: `0` ok, `3` no-answer-yet, `4` no-such-ticket, `5` not-joined, `6` dirty (ops doctor/down). See `ARCHITECTURE.md` §4 for the full surface and §5 for the subject → payload → listener table.
 
 ### Key message flows (ARCHITECTURE.md §7)
 

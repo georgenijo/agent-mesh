@@ -104,7 +104,8 @@ mesh context                   [--repo R] [--json]    # read the blackboard / sh
 
 Conventions:
 - Every command supports `--json` for machine parsing; default is human text.
-- Exit codes: `0` ok, `3` no-answer-yet (poll), `4` no-such-ticket, `5` not-joined.
+- Exit codes: `0` ok, `3` no-answer-yet (poll), `4` no-such-ticket, `5` not-joined,
+  `6` dirty (`ops doctor`/`ops down`: drift found / teardown incomplete).
 - The CLI is a *thin* client. It opens the unix socket, sends one request, prints
   the reply, exits. All state lives in the sidecar + NATS.
 

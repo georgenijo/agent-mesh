@@ -5,15 +5,20 @@
 // rule as the envelope package, applied to the local IPC hop.
 package meshapi
 
-import "github.com/georgenijo/agent-mesh/internal/agentcard"
+import (
+	"time"
+
+	"github.com/georgenijo/agent-mesh/internal/agentcard"
+)
 
 // Verbs implemented in P0. P1/P2 add announce/claim/note/ask/... here.
 const (
-	VerbPing   = "ping"
-	VerbJoin   = "join"
-	VerbLeave  = "leave"
-	VerbWho    = "who"
-	VerbStatus = "status"
+	VerbPing    = "ping"
+	VerbJoin    = "join"
+	VerbLeave   = "leave"
+	VerbWho     = "who"
+	VerbStatus  = "status"
+	VerbRuntime = "runtime"
 )
 
 // MaxStatusLen bounds a status line in bytes. Status text is fanned out to
@@ -63,4 +68,19 @@ type PingResult struct {
 	ID     string `json:"id"`
 	Joined bool   `json:"joined"`
 	Bus    bool   `json:"bus"` // bus connection currently healthy
+}
+
+// ChildProc is one child agent CLI process tracked by the sidecar.
+type ChildProc struct {
+	PID       int       `json:"pid"`
+	Cmd       string    `json:"cmd"`
+	StartedAt time.Time `json:"startedAt"`
+	State     string    `json:"state"` // running | exited
+}
+
+// RuntimeResult is the sidecar runtime snapshot for ops inspection.
+type RuntimeResult struct {
+	SidecarPID int         `json:"sidecarPid"`
+	Uptime     string      `json:"uptime"`
+	Children   []ChildProc `json:"children"`
 }

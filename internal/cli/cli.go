@@ -47,6 +47,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runWho(rest, stdout, stderr)
 	case "status":
 		return runStatus(rest, stdout, stderr)
+	case "ops":
+		return runOps(rest, stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "mesh", Version)
 		return ExitOK
@@ -72,6 +74,7 @@ commands:
   leave   deregister and stop this agent's sidecar
   who     show the roster (presence + latest status)
   status  "<text>"   post what this agent is doing now
+  ops     runtime health snapshot (coordinator, sidecars, drift)
 
 common flags:
   --json            machine-readable output

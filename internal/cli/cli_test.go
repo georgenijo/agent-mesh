@@ -75,3 +75,28 @@ func TestJoinNoAutostartFailsNotJoined(t *testing.T) {
 		t.Fatalf("exit = %d, want %d", code, ExitNotJoined)
 	}
 }
+
+func TestOpsMissingMeshDirFails(t *testing.T) {
+	t.Setenv(config.EnvMeshDir, "/tmp/mesh-ops-missing-dir-does-not-exist")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"ops"}, &stdout, &stderr)
+	if code != ExitError {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "mesh dir") && !strings.Contains(stderr.String(), "no such file") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestOpsJSONOnEmptyMeshDir(t *testing.T) {
+	dir := testsock.Dir(t)
+	t.Setenv(config.EnvMeshDir, dir)
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"ops", "--json"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"meshDir"`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}

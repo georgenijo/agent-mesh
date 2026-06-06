@@ -19,6 +19,7 @@ const (
 	EnvEvictAfter        = "MESH_EVICT_AFTER"
 	EnvRegistrationGrace = "MESH_REGISTRATION_GRACE"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
+	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
 	EnvAgentSocket       = "MESH_SOCKET" // CLI → sidecar socket override
 	EnvMeshdBin          = "MESH_MESHD"  // path to meshd for autostart
 )
@@ -30,6 +31,7 @@ const (
 	DefaultEvictAfter        = 60 * time.Second
 	DefaultRegistrationGrace = 10 * time.Second
 	DefaultDashboardAddr     = "127.0.0.1:8737"
+	DefaultObserveAddr       = "127.0.0.1:8739"
 )
 
 // Config carries resolved paths and timings for all meshd modes and the CLI.
@@ -40,6 +42,7 @@ type Config struct {
 	EvictAfter        time.Duration // last beat older than this → evicted
 	RegistrationGrace time.Duration // no away/evict this soon after register
 	DashboardAddr     string
+	ObserveAddr       string
 }
 
 // Load resolves config from the environment with defaults.
@@ -50,6 +53,7 @@ func Load() (Config, error) {
 		EvictAfter:        DefaultEvictAfter,
 		RegistrationGrace: DefaultRegistrationGrace,
 		DashboardAddr:     DefaultDashboardAddr,
+		ObserveAddr:       DefaultObserveAddr,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -88,6 +92,9 @@ func Load() (Config, error) {
 	if addr := os.Getenv(EnvDashboardAddr); addr != "" {
 		cfg.DashboardAddr = addr
 	}
+	if addr := os.Getenv(EnvObserveAddr); addr != "" {
+		cfg.ObserveAddr = addr
+	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {
 		return Config{}, fmt.Errorf("config: away-after (%s) must be >= heartbeat interval (%s)",
@@ -114,6 +121,9 @@ func (c Config) AgentSocket(name string) string {
 // CoordinatorLock is the flock file used to elect a single coordinator
 // autostarter when several sidecars race to boot one.
 func (c Config) CoordinatorLock() string { return filepath.Join(c.MeshDir, "coordinator.lock") }
+
+// CoordinatorPID is written by the running coordinator for ops inspection.
+func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }
 
 // EnsureDirs creates the mesh directories with owner-only permissions.
 func (c Config) EnsureDirs() error {

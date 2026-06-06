@@ -79,6 +79,15 @@ See `concepts.md` for what each term means and `mockups/topology.html` for the p
 - **[v1+]** Metrics by **counting the registry at read time**, not hand-rolled counters (audit: dead/miswired metrics).
 - **[v1+]** Replace `mockups/dashboard-bus.html` scripted feed with the live tap (this is P4).
 
+## 5b. Runtime observer — `mesh ops` + `meshd --observe` (1 total)
+
+*Ops-plane inspector, separate from the product dashboard.*
+
+- **[MVP]** `mesh ops [--json]` — one-shot runtime snapshot: coordinator PID/bus socket, sidecar sockets, registry drift, log paths. No join required.
+- **[MVP]** `meshd --mode observe` — read-only HTTP on `:8739` (`GET /api/snapshot`, minimal auto-refresh UI). Never publishes to the mesh.
+- **[MVP]** Sidecar `runtime` verb — sidecar-reported child CLI PIDs (`TrackChild`/`MarkChildExited` hooks for P2/P3 spawns).
+- **[v1+]** Prometheus/OpenTelemetry export from the same `internal/observe` collector.
+
 ## 6. Hooks (config/glue per agent CLI)
 
 - **[MVP]** **Claude Code first** — `PreToolUse`-on-Edit (claim check before edit) + `Stop` hook (drain inbox between turns).

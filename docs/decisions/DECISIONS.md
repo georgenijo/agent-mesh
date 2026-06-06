@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-05: Runtime observability = separate ops plane (`mesh ops` + `meshd --mode observe`)
+
+**Decision:** Add a dedicated runtime observability layer in `internal/observe`, separate from the product dashboard. Primary surface is **`mesh ops [--json]`** (no join required); secondary surface is **`meshd --mode observe`** on `127.0.0.1:8739` (`GET /api/snapshot` + minimal HTML). The collector compares filesystem facts (coordinator.pid, bus.sock, agent sockets, logs) against the registry KV and sidecar `runtime` IPC. Child agent CLI PIDs are reported by the sidecar (`TrackChild`/`MarkChildExited`), not OS process-tree scraping.
+
+**Rationale:** The dashboard answers "what is happening on the mesh?" (bus events + roster). Ops needs "what processes are actually running and do they match registry state?" — a different concern, different port, different consumer. CLI-first keeps scripts cheap; HTTP reuses the same snapshot for polling. Sidecar-owned child tracking preserves stdlib-only, cross-platform observe code and wires cleanly into future runtime-proxy spawns.
+
+**Status:** active
+
+**References:** internal/observe, internal/meshapi (VerbRuntime), cmd/meshd (--mode observe), internal/cli (ops)
+
+---
+
 ## 2026-06-05: P0 transport = Go + coordinator-embedded star bus over a unix socket
 
 **Decision:** Resolve the reopened transport/language fork for P0: the language stays **Go**; the transport is a **coordinator-embedded local bus/store (star topology)** over a permissioned unix socket, implemented in `internal/bus` — pub/sub with NATS-style subject matching (`*`, `>`), KV buckets with revision-CAS and per-key TTL leases, and bounded in-memory streams. No embedded NATS server and no external broker for P0. The JetStream-contingent specifics of earlier active decisions (CAS as the single claim primitive, TTL leases with reclaim-on-death, "the durable record" as the one authority) map onto bus KV/stream equivalents unchanged.

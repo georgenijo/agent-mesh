@@ -278,3 +278,46 @@ func TestStatusBeforeCoordinatorRestartSurvivesViaReregister(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestRuntimeVerbReportsSidecarPID(t *testing.T) {
+	cfg := fastConfig(t)
+	sc := startMesh(t, cfg, "runtime")
+
+	resp := do(t, cfg, "runtime", meshapi.VerbRuntime, nil)
+	if !resp.OK {
+		t.Fatalf("runtime failed: %+v", resp)
+	}
+	var rt meshapi.RuntimeResult
+	if err := json.Unmarshal(resp.Data, &rt); err != nil {
+		t.Fatal(err)
+	}
+	if rt.SidecarPID <= 0 {
+		t.Fatalf("sidecar pid = %d", rt.SidecarPID)
+	}
+	if rt.Uptime == "" {
+		t.Fatal("uptime missing")
+	}
+	if len(rt.Children) != 0 {
+		t.Fatalf("children = %+v, want empty", rt.Children)
+	}
+
+	sc.TrackChild("claude -p", 4242)
+	resp = do(t, cfg, "runtime", meshapi.VerbRuntime, nil)
+	if !resp.OK {
+		t.Fatalf("runtime failed: %+v", resp)
+	}
+	if err := json.Unmarshal(resp.Data, &rt); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.Children) != 1 || rt.Children[0].PID != 4242 || rt.Children[0].State != "running" {
+		t.Fatalf("children = %+v", rt.Children)
+	}
+	sc.MarkChildExited(4242)
+	resp = do(t, cfg, "runtime", meshapi.VerbRuntime, nil)
+	if err := json.Unmarshal(resp.Data, &rt); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.Children) != 1 || rt.Children[0].State != "exited" {
+		t.Fatalf("children = %+v", rt.Children)
+	}
+}

@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -86,6 +88,10 @@ func (c *Coordinator) Start() error {
 
 	c.wg.Add(1)
 	go c.janitor()
+	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
+		c.Stop()
+		return fmt.Errorf("coordinator: write pid file: %w", err)
+	}
 	c.log.Info("coordinator started", "bus", c.cfg.BusSocket())
 	return nil
 }
@@ -105,6 +111,11 @@ func (c *Coordinator) Stop() {
 	if c.srv != nil {
 		c.srv.Stop()
 	}
+	os.Remove(c.cfg.CoordinatorPID()) //nolint:errcheck
+}
+
+func writeCoordinatorPID(path string) error {
+	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 }
 
 // --- reducer -------------------------------------------------------------------

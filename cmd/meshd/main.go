@@ -1,6 +1,6 @@
 // Command meshd is the Agent Mesh daemon. One binary, several modes selected
 // by --mode: sidecar (one per agent), coordinator (one per mesh — embeds the
-// bus/store), or dashboard (read-only observer).
+// bus/store), dashboard (read-only observer), or observe (runtime ops plane).
 //
 // No business logic lives here: flags are parsed and handed to internal/*.
 package main
@@ -19,6 +19,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/coordinator"
 	"github.com/georgenijo/agent-mesh/internal/dashboard"
+	"github.com/georgenijo/agent-mesh/internal/observe"
 	"github.com/georgenijo/agent-mesh/internal/sidecar"
 )
 
@@ -29,7 +30,7 @@ func main() {
 }
 
 func run() int {
-	mode := flag.String("mode", "", "daemon mode: sidecar | coordinator | dashboard")
+	mode := flag.String("mode", "", "daemon mode: sidecar | coordinator | dashboard | observe")
 	showVersion := flag.Bool("version", false, "print version and exit")
 
 	// Sidecar flags.
@@ -41,8 +42,8 @@ func run() int {
 	noAutoCoord := flag.Bool("no-autostart-coordinator", false,
 		"fail instead of spawning a coordinator when the bus is down (sidecar mode)")
 
-	// Dashboard flags.
-	addr := flag.String("addr", "", "dashboard listen address (default $MESH_DASHBOARD_ADDR or 127.0.0.1:8737)")
+	// Dashboard / observe flags.
+	addr := flag.String("addr", "", "listen address (dashboard: $MESH_DASHBOARD_ADDR; observe: $MESH_OBSERVE_ADDR)")
 
 	flag.Parse()
 
@@ -65,8 +66,10 @@ func run() int {
 		return runCoordinator(cfg, log)
 	case "dashboard":
 		return runDashboard(cfg, log, *addr)
+	case "observe":
+		return runObserve(cfg, log, *addr)
 	case "":
-		fmt.Fprintln(os.Stderr, "meshd: --mode is required (sidecar|coordinator|dashboard)")
+		fmt.Fprintln(os.Stderr, "meshd: --mode is required (sidecar|coordinator|dashboard|observe)")
 		return 2
 	default:
 		fmt.Fprintf(os.Stderr, "meshd: unknown mode %q\n", *mode)
@@ -138,6 +141,18 @@ func runDashboard(cfg config.Config, log *slog.Logger, addr string) int {
 	fmt.Printf("dashboard: http://%s\n", d.Addr())
 	waitSignal()
 	d.Stop()
+	return 0
+}
+
+func runObserve(cfg config.Config, log *slog.Logger, addr string) int {
+	s := observe.New(cfg, addr, log)
+	if err := s.Start(); err != nil {
+		log.Error("observe start", "err", err)
+		return 1
+	}
+	fmt.Printf("observe: http://%s\n", s.Addr())
+	waitSignal()
+	s.Stop()
 	return 0
 }
 

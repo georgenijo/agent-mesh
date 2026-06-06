@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-06: `mesh up` = idempotent infra bring-up in autostart; ops scope unchanged
+
+**Decision:** One command — `mesh up [--dashboard-addr A] [--observe-addr A]` — idempotently brings up coordinator + dashboard + observe and prints their URLs. The spawn logic lives in `internal/autostart` (which already starts coordinators and sidecars); `internal/ops` stays inspect + teardown + janitor and never spawns, preserving the 2026-06-05 actuator-verbs scope. Supporting protocol: dashboard/observe write run files under MESH_DIR (`<name>.pid` first, then `<name>.addr` atomically with the REAL bound address — the addr file is both the readiness gate and the one authority for "where is the UI"), spawn carries the `--mesh-dir` argv ownership marker so `ops down/doctor/clean` cover the services, and a foreign holder on the configured port triggers an EADDRINUSE-only fallback to `127.0.0.1:0` (other listen errors stay fatal). "Already running" = pidfile alive AND addr dialable; a live-but-not-serving pid is a typed error, never a respawn.
+
+**Rationale:** Three manual commands to get UI + monitoring was the real "local is annoying" pain (ports never were — sockets are MESH_DIR-namespaced; the two loopback TCP ports are the one global resource, hence the fallback). All machinery existed (EnsureCoordinator flock pattern, daemon modes, ops verbs); this is glue plus a run-file readiness protocol, not architecture. Scope stops at infrastructure: agents join themselves, worker spawning stays with the coordinator (P3).
+
+**Status:** active
+
+**References:** internal/autostart/services.go, internal/observe/runfiles.go, internal/cli/up.go, test/e2e/up_test.go; extends 2026-06-05 "Ops plane gains scoped actuator verbs"
+
+---
+
 ## 2026-06-05: P4 dashboard tap ships as SSE on the existing /events contract, present-day events only
 
 **Decision:** The #31 production dashboard (`web/`, served read-only at `/ui/` by the dashboard server) consumes the existing SSE `/events` contract — data-only frames discriminated by the JSON `type` field (`event` | `roster` | `claims`) — not the WebSocket transport the issue text named. Scope is what the mesh emits today: presence roster, status, heartbeats, announce, claims (rebuilt wholesale from the authoritative claims-KV snapshot frame, never derived from claim/leave envelopes), and blackboard notes. P2 tickets and P3 experts/workers get honest placeholder panels that populate only from real envelopes — nothing invented.

@@ -101,7 +101,7 @@ func runSidecar(cfg config.Config, log *slog.Logger, name, role, caps, repo, mod
 	}
 
 	if !noAutoCoord {
-		if err := autostart.EnsureCoordinator(cfg); err != nil {
+		if _, err := autostart.EnsureCoordinator(cfg); err != nil {
 			log.Error("autostart coordinator", "err", err)
 			return 1
 		}

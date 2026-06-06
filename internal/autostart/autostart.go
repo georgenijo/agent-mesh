@@ -50,40 +50,44 @@ func dialable(path string) bool {
 
 // EnsureCoordinator makes sure a coordinator (and thus the bus) is running,
 // spawning one if needed. Concurrent callers are serialized by an exclusive
-// flock so exactly one of them spawns.
-func EnsureCoordinator(cfg config.Config) error {
+// flock so exactly one of them spawns. The bool reports whether THIS call
+// spawned it (false = already running).
+func EnsureCoordinator(cfg config.Config) (bool, error) {
 	if dialable(cfg.BusSocket()) {
-		return nil
+		return false, nil
 	}
 	if err := cfg.EnsureDirs(); err != nil {
-		return err
+		return false, err
 	}
 
 	lock, err := os.OpenFile(cfg.CoordinatorLock(), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return fmt.Errorf("autostart: open coordinator lock: %w", err)
+		return false, fmt.Errorf("autostart: open coordinator lock: %w", err)
 	}
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("autostart: flock: %w", err)
+		return false, fmt.Errorf("autostart: flock: %w", err)
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
 	// Someone else may have spawned it while we waited for the lock.
 	if dialable(cfg.BusSocket()) {
-		return nil
+		return false, nil
 	}
 
 	meshd, err := FindMeshd()
 	if err != nil {
-		return err
+		return false, err
 	}
 	// --mesh-dir in the argv is the ops-plane ownership marker: it lets
 	// `mesh ops down` verify via ps that a pid belongs to this mesh.
 	if err := spawnDetached(cfg, "coordinator", meshd, "--mode", "coordinator", "--mesh-dir", cfg.MeshDir); err != nil {
-		return err
+		return false, err
 	}
-	return waitDialable(cfg.BusSocket(), "coordinator")
+	if err := waitDialable(cfg.BusSocket(), "coordinator"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SpawnSidecar starts a detached sidecar for the agent and waits for its

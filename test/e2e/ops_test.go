@@ -100,6 +100,39 @@ func TestOpsDoctorClassifies(t *testing.T) {
 	})
 }
 
+// TestOpsCleanRemovesResidue: SIGKILL leaves a stale socket + pidfile;
+// `ops clean` confirms them dead, unlinks them, and doctor goes clean once
+// the registry lease expires.
+func TestOpsCleanRemovesResidue(t *testing.T) {
+	m := newMesh(t)
+	if code, _, stderr := m.run("join", "--name", "victim", "--role", "builder"); code != 0 {
+		t.Fatalf("join: %s", stderr)
+	}
+
+	pid := readPidfile(t, m.agentPIDFile("victim"))
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	m.eventually(2*time.Second, "killed sidecar pid gone", func() bool {
+		return syscall.Kill(pid, 0) != nil
+	})
+
+	if code, stdout, stderr := m.run("ops", "clean", "--json"); code != 0 {
+		t.Fatalf("ops clean: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	for _, path := range []string{m.agentSocket("victim"), m.agentPIDFile("victim")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s still on disk after clean: %v", path, err)
+		}
+	}
+
+	// Once the eviction lease fires, nothing remembers the victim.
+	m.eventually(5*time.Second, "doctor clean after eviction", func() bool {
+		code, _, _ := m.run("ops", "doctor", "--json")
+		return code == 0
+	})
+}
+
 // TestOpsDownGroundTruthPS is the one raw-ps circularity guard (DECISIONS
 // 2026-06-05): it validates the mesh's own zero-alive claim against the OS,
 // bypassing all mesh reporting. Keep exactly one of these.

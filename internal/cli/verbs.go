@@ -192,6 +192,8 @@ func runOps(args []string, stdout, stderr io.Writer) int {
 			return runOpsDoctor(args[1:], stdout, stderr)
 		case "down":
 			return runOpsDown(args[1:], stdout, stderr)
+		case "clean":
+			return runOpsClean(args[1:], stdout, stderr)
 		}
 	}
 	fs := flag.NewFlagSet("ops", flag.ContinueOnError)

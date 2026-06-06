@@ -122,3 +122,56 @@ func runOpsDown(args []string, stdout, stderr io.Writer) int {
 	}
 	return ExitOK
 }
+
+func runOpsClean(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ops clean", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return ExitUsage
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	rep, err := ops.Clean(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, "mesh:", err)
+		return ExitError
+	}
+	failed := false
+	for _, e := range rep.Entries {
+		if e.Action == ops.CleanFailed {
+			failed = true
+		}
+	}
+	if *jsonOut {
+		b, err := json.Marshal(rep)
+		if err != nil {
+			fmt.Fprintln(stderr, "mesh:", err)
+			return ExitError
+		}
+		fmt.Fprintln(stdout, string(b))
+	} else {
+		fmt.Fprintf(stdout, "mesh clean (%s): %d artifacts inspected\n", rep.Meta.MeshDir, len(rep.Entries))
+		if len(rep.Entries) > 0 {
+			tw := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "PATH\tKIND\tACTION\tREASON")
+			for _, e := range rep.Entries {
+				reason := e.Reason
+				if reason == "" {
+					reason = "-"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Path, e.Kind, e.Action, reason)
+			}
+			tw.Flush() //nolint:errcheck
+		}
+	}
+	// Kept entries are correct outcomes, not failures; only unlink errors
+	// are operational errors.
+	if failed {
+		return ExitError
+	}
+	return ExitOK
+}

@@ -63,6 +63,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runNote(rest, stdout, stderr)
 	case "context":
 		return runContext(rest, stdout, stderr)
+	case "ask":
+		return runAsk(rest, stdout, stderr)
+	case "poll":
+		return runPoll(rest, stdout, stderr)
+	case "inbox":
+		return runInbox(rest, stdout, stderr)
+	case "answer":
+		return runAnswer(rest, stdout, stderr)
 	case "ops":
 		return runOps(rest, stdout, stderr)
 	case "version":
@@ -102,6 +110,12 @@ commands:
   announce "<intent>" [--paths a,b] [--repo R]   broadcast advisory intent
   note     "<text>" [--repo R] [--kind K] [--ticket T]   append to blackboard
   context  [--repo R]          replay the repo's blackboard history
+
+  ask      (--role R | --to ID) "<question>" [--ctx C] [--ttl 30m]
+          create an async ask ticket and return immediately
+  poll     <ticket>             exit 3 until answered, 4 if missing
+  inbox    [--limit N] [--watch] list accepted questions for this agent
+  answer   <ticket> "<answer>"  answer an accepted ticket
 
 common flags:
   --json            machine-readable output

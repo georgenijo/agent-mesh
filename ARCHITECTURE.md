@@ -119,12 +119,14 @@ Conventions:
 | `mesh.heartbeat.<id>` | event | `{id, ts, status}` | coordinator (presence/TTL) |
 | `mesh.leave` | event | `{id, reason}` | coordinator, dashboard |
 | `mesh.status.<id>` | event | `{id, text, ts}` | dashboard |
-| `mesh.announce.<repo>` | event | `{id, intent, paths[]}` | all agents on that repo |
+| `mesh.announce.<repo>` | event | `{id, intent, paths[], repo}` | all agents on that repo |
+| `mesh.claim.<repo>` | event — KV record is the authority | `{id, path, repo, result}` | dashboard / observers |
 | `mesh.ask.role.<role>` | req | `{ticket, from, q, ctx}` | coordinator → routes |
 | `mesh.ask.id.<id>` | req | `{ticket, from, q, ctx}` | that agent's inbox |
 | `mesh.inbox.<id>` | queue | pending asks for `<id>` | the owning agent |
 | `mesh.answer.<ticket>` | reply | `{ticket, from, answer, ts}` | the original asker's sidecar |
-| `mesh.note.<repo>` | **stream** | `{from, decision, ts}` (JetStream, durable) | `mesh context` readers |
+| `mesh.ticket.<ticket>` | event — KV record is the authority | `{ticket, state, by, reason}` | dashboard / observers |
+| `mesh.note.<repo>` | **stream** | `{id, decision, repo, kind, ticket}` (JetStream, durable) | `mesh context` readers |
 | `mesh.>` | wildcard | everything | dashboard / observers |
 
 `mesh.note.<repo>` is a **JetStream durable stream** — late-joining agents replay

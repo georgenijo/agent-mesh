@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "ticket",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.ticket.01976f00-0000-7000-8000-00000000007e",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "ticket": "01976f00-0000-7000-8000-00000000007e",
+    "state": "answered",
+    "by": "claude-2",
+    "reason": "answered within TTL"
+  }
+}

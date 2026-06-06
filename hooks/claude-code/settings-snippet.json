@@ -11,6 +11,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/agent-mesh/hooks/claude-code/mesh-inbox-drain.sh",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }

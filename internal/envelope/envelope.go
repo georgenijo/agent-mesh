@@ -38,6 +38,10 @@ const (
 	KindAsk       Kind = "ask"
 	KindAnswer    Kind = "answer"
 	KindNote      Kind = "note"
+	// KindTicket is the ticket-FSM transition event — an observability tap.
+	// The tickets KV record is the authority for ticket state, mirroring how
+	// KindClaim events relate to the claims bucket.
+	KindTicket Kind = "ticket"
 )
 
 var knownKinds = map[Kind]bool{
@@ -50,6 +54,7 @@ var knownKinds = map[Kind]bool{
 	KindAsk:       true,
 	KindAnswer:    true,
 	KindNote:      true,
+	KindTicket:    true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).
@@ -95,7 +100,15 @@ func IsDecodeError(err error, code DecodeErrorCode) bool {
 }
 
 // New builds a validated envelope of the given kind around a typed payload.
+// A typed payload (anything implementing the package's validator interface)
+// is validated at this publish edge: a malformed payload returns a typed
+// CodeInvalidPayload error before anything reaches the wire.
 func New(kind Kind, from, subject string, payload any) (Envelope, error) {
+	if v, ok := payload.(validator); ok {
+		if err := v.validate(); err != nil {
+			return Envelope{}, &DecodeError{Code: CodeInvalidPayload, Detail: err.Error()}
+		}
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("envelope: marshal payload: %w", err)

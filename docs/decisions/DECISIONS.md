@@ -30,6 +30,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-06: KV record shapes live in their domain package, not envelope; result enums live in envelope
+
+**Decision:** Authoritative KV record shapes live in the domain package that owns the fact — `agentcard.RegistryRecord` (presence), `claim.Record` (claims), and the new `ticket.Record` (tickets, `internal/ticket`, record-only until #17 builds the FSM there) — each frozen by a golden in that package's `testdata/`. `internal/envelope` owns the rest of the wire contract: kinds, subjects, payloads, and *all* result enums — `ReleaseResult` moved from `internal/claim` to `envelope/results.go` beside `ClaimResult`, with a type alias + const re-exports left in `claim` so call sites are unchanged.
+
+**Rationale:** Issue #37 spec'd a `envelope/records.go` before P1 landed; #12 had meanwhile placed `claim.Record`/`Key` in `internal/claim`, matching the `RegistryRecord` precedent. Duplicating the shape into envelope would create two unreconciled sources of truth — goldens pinning one copy while runtime uses the other. Wire pinning needs a golden somewhere, not a type move. P1 splitting `ReleaseResult` away from its sibling `ClaimResult` was the actual inconsistency, so that enum moved.
+
+**Status:** active
+
+**References:** internal/envelope, internal/claim/claim.go, internal/ticket, #37, #12, #17; partially supersedes the records.go layout in #37's text
+
+---
+
 ## 2026-06-05: P4 dashboard tap ships as SSE on the existing /events contract, present-day events only
 
 **Decision:** The #31 production dashboard (`web/`, served read-only at `/ui/` by the dashboard server) consumes the existing SSE `/events` contract — data-only frames discriminated by the JSON `type` field (`event` | `roster` | `claims`) — not the WebSocket transport the issue text named. Scope is what the mesh emits today: presence roster, status, heartbeats, announce, claims (rebuilt wholesale from the authoritative claims-KV snapshot frame, never derived from claim/leave envelopes), and blackboard notes. P2 tickets and P3 experts/workers get honest placeholder panels that populate only from real envelopes — nothing invented.

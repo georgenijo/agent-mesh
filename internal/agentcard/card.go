@@ -45,6 +45,9 @@ func (c Card) Validate() error {
 	if strings.TrimSpace(c.Role) == "" {
 		return fmt.Errorf("agentcard: missing role")
 	}
+	if !ValidName(c.Role) {
+		return fmt.Errorf("agentcard: invalid role %q (want [A-Za-z0-9_-]{1,64})", c.Role)
+	}
 	for _, cap := range c.Caps {
 		if strings.TrimSpace(cap) == "" {
 			return fmt.Errorf("agentcard: empty capability token")

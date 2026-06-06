@@ -32,6 +32,10 @@ func main() {
 func run() int {
 	mode := flag.String("mode", "", "daemon mode: sidecar | coordinator | dashboard | observe")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	// --mesh-dir doubles as the ops-plane ownership marker: autostart always
+	// passes it, so `mesh ops down` can verify a pid belongs to THIS mesh by
+	// matching the daemon's argv — never by process name (issue #35).
+	meshDir := flag.String("mesh-dir", "", "mesh directory override (default $MESH_DIR, else ~/.mesh)")
 
 	// Sidecar flags.
 	name := flag.String("name", "", "agent name (sidecar mode, required)")
@@ -53,6 +57,12 @@ func run() int {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if *meshDir != "" {
+		// Set the env (rather than patching cfg after Load) so daemons this
+		// process spawns — e.g. a sidecar autostarting the coordinator —
+		// inherit the same mesh dir.
+		os.Setenv(config.EnvMeshDir, *meshDir) //nolint:errcheck
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		log.Error("config", "err", err)

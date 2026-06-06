@@ -20,7 +20,8 @@ import (
 
 // Exit codes (ARCHITECTURE §4). 3 and 4 are reserved for the P2 ask/poll
 // verbs; P0 uses 0, 1, 2, 5; P1 adds 6 (claim lost — a legitimate race
-// outcome, distinct from error so scripts and hooks can branch on it).
+// outcome, distinct from error so scripts and hooks can branch on it);
+// the ops plane adds 7 (dirty).
 const (
 	ExitOK        = 0
 	ExitError     = 1
@@ -29,6 +30,7 @@ const (
 	ExitNoTicket  = 4 // reserved: no such ticket
 	ExitNotJoined = 5
 	ExitClaimLost = 6 // claim: another agent holds the path
+	ExitDirty     = 7 // ops doctor/down: drift found / teardown incomplete
 )
 
 const requestTimeout = 10 * time.Second
@@ -87,6 +89,9 @@ commands:
   who     show the roster (presence + latest status)
   status  "<text>"   post what this agent is doing now
   ops     runtime health snapshot (coordinator, sidecars, drift)
+          ops doctor   classify runtime state; exit 7 when dirty
+          ops down     graceful fleet teardown [--mesh DIR] [--timeout 5s]
+          ops clean    remove stale sockets/pidfiles under MESH_DIR
 
   claim    <path> [--repo R]   take the CAS lock on a path (exit 6 if lost)
   release  <path> [--repo R]   release a claim this agent holds
@@ -100,7 +105,7 @@ common flags:
                     socket under $MESH_DIR/agents)
 
 exit codes: 0 ok · 1 error · 2 usage · 3 no-answer-yet · 4 no-such-ticket ·
-            5 not-joined · 6 claim-lost
+            5 not-joined · 6 claim-lost · 7 dirty
 `)
 }
 

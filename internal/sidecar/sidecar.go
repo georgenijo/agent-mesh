@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,10 +28,11 @@ import (
 
 // Sidecar is one agent's mesh daemon.
 type Sidecar struct {
-	cfg  config.Config
-	log  *slog.Logger
-	sock *socket.Server
-	bus  *bus.Client
+	cfg     config.Config
+	log     *slog.Logger
+	sock    *socket.Server
+	bus     *bus.Client
+	pidFile string // written at boot, removed on Stop (the name never changes)
 
 	mu         sync.Mutex
 	card       agentcard.Card
@@ -70,6 +72,7 @@ func New(cfg config.Config, card agentcard.Card, log *slog.Logger) (*Sidecar, er
 		log:       log,
 		card:      card,
 		held:      make(map[string]heldClaim),
+		pidFile:   cfg.AgentPIDFile(card.Name),
 		startedAt: time.Now(),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
@@ -83,6 +86,14 @@ func (s *Sidecar) Start() error {
 		return err
 	}
 
+	// Pidfile first, before the bus dial: a daemon that hangs mid-boot is
+	// exactly what the ops plane must still be able to see (issue #35). The
+	// error paths below remove it again — a failed boot exits and leaves no
+	// process worth tracking.
+	if err := os.WriteFile(s.pidFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		return fmt.Errorf("sidecar: write pid file: %w", err)
+	}
+
 	cli, err := bus.Dial(s.cfg.BusSocket(), bus.ClientOptions{
 		// After a coordinator restart the registry AND the claims KV are
 		// empty (both in-memory); re-registering and re-claiming on every
@@ -94,12 +105,14 @@ func (s *Sidecar) Start() error {
 		},
 	})
 	if err != nil {
+		os.Remove(s.pidFile) //nolint:errcheck
 		return fmt.Errorf("sidecar: connect bus at %s: %w", s.cfg.BusSocket(), err)
 	}
 	s.bus = cli
 
 	if err := s.register(); err != nil {
 		cli.Close()
+		os.Remove(s.pidFile) //nolint:errcheck
 		return err
 	}
 	s.mu.Lock()
@@ -109,6 +122,7 @@ func (s *Sidecar) Start() error {
 	s.sock = socket.NewServer(s.cfg.AgentSocket(s.card.Name), s.handle)
 	if err := s.sock.Start(); err != nil {
 		cli.Close()
+		os.Remove(s.pidFile) //nolint:errcheck
 		return err
 	}
 
@@ -133,6 +147,7 @@ func (s *Sidecar) Stop() {
 	if s.bus != nil {
 		s.bus.Close()
 	}
+	os.Remove(s.pidFile) //nolint:errcheck
 }
 
 // Leave publishes a graceful departure, then stops the sidecar.

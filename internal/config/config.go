@@ -132,6 +132,13 @@ func (c Config) AgentSocket(name string) string {
 	return filepath.Join(c.AgentsDir(), name+".sock")
 }
 
+// AgentPIDFile is the pidfile the sidecar writes beside its socket. It is the
+// fact source of last resort for the ops plane: an agent evicted from the
+// registry whose socket is hung is otherwise invisible.
+func (c Config) AgentPIDFile(name string) string {
+	return filepath.Join(c.AgentsDir(), name+".pid")
+}
+
 // CoordinatorLock is the flock file used to elect a single coordinator
 // autostarter when several sidecars race to boot one.
 func (c Config) CoordinatorLock() string { return filepath.Join(c.MeshDir, "coordinator.lock") }

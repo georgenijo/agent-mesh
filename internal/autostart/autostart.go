@@ -78,7 +78,9 @@ func EnsureCoordinator(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := spawnDetached(cfg, "coordinator", meshd, "--mode", "coordinator"); err != nil {
+	// --mesh-dir in the argv is the ops-plane ownership marker: it lets
+	// `mesh ops down` verify via ps that a pid belongs to this mesh.
+	if err := spawnDetached(cfg, "coordinator", meshd, "--mode", "coordinator", "--mesh-dir", cfg.MeshDir); err != nil {
 		return err
 	}
 	return waitDialable(cfg.BusSocket(), "coordinator")
@@ -95,6 +97,7 @@ func SpawnSidecar(cfg config.Config, card agentcard.Card) error {
 		"--mode", "sidecar",
 		"--name", card.Name,
 		"--role", card.Role,
+		"--mesh-dir", cfg.MeshDir, // ops-plane ownership marker (see EnsureCoordinator)
 	}
 	if len(card.Caps) > 0 {
 		args = append(args, "--caps", joinComma(card.Caps))

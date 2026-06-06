@@ -185,6 +185,17 @@ func runWho(args []string, stdout, stderr io.Writer) int {
 }
 
 func runOps(args []string, stdout, stderr io.Writer) int {
+	// Actuator subcommands (issue #35); bare `mesh ops` stays the snapshot.
+	if len(args) > 0 {
+		switch args[0] {
+		case "doctor":
+			return runOpsDoctor(args[1:], stdout, stderr)
+		case "down":
+			return runOpsDown(args[1:], stdout, stderr)
+		case "clean":
+			return runOpsClean(args[1:], stdout, stderr)
+		}
+	}
 	fs := flag.NewFlagSet("ops", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	jsonOut := fs.Bool("json", false, "JSON output")
@@ -251,13 +262,13 @@ func runOps(args []string, stdout, stderr io.Writer) int {
 	return ExitOK
 }
 
-func joinComma(items []string) string {
+func joinComma[T ~string](items []T) string {
 	out := ""
 	for i, s := range items {
 		if i > 0 {
 			out += ","
 		}
-		out += s
+		out += string(s)
 	}
 	return out
 }

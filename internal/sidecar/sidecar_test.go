@@ -2,6 +2,9 @@ package sidecar
 
 import (
 	"encoding/json"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,6 +280,39 @@ func TestStatusBeforeCoordinatorRestartSurvivesViaReregister(t *testing.T) {
 			t.Fatalf("agent never re-registered after coordinator restart: %+v", resp)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestPidfileLifecycle(t *testing.T) {
+	cfg := fastConfig(t)
+	sc := startMesh(t, cfg, "tracked")
+
+	pid, err := os.ReadFile(cfg.AgentPIDFile("tracked"))
+	if err != nil {
+		t.Fatalf("pidfile missing after Start: %v", err)
+	}
+	if got := strings.TrimSpace(string(pid)); got != strconv.Itoa(os.Getpid()) {
+		t.Fatalf("pidfile = %q, want %d", got, os.Getpid())
+	}
+
+	sc.Stop()
+	if _, err := os.Stat(cfg.AgentPIDFile("tracked")); !os.IsNotExist(err) {
+		t.Fatalf("pidfile still present after Stop: %v", err)
+	}
+}
+
+func TestPidfileRemovedOnFailedStart(t *testing.T) {
+	cfg := fastConfig(t) // no coordinator: bus dial must fail
+	card := agentcard.Card{Name: "noboot", Role: "builder"}
+	sc, err := New(cfg, card, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.Start(); err == nil {
+		t.Fatal("Start should fail without a bus")
+	}
+	if _, err := os.Stat(cfg.AgentPIDFile("noboot")); !os.IsNotExist(err) {
+		t.Fatalf("pidfile left behind by failed Start: %v", err)
 	}
 }
 

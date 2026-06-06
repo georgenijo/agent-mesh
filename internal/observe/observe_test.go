@@ -129,7 +129,7 @@ func TestCollectDetectsGhostAgent(t *testing.T) {
 	if ghost == nil {
 		t.Fatal("ghost agent missing from snapshot")
 	}
-	if !contains(ghost.Drift, "ghost_agent") {
+	if !contains(ghost.Drift, DriftGhostAgent) {
 		t.Fatalf("drift = %v, want ghost_agent", ghost.Drift)
 	}
 }
@@ -151,7 +151,67 @@ func TestCollectReadsCoordinatorPIDFile(t *testing.T) {
 	}
 }
 
-func contains(items []string, want string) bool {
+func TestCollectAttachesSidecarPidfile(t *testing.T) {
+	cfg, _ := startStack(t)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		snap, err := Collect(cfg)
+		if err == nil && len(snap.Sidecars) == 1 &&
+			snap.Sidecars[0].PIDFilePID == os.Getpid() && len(snap.Sidecars[0].Drift) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			b, _ := json.Marshal(snap)
+			t.Fatalf("pidfile never attached cleanly: err=%v snap=%s", err, b)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestCollectFlagsDeadPidfile(t *testing.T) {
+	cfg := fastConfig(t)
+	if err := cfg.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.AgentPIDFile("zombie"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Collect(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Sidecars) != 1 || snap.Sidecars[0].Name != "zombie" {
+		t.Fatalf("sidecars = %+v, want one pidfile-only entry", snap.Sidecars)
+	}
+	if !contains(snap.Sidecars[0].Drift, DriftDeadPidfile) {
+		t.Fatalf("drift = %v, want dead_pidfile", snap.Sidecars[0].Drift)
+	}
+}
+
+func TestCollectFlagsOrphanPidfile(t *testing.T) {
+	cfg := fastConfig(t)
+	if err := cfg.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	// A live pid with no socket and no registry record: the previously
+	// invisible evicted-but-running class.
+	if err := os.WriteFile(cfg.AgentPIDFile("hidden"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Collect(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Sidecars) != 1 || snap.Sidecars[0].PID != os.Getpid() || !snap.Sidecars[0].PIDAlive {
+		t.Fatalf("sidecars = %+v, want one live pidfile-only entry", snap.Sidecars)
+	}
+	if !contains(snap.Sidecars[0].Drift, DriftOrphanPidfile) {
+		t.Fatalf("drift = %v, want orphan_pidfile", snap.Sidecars[0].Drift)
+	}
+}
+
+func contains(items []Drift, want Drift) bool {
 	for _, s := range items {
 		if s == want {
 			return true

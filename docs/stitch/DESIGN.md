@@ -104,9 +104,10 @@ The aesthetic is a hybrid of **Minimalism** and **Technical Brutalism**. It prio
 The palette is centered on a "Deep Space" dark mode to reduce eye strain during long-form debugging and monitoring. 
 
 - **Primary (Nervous System Cyan):** Used for active data flow, agent pulse, and primary actions. It represents the "synapse" of the system.
-- **Secondary (Conflict Amber):** Reserved for resource locks, race conditions, and pending approvals.
+- **Secondary (Lock Amber):** A *held* resource — an active file claim and pending approvals. Amber means "owned, in use," not "broken."
+- **Error (Conflict Rose `#f66f7d`):** A *realized* collision — a `lost`/`error` claim where one agent was refused a path another holds. This is the highest-value signal in the system, so it is given the loudest treatment (rose card, rose pill, and a transient toast) and is kept visually distinct from benign Lock Amber.
 - **Tertiary (Success Emerald):** Indicates committed merges, successful syncs, and validated agent tasks.
-- **Neutral (Slate & Carbon):** Structural colors that define the hierarchy of the dashboard and terminal panels.
+- **Neutral (Slate & Carbon):** Structural colors that define the hierarchy of the dashboard and terminal panels; also the color of a *released* claim (a lock that is simply gone).
 
 ## Typography
 The system utilizes a dual-font strategy to distinguish between UI controls and the underlying data layer.
@@ -120,7 +121,10 @@ Scale is kept small to facilitate high-density information environments. All lab
 This design system employs a **Fluid Panel Grid**. Rather than a traditional column-based website layout, it uses a modular tile system that scales based on the viewport.
 
 - **High Density:** Padding is aggressive. Standard component height is 28px or 32px to fit more telemetry on screen.
-- **Panels:** The UI is divided into functional zones: Sidebar (Agents), Center (Shared Blackboard), and Bottom (Log Stream).
+- **Panels:** The observer is a fixed **three-column workspace** under a single top app bar:
+  - **Left column** — Mesh Topology (the scaled bus diagram) stacked over the Agents roster.
+  - **Center column** — the Shared Agent Dialogue & Events stream, with kind-chip and subject filters.
+  - **Right column** — File Locks, Ask / Answer, Claim History, and the Shared Blackboard.
 - **Rhythm:** A 4px baseline grid governs all spacing. Gutters are kept tight (12px) to maintain the feeling of a unified machine interface.
 
 ## Elevation & Depth
@@ -154,7 +158,19 @@ Active agents are represented by a pulsing dot indicator.
 Logs must use JetBrains Mono. Each entry should be prefixed with a timestamp and a color-coded "origin agent" tag. Use high-contrast color coding for log levels: `DEBUG` (Slate), `INFO` (Cyan), `WARN` (Amber), `ERROR` (Red).
 
 ### Claim Badges
-Small, high-contrast badges used when an agent "claims" a file or resource. These should use the `label-xs` typography and have a background color corresponding to the agent's unique ID tint.
+Small, high-contrast pills on every claim row, in `label-xs` typography, encoding lifecycle state by color:
+- **claimed** — Lock Amber. The agent holds the path. The row's left border carries that agent's identity tint.
+- **lost / error** — Conflict Rose. A refused claim; the row border and pill both go rose.
+- **released** — Slate. The lock is gone (manual release, TTL expiry, or reclaim-on-death).
+
+### Agent Identity Colors
+Each agent is assigned a stable color from an 8-hue palette by its roster index (`#21e6ff, #a78bfa, #f472b6, #ffb31f, #38ffa3, #7dd3fc, #f66f7d, #6aa8ff`). The same tint follows the agent everywhere — its topology node, its roster row border, its name in the event stream, and its rows in File Locks, Claim History, and the Blackboard — so an operator can track one agent across all panels at a glance.
+
+### Claim History
+A chronological, newest-first log of claim lifecycle events (claim / conflict / release) with relative ages. It is **derived observability**, replayed from the observer on connect so it survives a page refresh; the claims KV remains the one authority for who currently holds what. The panel pill counts conflicts when any are present (rose), otherwise total events.
+
+### Conflict Toast
+A transient, top-right rose alert fired the instant a `lost`/`error` claim is observed live. Conflict avoidance is the project's headline primitive, so a collision must announce itself rather than wait to be found. Auto-dismisses after ~6s, carries `role="status"` / `aria-live="polite"` for assistive tech, and never fires for the history replayed on connect (only genuinely new collisions).
 
 ### Data Grids
-Bordered rows with no horizontal lines—only vertical separators between key columns. Row hovering should highlight the entire line in a translucent Cyan (`#22D3EE` at 5% opacity).
+Bordered rows with no horizontal lines—only vertical separators between key columns. Row hovering should highlight the entire line in a translucent Cyan (`#22D3EE` at 5% opacity). Rows whose content ellipsis-clips expose the full text via a `title` tooltip on hover.

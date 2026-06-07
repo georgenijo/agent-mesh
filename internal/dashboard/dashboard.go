@@ -32,6 +32,22 @@ import (
 //go:embed dashboard.html
 var indexHTML []byte
 
+// maxClaimLog bounds the in-memory claim history ring. Generous enough to be
+// useful on a busy mesh, small enough that replaying it to a new browser on
+// connect is cheap.
+const maxClaimLog = 200
+
+// claimLogEntry is one observed claim lifecycle event for the history panel.
+// Result is the wire ClaimResult (claimed|lost|error) for takes, or the
+// synthetic "released" for a claim that left the authoritative KV snapshot.
+type claimLogEntry struct {
+	From   string    `json:"from"`
+	Path   string    `json:"path"`
+	Repo   string    `json:"repo"`
+	Result string    `json:"result"`
+	TS     time.Time `json:"ts"`
+}
+
 // Dashboard serves the live observer UI.
 type Dashboard struct {
 	cfg  config.Config
@@ -51,6 +67,15 @@ type Dashboard struct {
 	clients map[chan []byte]struct{}
 	roster  []agentcard.RegistryRecord
 	claims  []claim.Held
+	// claimLog is a bounded, newest-last ring of observed claim lifecycle
+	// events — derived observability, NOT an authority. Claim takes
+	// (claimed|lost|error) are recorded from the mesh.claim.<repo> tap with
+	// their real envelope timestamp; releases are synthesized by diffing the
+	// authoritative claims-KV snapshot each tick (which also catches TTL
+	// expiry and coordinator reclaim-on-death). Replayed to each new browser
+	// so the Claim History panel survives a page refresh. Resets on dashboard
+	// restart — the KV remains the one authority for who currently holds what.
+	claimLog []claimLogEntry
 	// noteSeq tracks the last replayed seq per notes stream, so each tick
 	// broadcasts only new blackboard entries (replay and live are one path).
 	noteSeq map[string]uint64
@@ -156,13 +181,54 @@ func (d *Dashboard) Stop() {
 	observe.RemoveRunFiles(d.cfg.DashboardPID(), d.cfg.DashboardAddrFile())
 }
 
-// onEvent forwards one tapped envelope to all SSE clients.
+// onEvent forwards one tapped envelope to all SSE clients, and records claim
+// takes into the history ring (derived observability — the claims KV stays
+// the authority for current holders).
 func (d *Dashboard) onEvent(env envelope.Envelope) {
+	if env.Kind == envelope.KindClaim {
+		d.recordClaim(env)
+	}
 	msg, err := json.Marshal(map[string]any{"type": "event", "envelope": env})
 	if err != nil {
 		return
 	}
 	d.broadcast(msg)
+}
+
+// recordClaim appends a claim take (claimed|lost|error) to the history ring,
+// stamped with the envelope's own timestamp. A malformed payload is dropped —
+// one bad event never corrupts the log.
+func (d *Dashboard) recordClaim(env envelope.Envelope) {
+	var p envelope.ClaimPayload
+	if err := envelope.DecodeInto(env, &p); err != nil {
+		return
+	}
+	d.addClaimLog(claimLogEntry{
+		From:   env.From,
+		Path:   p.Path,
+		Repo:   p.Repo,
+		Result: string(p.Result),
+		TS:     env.TS,
+	})
+}
+
+// addClaimLog appends entries to the bounded ring and broadcasts the whole log
+// as one frame. Broadcasting the full (bounded) log keeps clients free of
+// merge/ordering logic; on a local mesh the volume is trivial.
+func (d *Dashboard) addClaimLog(entries ...claimLogEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	d.mu.Lock()
+	d.claimLog = append(d.claimLog, entries...)
+	if len(d.claimLog) > maxClaimLog {
+		d.claimLog = d.claimLog[len(d.claimLog)-maxClaimLog:]
+	}
+	snapshot := append([]claimLogEntry(nil), d.claimLog...)
+	d.mu.Unlock()
+	if msg, err := json.Marshal(map[string]any{"type": "claimlog", "entries": snapshot}); err == nil {
+		d.broadcast(msg)
+	}
 }
 
 // rosterLoop periodically reads the authoritative registry and pushes the
@@ -204,8 +270,30 @@ func (d *Dashboard) tickClaims() {
 		return
 	}
 	d.mu.Lock()
+	prev := d.claims
 	d.claims = held
 	d.mu.Unlock()
+
+	// Synthesize "released" history entries for claims that left the snapshot
+	// (manual release, TTL expiry, or coordinator reclaim-on-death) or whose
+	// holder changed. The new holder's own "claimed" take arrives via the tap,
+	// so only the departing holder needs synthesizing here.
+	newByKey := make(map[string]claim.Held, len(held))
+	for _, h := range held {
+		newByKey[claim.Key(h.Repo, h.Path)] = h
+	}
+	var releases []claimLogEntry
+	now := time.Now().UTC()
+	for _, p := range prev {
+		cur, ok := newByKey[claim.Key(p.Repo, p.Path)]
+		if !ok || cur.Agent != p.Agent {
+			releases = append(releases, claimLogEntry{
+				From: p.Agent, Path: p.Path, Repo: p.Repo, Result: "released", TS: now,
+			})
+		}
+	}
+	d.addClaimLog(releases...)
+
 	if msg, err := json.Marshal(map[string]any{"type": "claims", "claims": held}); err == nil {
 		d.broadcast(msg)
 	}
@@ -370,6 +458,7 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	d.clients[ch] = struct{}{}
 	roster := d.roster
+	claimLog := append([]claimLogEntry(nil), d.claimLog...)
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
@@ -383,6 +472,17 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
 			flusher.Flush()
 		}
+	}
+
+	// Replay the claim history ring so the Claim History panel is populated on
+	// connect (survives a browser refresh). Always sent, even when empty, so
+	// the client renders its empty state deterministically.
+	if claimLog == nil {
+		claimLog = []claimLogEntry{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "claimlog", "entries": claimLog}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
 	}
 
 	for {

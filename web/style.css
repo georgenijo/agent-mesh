@@ -204,7 +204,7 @@ body {
   min-height: 0;
 }
 
-.col-left   { width: 300px; flex-shrink: 0; }
+.col-left   { width: 360px; flex-shrink: 0; }
 .col-center { flex: 1; min-width: 0; }
 .col-right  { width: 280px; flex-shrink: 0; }
 
@@ -221,8 +221,8 @@ body {
   min-height: 0;
 }
 
-.panel-topology { flex: 1; }
-.panel-agents   { height: 190px; flex-shrink: 0; }
+.panel-topology { height: 280px; flex-shrink: 0; }
+.panel-agents   { flex: 1; }
 .panel-events   { flex: 1; }
 .panel-claims   { flex: 1; }
 .panel-notes    { flex: 1; }
@@ -272,9 +272,12 @@ body {
 }
 
 .stage {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1280px;
+  height: 740px;
+  transform-origin: top left;
   background-image:
     linear-gradient(to right, rgba(60, 73, 76, 0.07) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(60, 73, 76, 0.07) 1px, transparent 1px);
@@ -284,35 +287,21 @@ body {
 
 .routes {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
+  width: 1280px;
+  height: 740px;
 }
 
 #nodeLayer {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
+  width: 1280px;
+  height: 740px;
 }
 
-.legend {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 5;
-  font-family: var(--font-mono);
-  font-size: 8px;
-  color: var(--on-surface-dim);
-  background: rgba(19, 27, 46, 0.85);
-  border: 1px solid var(--surface-bright);
-  border-radius: var(--r);
-  padding: 5px 8px;
-  backdrop-filter: blur(4px);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
+.legend { display: none; }
 
 .bus {
   position: absolute;
@@ -330,7 +319,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 32px;
   letter-spacing: 0.18em;
   color: var(--outline);
   white-space: nowrap;
@@ -357,10 +346,80 @@ body {
   100% { filter: brightness(1); }
 }
 
+/* Node anatomy — sized so cards don't overlap at 0.24× fitStage scale */
+.node .top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(19, 27, 46, 0.95);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 10px 16px;
+  backdrop-filter: blur(4px);
+}
+
+.node .glyph {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 4px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.node .name {
+  font-family: var(--font-mono);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--on-surface);
+  line-height: 1.2;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node .role {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  color: var(--outline);
+  line-height: 1.2;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node .stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(19, 27, 46, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 28px;
+  color: var(--on-surface-dim);
+  max-width: 240px;
+}
+
+.node .msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
 /* Presence dot on node */
 .ndot {
-  width: 7px;
-  height: 7px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: var(--outline);
   display: inline-block;
@@ -401,7 +460,7 @@ body {
 
 .chip {
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -468,7 +527,7 @@ body {
 ══════════════════════════════════════════ */
 .pill {
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -582,7 +641,7 @@ body {
 
 .event-kind {
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -609,6 +668,86 @@ body {
   color: var(--outline);
   flex-shrink: 0;
 }
+
+/* ── Event sender ── */
+.event-from {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.event-label {
+  color: var(--on-surface-dim);
+  font-size: 10px;
+}
+
+/* ── Claim history ── */
+.panel-claim-history { flex: 1; }
+.panel-tickets       { flex: 1; }
+
+/* ── Pill variants ── */
+.pill.rose {
+  border-color: rgba(246, 111, 125, 0.6);
+  color: #f66f7d;
+  background: rgba(246, 111, 125, 0.08);
+}
+.pill.amber {
+  border-color: rgba(255, 179, 31, 0.5);
+  color: #ffb31f;
+  background: rgba(255, 179, 31, 0.07);
+}
+
+/* ══════════════════════════════════════════
+   CONFLICT TOASTS (enhance.js)
+══════════════════════════════════════════ */
+.conflict-toasts {
+  position: fixed;
+  top: 54px;
+  right: 12px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.conflict-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 340px;
+  padding: 7px 10px;
+  border-radius: var(--r);
+  border: 1px solid rgba(246, 111, 125, 0.6);
+  background: rgba(40, 18, 24, 0.96);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 12px rgba(246, 111, 125, 0.25);
+  font-family: var(--font-mono);
+  opacity: 0;
+  transform: translateX(16px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.conflict-toast.show { opacity: 1; transform: translateX(0); }
+
+.ct-tag {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #f66f7d;
+  border: 1px solid rgba(246, 111, 125, 0.6);
+  border-radius: var(--r);
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.ct-body {
+  font-size: 10px;
+  color: var(--on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-body b { color: var(--on-surface); font-weight: 700; }
 
 /* ══════════════════════════════════════════
    OFFSCREEN

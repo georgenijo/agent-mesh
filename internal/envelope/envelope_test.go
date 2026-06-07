@@ -30,6 +30,7 @@ func TestRoundTripEveryKind(t *testing.T) {
 		{KindAsk, &AskPayload{Ticket: "T1", Role: "auth", Q: "RLS recursion fix?"}, &AskPayload{}},
 		{KindAnswer, &AnswerPayload{Ticket: "T1", Answer: "use is_admin() SECURITY DEFINER"}, &AnswerPayload{}},
 		{KindNote, &NotePayload{ID: "codex-7", Decision: "events store UTC", Repo: "stbasils", Kind: NoteKindDecision, Ticket: "T1"}, &NotePayload{}},
+		{KindTicket, &TicketPayload{Ticket: "T1", State: TicketAnswered, By: "claude-2", Reason: "answered within TTL"}, &TicketPayload{}},
 	}
 
 	for _, tc := range cases {
@@ -112,14 +113,46 @@ func TestDecodeIntoKindMismatch(t *testing.T) {
 }
 
 func TestDecodeIntoInvalidPayload(t *testing.T) {
-	env, err := New(KindRegister, "a", "mesh.register", &RegisterPayload{}) // empty card
-	if err != nil {
-		t.Fatal(err)
+	// Built by hand: New validates payloads at the publish edge, so an empty
+	// card can only arrive over the wire — which is the edge DecodeInto guards.
+	env := Envelope{
+		SchemaVersion: SchemaVersion,
+		Kind:          KindRegister,
+		ID:            "x",
+		From:          "a",
+		Subject:       "mesh.register",
+		TS:            time.Now().UTC(),
+		Payload:       json.RawMessage(`{"card":{}}`), // empty card
 	}
 	var p RegisterPayload
-	err = DecodeInto(env, &p)
+	err := DecodeInto(env, &p)
 	if !IsDecodeError(err, CodeInvalidPayload) {
 		t.Fatalf("want invalid_payload, got %v", err)
+	}
+}
+
+// TestNewRejectsInvalidPayloads pins that the publish edge returns typed
+// CodeInvalidPayload errors — a malformed payload never reaches the wire.
+func TestNewRejectsInvalidPayloads(t *testing.T) {
+	cases := []struct {
+		name    string
+		kind    Kind
+		payload validator
+	}{
+		{"announce without intent", KindAnnounce, &AnnouncePayload{ID: "a"}},
+		{"note with unknown kind", KindNote, &NotePayload{ID: "a", Decision: "d", Kind: "rant"}},
+		{"note without id", KindNote, &NotePayload{Decision: "d"}},
+		{"ticket with unknown state", KindTicket, &TicketPayload{Ticket: "T1", State: "telepathy"}},
+		{"ticket without state", KindTicket, &TicketPayload{Ticket: "T1"}},
+		{"ticket without ticket", KindTicket, &TicketPayload{State: TicketOpen}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.kind, "a", "mesh.test", tc.payload)
+			if !IsDecodeError(err, CodeInvalidPayload) {
+				t.Fatalf("want invalid_payload, got %v", err)
+			}
+		})
 	}
 }
 

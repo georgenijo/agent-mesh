@@ -29,6 +29,20 @@ func SubjectNote(repo string) string { return "mesh.note." + repo }
 // only lets taps (dashboard, e2e) watch contention without polling the KV.
 func SubjectClaim(repo string) string { return "mesh.claim." + repo }
 
+// Ask/answer subjects (P2). An ask is addressed either to a role (the
+// coordinator routes it) or to a specific agent id (direct to that agent's
+// inbox); the answer travels on the ticket's own subject back to the asker's
+// sidecar.
+func SubjectAskRole(role string) string  { return "mesh.ask.role." + role }
+func SubjectAskID(id string) string      { return "mesh.ask.id." + id }
+func SubjectInbox(id string) string      { return "mesh.inbox." + id }
+func SubjectAnswer(ticket string) string { return "mesh.answer." + ticket }
+
+// SubjectTicket names the ticket-FSM transition event (KindTicket). The
+// tickets KV record is the authority for ticket state; this event only lets
+// taps (dashboard, e2e) watch the lifecycle without polling the KV.
+func SubjectTicket(ticket string) string { return "mesh.ticket." + ticket }
+
 // Subscription patterns.
 const (
 	PatternAll        = "mesh.>"
@@ -36,20 +50,27 @@ const (
 	PatternStatuses   = "mesh.status.>"
 	PatternAnnounces  = "mesh.announce.>"
 	PatternClaims     = "mesh.claim.>"
+	PatternAsks       = "mesh.ask.>"
+	PatternAnswers    = "mesh.answer.>"
+	PatternTickets    = "mesh.ticket.>"
 )
 
 // KV buckets. One authority per fact: the registry bucket is the single
 // source of truth for "who exists and in what presence state"; only the
 // coordinator writes it. The claims bucket is the single source of truth for
 // "who holds which path" — the CAS record is the lock, announce is advisory.
+// The tickets bucket is the single source of truth for ticket state —
+// mesh.ticket.<ticket> events are derived observability.
 const (
 	BucketRegistry = "registry"
 	BucketClaims   = "claims"
+	BucketTickets  = "tickets"
 )
 
 // Streams (bounded).
 const (
-	StreamAudit = "audit"
+	StreamAudit   = "audit"
+	StreamTickets = "ticket-events"
 )
 
 // StreamNotes is the per-repo durable blackboard stream name.
@@ -60,6 +81,10 @@ func StreamNotes(repo string) string { return "notes-" + repo }
 // slashes, and whitespace are forbidden, and length is bounded so derived
 // store names stay within the bus's 64-char name limit. A repo id is a label
 // chosen at join/claim time, not a filesystem path.
+//
+// Role and agent-id subject segments (mesh.ask.role.<role>, mesh.inbox.<id>,
+// …) must satisfy the same character class; that is enforced where those
+// identities are minted (join/agent-card validation), not here.
 var repoRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,48}$`)
 
 // ValidRepo reports whether s is a legal repo id.

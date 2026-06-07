@@ -21,12 +21,18 @@ const (
 	EnvClaimTTL          = "MESH_CLAIM_TTL"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
 	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
-	EnvAgentSocket       = "MESH_SOCKET" // CLI → sidecar socket override
-	EnvMeshdBin          = "MESH_MESHD"  // path to meshd for autostart
+	EnvAgentSocket       = "MESH_SOCKET"     // CLI → sidecar socket override
+	EnvMeshdBin          = "MESH_MESHD"      // path to meshd for autostart
+	EnvExpertCLI         = "MESH_EXPERT_CLI" // agent CLI an expert responder drives (default "claude")
 )
 
 // Defaults.
 const (
+	// DefaultExpertCLI is the agent CLI an expert responder drives when
+	// MESH_EXPERT_CLI is unset. A literal (not internal/runtime.DefaultBinary)
+	// so config carries no dependency on the runtime package.
+	DefaultExpertCLI = "claude"
+
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
 	DefaultEvictAfter        = 60 * time.Second
@@ -45,6 +51,7 @@ type Config struct {
 	ClaimTTL          time.Duration // claim lease backstop; renewed each heartbeat
 	DashboardAddr     string
 	ObserveAddr       string
+	ExpertCLI         string // agent CLI an expert responder drives (meshd --mode expert)
 }
 
 // Load resolves config from the environment with defaults.
@@ -56,6 +63,7 @@ func Load() (Config, error) {
 		RegistrationGrace: DefaultRegistrationGrace,
 		DashboardAddr:     DefaultDashboardAddr,
 		ObserveAddr:       DefaultObserveAddr,
+		ExpertCLI:         DefaultExpertCLI,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -97,6 +105,9 @@ func Load() (Config, error) {
 	}
 	if addr := os.Getenv(EnvObserveAddr); addr != "" {
 		cfg.ObserveAddr = addr
+	}
+	if cli := os.Getenv(EnvExpertCLI); cli != "" {
+		cfg.ExpertCLI = cli
 	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {
@@ -149,6 +160,28 @@ func (c Config) StreamsDir() string { return filepath.Join(c.MeshDir, "streams")
 
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }
+
+// DashboardPID is written by the running dashboard for ops inspection.
+func (c Config) DashboardPID() string { return filepath.Join(c.MeshDir, "dashboard.pid") }
+
+// DashboardAddrFile holds the dashboard's real bound address (it may differ
+// from DashboardAddr after a port-conflict fallback or :0). The one authority
+// for "where is the UI" — the daemon's stdout goes to a logfile when spawned
+// detached.
+func (c Config) DashboardAddrFile() string { return filepath.Join(c.MeshDir, "dashboard.addr") }
+
+// DashboardLock is the flock file electing a single dashboard autostarter.
+func (c Config) DashboardLock() string { return filepath.Join(c.MeshDir, "dashboard.lock") }
+
+// ObservePID is written by the running observe server for ops inspection.
+func (c Config) ObservePID() string { return filepath.Join(c.MeshDir, "observe.pid") }
+
+// ObserveAddrFile holds the observe server's real bound address (see
+// DashboardAddrFile).
+func (c Config) ObserveAddrFile() string { return filepath.Join(c.MeshDir, "observe.addr") }
+
+// ObserveLock is the flock file electing a single observe autostarter.
+func (c Config) ObserveLock() string { return filepath.Join(c.MeshDir, "observe.lock") }
 
 // EnsureDirs creates the mesh directories with owner-only permissions.
 func (c Config) EnsureDirs() error {

@@ -1,6 +1,13 @@
-# Claude Code claim-guard hook
+# Claude Code mesh hooks
 
-A `PreToolUse` hook that takes a mesh CAS claim on the target file before
+Two hooks for the first homogeneous Claude Code integration:
+
+- `mesh-claim-guard.sh`: a `PreToolUse` hook that takes a mesh CAS claim on
+  the target file before mutating tools.
+- `mesh-inbox-drain.sh`: a `Stop` hook that runs `mesh inbox --json` between
+  turns and prints pending accepted asks with the exact `mesh answer` command.
+
+The claim guard takes a mesh CAS claim on the target file before
 every mutating tool call (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`).
 If another agent already holds the path, the tool call is blocked (hook
 exit 2) and the model is told who owns it and since when — so agents
@@ -16,8 +23,8 @@ coordinate instead of colliding on the same file.
    `~/.mesh`). This is how the hook knows *which* agent it is. Without it the
    hook is a silent no-op (see "Identity" below) — it will not guess.
 3. Merge `settings-snippet.json` into your project's `.claude/settings.json`
-   (or `~/.claude/settings.json`), replacing `command` with the absolute
-   path to `mesh-claim-guard.sh` in your clone.
+   (or `~/.claude/settings.json`), replacing each `command` with the absolute
+   path to the hook script in your clone.
 4. Verify locally with `./test-claim-guard.sh` (stubs `mesh`; needs only
    bash + python3).
 
@@ -59,3 +66,20 @@ regardless (see "Identity" above).
 The hook only acquires. Claims are freed by `mesh release <path>`,
 `mesh leave`, or coordinator reclaim when the holder's presence lease
 expires. Auto-release (e.g. on Stop) is deferred past P1.
+
+## Stop hook inbox drain
+
+`mesh-inbox-drain.sh` is read-only. It requires the same `MESH_SOCKET`
+identity guard as the claim hook, then runs `mesh inbox --json`. If pending
+asks exist, it prints a stable block like:
+
+```text
+mesh inbox: pending asks
+- <ticket> from <agent>: <question>
+  context: <context>
+Reply with: mesh answer <ticket> "<answer>"
+```
+
+It exits 0 for not joined, empty inbox, missing `mesh`/`python3`, malformed
+JSON, or mesh transport errors. The hook never fabricates answers and never
+marks a ticket handled; the responder must explicitly run `mesh answer`.

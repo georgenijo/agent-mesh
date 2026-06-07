@@ -195,3 +195,19 @@ func TestArgvOwnedMatchesTokenExactly(t *testing.T) {
 		t.Fatalf("argvOwned rejected inline form: %s", detail)
 	}
 }
+
+func TestGatherTargetsIncludesServices(t *testing.T) {
+	snap := observe.Snapshot{
+		Services: []observe.ServiceInfo{
+			{Name: "dashboard", PID: 4321, PIDAlive: true},
+			{Name: "observe", PID: 0}, // no pid recorded → no target
+		},
+	}
+	targets := gatherTargets(snap)
+	if len(targets) != 1 {
+		t.Fatalf("targets = %+v, want exactly the dashboard", targets)
+	}
+	if targets[0].Kind != KindService || targets[0].Name != "dashboard" || targets[0].PID != 4321 {
+		t.Fatalf("target = %+v, want service/dashboard/4321", targets[0])
+	}
+}

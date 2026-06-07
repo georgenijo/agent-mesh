@@ -134,6 +134,60 @@ func TestDiagnose(t *testing.T) {
 			},
 			verdict: VerdictClean,
 		},
+		{
+			name: "healthy dashboard service",
+			snap: observe.Snapshot{
+				Coordinator: healthyCoord,
+				Services: []observe.ServiceInfo{{
+					Name: "dashboard", PIDFile: "/m/dashboard.pid", PID: 800, PIDAlive: true,
+					AddrFile: "/m/dashboard.addr", Addr: "127.0.0.1:8737", Dialable: true,
+				}},
+			},
+			verdict: VerdictClean,
+			entity:  "dashboard",
+			state:   StateHealthy,
+		},
+		{
+			name: "service pidfile dead",
+			snap: observe.Snapshot{
+				Coordinator: healthyCoord,
+				Services: []observe.ServiceInfo{{
+					Name: "observe", PIDFile: "/m/observe.pid", PID: 810, PIDAlive: false,
+					Drift: []observe.Drift{observe.DriftDeadPidfile},
+				}},
+				Anomalies: []string{"observe: dead_pidfile"},
+			},
+			verdict: VerdictDirty,
+			entity:  "observe",
+			state:   StateDeadPidfile,
+		},
+		{
+			name: "service alive but not serving is an orphan",
+			snap: observe.Snapshot{
+				Coordinator: healthyCoord,
+				Services: []observe.ServiceInfo{{
+					Name: "dashboard", PIDFile: "/m/dashboard.pid", PID: 820, PIDAlive: true,
+					AddrFile: "/m/dashboard.addr", Addr: "127.0.0.1:8737", Dialable: false,
+				}},
+			},
+			verdict: VerdictDirty,
+			entity:  "dashboard",
+			state:   StateOrphan,
+		},
+		{
+			name: "service addr file with no pidfile is stale",
+			snap: observe.Snapshot{
+				Coordinator: healthyCoord,
+				Services: []observe.ServiceInfo{{
+					Name: "dashboard", AddrFile: "/m/dashboard.addr", Addr: "127.0.0.1:8737",
+					Drift: []observe.Drift{observe.DriftStaleAddrFile},
+				}},
+				Anomalies: []string{"dashboard: stale_addrfile"},
+			},
+			verdict: VerdictDirty,
+			entity:  "dashboard",
+			state:   StateStaleAddrFile,
+		},
 	}
 
 	for _, tc := range cases {

@@ -26,6 +26,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/observe"
 )
 
 //go:embed dashboard.html
@@ -99,12 +100,21 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/notes", d.serveNotes)
 	mountWebUI(mux)
 
-	ln, err := net.Listen("tcp", d.addr)
+	ln, err := observe.ListenWithFallback(d.addr, d.log)
 	if err != nil {
 		cli.Close()
 		return fmt.Errorf("dashboard: listen %s: %w", d.addr, err)
 	}
 	d.ln = ln
+
+	// Run files for the ops plane and `mesh up`: pid first, then the real
+	// bound address atomically. The addr file is the readiness gate — once it
+	// exists the listener is accepting and the pidfile is complete.
+	if err := observe.WriteRunFiles(d.cfg.DashboardPID(), d.cfg.DashboardAddrFile(), d.Addr()); err != nil {
+		ln.Close()
+		cli.Close()
+		return fmt.Errorf("dashboard: %w", err)
+	}
 	d.httpSrv = &http.Server{Handler: mux}
 
 	d.wg.Add(2)
@@ -143,6 +153,7 @@ func (d *Dashboard) Stop() {
 	if d.bus != nil {
 		d.bus.Close()
 	}
+	observe.RemoveRunFiles(d.cfg.DashboardPID(), d.cfg.DashboardAddrFile())
 }
 
 // onEvent forwards one tapped envelope to all SSE clients.

@@ -6,6 +6,54 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-06: Expert responder loop = role-owning sidecar + inbox-draining loop over the runtime proxy (first non-manual P2 slice of #27)
+
+**Decision:** An *expert* is an ordinary role-owning sidecar plus a responder loop, not a new agent type. `Sidecar.ServeExpert` (`internal/sidecar/expert.go`) polls the agent's own already-accepted inbox — the existing role-ask subscription auto-accepts role-routed tickets via `handleIncomingAsk`, so the loop only *drains* what is accepted — and answers each ticket through `internal/runtime.Proxy`, the resident stream-json child. The child binary is swappable via `MESH_EXPERT_CLI` (default `claude`), so CI fakes the LLM (`test/e2e/fakeclaude`) while production drives real `claude`. Answers commit through the one existing path (`recordAndPublishAnswer`, factored out of `handleAnswer`): **tickets KV stays the sole authority, no coordinator answer-payload path, no fake-success** — only a `runtime.TurnAnswered` writes an answer; lost/error turns are skipped and poison tickets are tracked in-memory and left to TTL expiry (no new FSM state). Surface: `meshd --mode expert` (the daemon, autostarts the coordinator like `--mode sidecar`) plus a thin foreground `mesh expert serve` that execs it with the `--mesh-dir` ownership marker so `mesh ops down` tears it (and its tracked runtime child) down. Best-effort crash recovery: on `ErrProcessExited` the loop's runtime fn tries `proxy.Restart` (`--resume`) once.
+
+**Rationale:** This is the smallest honest dogfood after P2 — the manual `mesh inbox`/`mesh answer` step was the only thing between a routed ask and an automatic answer, and the auto-accept + single answer path already existed, so the slice is a loop plus a swappable runtime binary, not new machinery. Keeping the loop in `internal/sidecar` (where `ticketStore`/`publishTicket`/`TrackChild` live) behind an `ExpertFunc` seam keeps `internal/runtime` out of the sidecar package (no import cycle) and the runtime wiring in `cmd/meshd`. Faking only the LLM binary — not the proxy — exercises the real stream-json process boundary end-to-end in CI without an API key, honoring never-scrape-prose / one-authority / async-never-block.
+
+**Status:** active
+
+**References:** internal/sidecar/expert.go, internal/sidecar/verbs_p2.go (recordAndPublishAnswer), cmd/meshd/main.go (runExpert), internal/cli/expert.go, internal/config (MESH_EXPERT_CLI), internal/runtime, test/e2e/expert_test.go, test/e2e/fakeclaude; #27, #19, #20; extends 2026-06-05 "#27 persistent experts land as a prep slice" and "Persistent experts = a resident stream-json claude process"
+
+---
+
+## 2026-06-06: Claim loss is surfaced to the holder, never silent; no restart grace window
+
+**Decision:** Resolve #43: keep one-CAS-winner, lost-means-lost semantics — a rival that claims in the coordinator-restart gap legitimately wins, and there is no restart grace window. What changes: a holder whose claim is lost on **any** path (re-establishment loses after a coordinator bounce, eviction reclaim, any future race) must be **notified** — the sidecar emits a claim-lost event surfaced to the agent (hook-consumable and visible via its status surface), instead of silently dropping the claim from the held set. `TestClaimsReestablishedAfterCoordinatorRestart` is realigned to the documented semantics: it asserts the holder *observes the loss*, not that it always wins re-establishment.
+
+**Rationale:** The actual hazard in #43 is two agents editing one file while the original holder doesn't know it lost its lock — the silent forget, not the loss itself. A restart grace window would add special restart state for a rare event and close only one loss path; notification covers all of them and keeps CAS semantics honest (the claim was decided; the bug was not telling the loser). Test-encoding a guarantee the product doesn't make was the flake's root cause.
+
+**Status:** active
+
+**References:** #43, internal/sidecar/verbs_p1.go (reestablishClaims), internal/sidecar/verbs_p1_test.go; extends 2026-06-05 "Every claim and presence record is a TTL lease with reclaim-on-death"
+
+---
+
+## 2026-06-06: `mesh up` = idempotent infra bring-up in autostart; ops scope unchanged
+
+**Decision:** One command — `mesh up [--dashboard-addr A] [--observe-addr A]` — idempotently brings up coordinator + dashboard + observe and prints their URLs. The spawn logic lives in `internal/autostart` (which already starts coordinators and sidecars); `internal/ops` stays inspect + teardown + janitor and never spawns, preserving the 2026-06-05 actuator-verbs scope. Supporting protocol: dashboard/observe write run files under MESH_DIR (`<name>.pid` first, then `<name>.addr` atomically with the REAL bound address — the addr file is both the readiness gate and the one authority for "where is the UI"), spawn carries the `--mesh-dir` argv ownership marker so `ops down/doctor/clean` cover the services, and a foreign holder on the configured port triggers an EADDRINUSE-only fallback to `127.0.0.1:0` (other listen errors stay fatal). "Already running" = pidfile alive AND addr dialable; a live-but-not-serving pid is a typed error, never a respawn.
+
+**Rationale:** Three manual commands to get UI + monitoring was the real "local is annoying" pain (ports never were — sockets are MESH_DIR-namespaced; the two loopback TCP ports are the one global resource, hence the fallback). All machinery existed (EnsureCoordinator flock pattern, daemon modes, ops verbs); this is glue plus a run-file readiness protocol, not architecture. Scope stops at infrastructure: agents join themselves, worker spawning stays with the coordinator (P3).
+
+**Status:** active
+
+**References:** internal/autostart/services.go, internal/observe/runfiles.go, internal/cli/up.go, test/e2e/up_test.go; extends 2026-06-05 "Ops plane gains scoped actuator verbs"
+
+---
+
+## 2026-06-06: KV record shapes live in their domain package, not envelope; result enums live in envelope
+
+**Decision:** Authoritative KV record shapes live in the domain package that owns the fact — `agentcard.RegistryRecord` (presence), `claim.Record` (claims), and the new `ticket.Record` (tickets, `internal/ticket`, record-only until #17 builds the FSM there) — each frozen by a golden in that package's `testdata/`. `internal/envelope` owns the rest of the wire contract: kinds, subjects, payloads, and *all* result enums — `ReleaseResult` moved from `internal/claim` to `envelope/results.go` beside `ClaimResult`, with a type alias + const re-exports left in `claim` so call sites are unchanged.
+
+**Rationale:** Issue #37 spec'd a `envelope/records.go` before P1 landed; #12 had meanwhile placed `claim.Record`/`Key` in `internal/claim`, matching the `RegistryRecord` precedent. Duplicating the shape into envelope would create two unreconciled sources of truth — goldens pinning one copy while runtime uses the other. Wire pinning needs a golden somewhere, not a type move. P1 splitting `ReleaseResult` away from its sibling `ClaimResult` was the actual inconsistency, so that enum moved.
+
+**Status:** active
+
+**References:** internal/envelope, internal/claim/claim.go, internal/ticket, #37, #12, #17; partially supersedes the records.go layout in #37's text
+
+---
+
 ## 2026-06-05: P4 dashboard tap ships as SSE on the existing /events contract, present-day events only
 
 **Decision:** The #31 production dashboard (`web/`, served read-only at `/ui/` by the dashboard server) consumes the existing SSE `/events` contract — data-only frames discriminated by the JSON `type` field (`event` | `roster` | `claims`) — not the WebSocket transport the issue text named. Scope is what the mesh emits today: presence roster, status, heartbeats, announce, claims (rebuilt wholesale from the authoritative claims-KV snapshot frame, never derived from claim/leave envelopes), and blackboard notes. P2 tickets and P3 experts/workers get honest placeholder panels that populate only from real envelopes — nothing invented.

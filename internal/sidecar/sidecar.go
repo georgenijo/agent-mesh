@@ -24,6 +24,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
 	"github.com/georgenijo/agent-mesh/internal/socket"
+	"github.com/georgenijo/agent-mesh/internal/ticket"
 )
 
 // Sidecar is one agent's mesh daemon.
@@ -43,8 +44,10 @@ type Sidecar struct {
 	// coordinator restarts and its in-memory claims KV comes back empty
 	// (presence recovers the same way via re-register). Value is the
 	// (repo, path) needed to re-issue the claim.
-	held      map[string]heldClaim
-	startedAt time.Time
+	held        map[string]heldClaim
+	askSubs     map[string]*bus.Subscription
+	claimLosses []meshapi.ClaimLoss
+	startedAt   time.Time
 
 	childrenMu sync.Mutex
 	children   []meshapi.ChildProc
@@ -72,6 +75,7 @@ func New(cfg config.Config, card agentcard.Card, log *slog.Logger) (*Sidecar, er
 		log:       log,
 		card:      card,
 		held:      make(map[string]heldClaim),
+		askSubs:   make(map[string]*bus.Subscription),
 		pidFile:   cfg.AgentPIDFile(card.Name),
 		startedAt: time.Now(),
 		stop:      make(chan struct{}),
@@ -118,6 +122,11 @@ func (s *Sidecar) Start() error {
 	s.mu.Lock()
 	s.joined = true
 	s.mu.Unlock()
+	if err := s.refreshAskSubscriptions(); err != nil {
+		cli.Close()
+		os.Remove(s.pidFile) //nolint:errcheck
+		return fmt.Errorf("sidecar: subscribe asks: %w", err)
+	}
 
 	s.sock = socket.NewServer(s.cfg.AgentSocket(s.card.Name), s.handle)
 	if err := s.sock.Start(); err != nil {
@@ -246,6 +255,14 @@ func (s *Sidecar) handle(req socket.Request) socket.Response {
 		return s.handleNote(req)
 	case meshapi.VerbContext:
 		return s.handleContext(req)
+	case meshapi.VerbAsk:
+		return s.handleAsk(req)
+	case meshapi.VerbPoll:
+		return s.handlePoll(req)
+	case meshapi.VerbInbox:
+		return s.handleInbox(req)
+	case meshapi.VerbAnswer:
+		return s.handleAnswer(req)
 	case meshapi.VerbRuntime:
 		return s.handleRuntime()
 	default:
@@ -291,6 +308,9 @@ func (s *Sidecar) handleJoin(req socket.Request) socket.Response {
 	s.mu.Unlock()
 
 	if err := s.register(); err != nil {
+		return socket.Fail(socket.CodeUnavailable, err.Error())
+	}
+	if err := s.refreshAskSubscriptions(); err != nil {
 		return socket.Fail(socket.CodeUnavailable, err.Error())
 	}
 	return socket.OKData(meshapi.JoinResult{Card: args.Card, Rejoined: rejoined})
@@ -392,13 +412,19 @@ func (s *Sidecar) handleRuntime() socket.Response {
 	s.childrenMu.Lock()
 	children := append([]meshapi.ChildProc(nil), s.children...)
 	s.childrenMu.Unlock()
+	s.mu.Lock()
+	losses := append([]meshapi.ClaimLoss(nil), s.claimLosses...)
+	s.mu.Unlock()
 
 	return socket.OKData(meshapi.RuntimeResult{
-		SidecarPID: pid,
-		Uptime:     time.Since(started).Round(time.Millisecond).String(),
-		Children:   children,
+		SidecarPID:  pid,
+		Uptime:      time.Since(started).Round(time.Millisecond).String(),
+		Children:    children,
+		ClaimLosses: losses,
 	})
 }
+
+func (s *Sidecar) ticketStore() ticket.Store { return ticket.NewStore(s.bus) }
 
 // TrackChild records a child agent CLI process owned by this sidecar.
 func (s *Sidecar) TrackChild(cmd string, pid int) {

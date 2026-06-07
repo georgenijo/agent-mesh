@@ -43,6 +43,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {
+	case "up":
+		return runUp(rest, stdout, stderr)
 	case "join":
 		return runJoin(rest, stdout, stderr)
 	case "leave":
@@ -61,6 +63,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runNote(rest, stdout, stderr)
 	case "context":
 		return runContext(rest, stdout, stderr)
+	case "ask":
+		return runAsk(rest, stdout, stderr)
+	case "poll":
+		return runPoll(rest, stdout, stderr)
+	case "inbox":
+		return runInbox(rest, stdout, stderr)
+	case "answer":
+		return runAnswer(rest, stdout, stderr)
+	case "expert":
+		return runExpert(rest, stdout, stderr)
 	case "ops":
 		return runOps(rest, stdout, stderr)
 	case "version":
@@ -83,6 +95,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: mesh <command> [flags]
 
 commands:
+  up      [--dashboard-addr A] [--observe-addr A]
+          bring up coordinator + dashboard + observe; print URLs (idempotent)
   join    --name <id> --role <role> [--caps a,b,c] [--repo R] [--model M]
           register this agent on the mesh (autostarts its sidecar)
   leave   deregister and stop this agent's sidecar
@@ -98,6 +112,15 @@ commands:
   announce "<intent>" [--paths a,b] [--repo R]   broadcast advisory intent
   note     "<text>" [--repo R] [--kind K] [--ticket T]   append to blackboard
   context  [--repo R]          replay the repo's blackboard history
+
+  ask      (--role R | --to ID) "<question>" [--ctx C] [--ttl 30m]
+          create an async ask ticket and return immediately
+  poll     <ticket>             exit 3 until answered, 4 if missing
+  inbox    [--limit N] [--watch] list accepted questions for this agent
+  answer   <ticket> "<answer>"  answer an accepted ticket
+
+  expert serve --name <id> --role <role> [--caps a,b] [--repo R] [--model M]
+          run a resident expert that auto-answers role-routed asks (foreground)
 
 common flags:
   --json            machine-readable output

@@ -647,7 +647,7 @@ body {
   text-transform: uppercase;
   padding: 1px 5px;
   border-radius: var(--r);
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   flex-shrink: 0;
   line-height: 1.5;
 }

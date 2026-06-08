@@ -71,6 +71,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runInbox(rest, stdout, stderr)
 	case "answer":
 		return runAnswer(rest, stdout, stderr)
+	case "submit":
+		return runSubmit(rest, stdout, stderr)
 	case "expert":
 		return runExpert(rest, stdout, stderr)
 	case "ops":
@@ -118,6 +120,9 @@ commands:
   poll     <ticket>             exit 3 until answered, 4 if missing
   inbox    [--limit N] [--watch] list accepted questions for this agent
   answer   <ticket> "<answer>"  answer an accepted ticket
+
+  submit   "<task>" --repo R [--title T]   record a top-level job (open)
+  submit   --issue owner/repo#N [--repo R] ingest a GitHub issue as a job
 
   expert serve --name <id> --role <role> [--caps a,b] [--repo R] [--model M]
           run a resident expert that auto-answers role-routed asks (foreground)

@@ -263,6 +263,8 @@ func (s *Sidecar) handle(req socket.Request) socket.Response {
 		return s.handleInbox(req)
 	case meshapi.VerbAnswer:
 		return s.handleAnswer(req)
+	case meshapi.VerbSubmit:
+		return s.handleSubmit(req)
 	case meshapi.VerbRuntime:
 		return s.handleRuntime()
 	default:

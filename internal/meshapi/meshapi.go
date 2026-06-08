@@ -29,6 +29,7 @@ const (
 	VerbPoll     = "poll"
 	VerbInbox    = "inbox"
 	VerbAnswer   = "answer"
+	VerbSubmit   = "submit"
 	VerbRuntime  = "runtime"
 )
 
@@ -271,6 +272,33 @@ type AnswerVerbResult struct {
 	Ticket string               `json:"ticket"`
 	Result envelope.AskResult   `json:"result"`
 	State  envelope.TicketState `json:"state"`
+}
+
+// --- P3: ticket intake (`mesh submit`, #23) --------------------------------------
+
+const (
+	MaxJobTitleLen = 4096
+	MaxJobBodyLen  = 1 << 19 // 512 KiB; stays under the 1 MiB envelope payload cap
+)
+
+// SubmitArgs creates a top-level Job. The CLI does the argument shaping
+// (positional task vs --issue ingestion, title derivation); the sidecar gets
+// the resolved record fields and only enforces joined + non-empty/bounded.
+type SubmitArgs struct {
+	Repo      string `json:"repo"`
+	Source    string `json:"source"` // manual | github
+	SourceRef string `json:"sourceRef,omitempty"`
+	Title     string `json:"title"`
+	Body      string `json:"body,omitempty"`
+}
+
+// SubmitResult is the typed outcome of a submit: a created Job in JobOpen state.
+type SubmitResult struct {
+	Job       string            `json:"job"` // job id
+	Repo      string            `json:"repo"`
+	State     envelope.JobState `json:"state"`
+	Source    string            `json:"source"`
+	SourceRef string            `json:"sourceRef,omitempty"`
 }
 
 // ClaimLoss is sidecar-local observability for a claim the agent believed it

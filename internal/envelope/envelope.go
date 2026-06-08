@@ -42,6 +42,10 @@ const (
 	// The tickets KV record is the authority for ticket state, mirroring how
 	// KindClaim events relate to the claims bucket.
 	KindTicket Kind = "ticket"
+	// KindJob is the autonomous work-unit observability event (#23). The jobs
+	// KV record is the authority for job state; mesh.job.<id> envelopes are
+	// derived taps, mirroring how KindTicket relates to the tickets bucket.
+	KindJob Kind = "job"
 )
 
 var knownKinds = map[Kind]bool{
@@ -55,6 +59,7 @@ var knownKinds = map[Kind]bool{
 	KindAnswer:    true,
 	KindNote:      true,
 	KindTicket:    true,
+	KindJob:       true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

@@ -6,6 +6,30 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-08: Autonomous work hierarchy = Job → Task → (ask)Ticket; new domain packages, ask-ticket stays frozen
+
+**Decision:** The autonomous product's work unit is a **Job** (top-level intake created by `mesh submit`, `internal/job`, `BucketJobs`, lifecycle `open→triaged→scheduled→running→done|failed|cancelled`, `KindJob`/`SubjectJob`/`StreamJobs`). Triage (#24) decomposes a Job into **Tasks** (DAG nodes, `internal/task`). The existing `internal/ticket` package stays the **P2 agent-to-agent async ask** — unchanged and frozen. Duplicate submissions are allowed, each creating a new job id (dedup is #29 policy).
+
+**Rationale:** `ticket.Record` models a *question* (Q/Asker/Answer; open→routed→accepted→answered→closed). A Job is a *unit of work* that owns a DAG and has a different terminal lifecycle. Overloading `ticket` would reshape a frozen, golden-pinned contract (the runbook forbids it) and force a job through a Q&A FSM that does not fit. One authority per fact → a new domain package, mirroring the proven `ticket` shape.
+
+**Status:** active
+
+**References:** #23, #24; internal/job, internal/task, internal/ticket
+
+---
+
+## 2026-06-08: P3 execution plan — cheap-end-first, fleet-gated; worker isolation = worktree-per-worker
+
+**Decision:** P3 build order: #23 intake → #24 triage (+`internal/task` DAG) → **[fleet-feasibility spike gate]** → #25 scheduler → #26 worker. Ungated work (#27 expert review, #28 expert memory, test debt #38/#39/#40) interleaves. Worker isolation resolves to **worktree-per-worker** (physical isolation); P1 CAS file-claims remain the cross-worker advisory conflict signal — both, not either.
+
+**Rationale:** #23/#24 carry no fleet risk (#24 is a single planner invocation, not a fan-out). The one hard external risk — subscription rate-limits/ToS for N concurrent `claude -p` — is isolated behind a spike that gates only #25/#26, instead of blocking the whole build. Worktree gives clean physical isolation; claims give the mesh its own conflict signal.
+
+**Status:** active
+
+**References:** #23–#26, #27, #28, #38–#40; frontier open-questions Q1 (fleet feasibility) / Q4 (worker isolation)
+
+---
+
 ## 2026-06-06: Expert responder loop = role-owning sidecar + inbox-draining loop over the runtime proxy (first non-manual P2 slice of #27)
 
 **Decision:** An *expert* is an ordinary role-owning sidecar plus a responder loop, not a new agent type. `Sidecar.ServeExpert` (`internal/sidecar/expert.go`) polls the agent's own already-accepted inbox — the existing role-ask subscription auto-accepts role-routed tickets via `handleIncomingAsk`, so the loop only *drains* what is accepted — and answers each ticket through `internal/runtime.Proxy`, the resident stream-json child. The child binary is swappable via `MESH_EXPERT_CLI` (default `claude`), so CI fakes the LLM (`test/e2e/fakeclaude`) while production drives real `claude`. Answers commit through the one existing path (`recordAndPublishAnswer`, factored out of `handleAnswer`): **tickets KV stays the sole authority, no coordinator answer-payload path, no fake-success** — only a `runtime.TurnAnswered` writes an answer; lost/error turns are skipped and poison tickets are tracked in-memory and left to TTL expiry (no new FSM state). Surface: `meshd --mode expert` (the daemon, autostarts the coordinator like `--mode sidecar`) plus a thin foreground `mesh expert serve` that execs it with the `--mesh-dir` ownership marker so `mesh ops down` tears it (and its tracked runtime child) down. Best-effort crash recovery: on `ErrProcessExited` the loop's runtime fn tries `proxy.Restart` (`--resume`) once.

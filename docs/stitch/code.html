@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Agent Mesh - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface": "#0b1326",
+                      "secondary-fixed": "#ffddb8",
+                      "on-primary": "#00363e",
+                      "on-error-container": "#ffdad6",
+                      "on-tertiary-fixed-variant": "#005236",
+                      "tertiary": "#68f5b8",
+                      "surface-dim": "#0b1326",
+                      "primary": "#8aebff",
+                      "on-background": "#dae2fd",
+                      "surface-container-high": "#222a3d",
+                      "outline": "#859397",
+                      "error": "#ffb4ab",
+                      "primary-container": "#22d3ee",
+                      "on-primary-container": "#005763",
+                      "primary-fixed": "#a2eeff",
+                      "outline-variant": "#3c494c",
+                      "surface-bright": "#31394d",
+                      "on-tertiary": "#003824",
+                      "surface-variant": "#2d3449",
+                      "on-secondary": "#472a00",
+                      "on-tertiary-fixed": "#002113",
+                      "tertiary-fixed": "#6ffbbe",
+                      "error-container": "#93000a",
+                      "on-primary-fixed": "#001f25",
+                      "on-error": "#690005",
+                      "on-secondary-fixed": "#2a1700",
+                      "secondary": "#ffb95f",
+                      "tertiary-fixed-dim": "#4edea3",
+                      "inverse-surface": "#dae2fd",
+                      "on-secondary-container": "#5b3800",
+                      "inverse-on-surface": "#283044",
+                      "on-surface-variant": "#bbc9cd",
+                      "surface-container": "#171f33",
+                      "tertiary-container": "#46d89d",
+                      "secondary-container": "#ee9800",
+                      "on-secondary-fixed-variant": "#653e00",
+                      "surface-tint": "#2fd9f4",
+                      "surface-container-low": "#131b2e",
+                      "primary-fixed-dim": "#2fd9f4",
+                      "on-tertiary-container": "#005a3d",
+                      "surface-container-lowest": "#060e20",
+                      "inverse-primary": "#006877",
+                      "on-primary-fixed-variant": "#004e5a",
+                      "secondary-fixed-dim": "#ffb95f",
+                      "on-surface": "#dae2fd",
+                      "surface-container-highest": "#2d3449",
+                      "background": "#0b1326"
+              },
+              "borderRadius": {
+                      "sm": "0.125rem",
+                      "DEFAULT": "0.25rem",
+                      "md": "0.375rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "gutter": "12px",
+                      "unit": "4px",
+                      "panel-padding": "8px",
+                      "margin-safe": "16px"
+              },
+              "fontFamily": {
+                      "display-mono": [
+                              "JetBrains Mono"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "headline-sm": [
+                              "Inter"
+                      ],
+                      "label-xs": [
+                              "JetBrains Mono"
+                      ],
+                      "code-sm": [
+                              "JetBrains Mono"
+                      ]
+              },
+              "fontSize": {
+                      "display-mono": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-sm": [
+                              "18px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-xs": [
+                              "10px",
+                              {
+                                      "lineHeight": "12px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "code-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+        .pulse-thinking {
+            animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.2); opacity: 0.4; }
+            100% { transform: scale(1); opacity: 0.8; }
+        }
+        .pulse-locked {
+            animation: pulse-fast 0.5s infinite alternate;
+        }
+        @keyframes pulse-fast {
+            from { opacity: 0.6; }
+            to { opacity: 1; }
+        }
+        .data-link {
+            stroke-dasharray: 4;
+            animation: dash 20s linear infinite;
+        }
+        @keyframes dash {
+            to { stroke-dashoffset: -100; }
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #2d3449; /* surface-variant */
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md h-screen flex flex-col overflow-hidden">
+<!-- TopNavBar -->
+<nav class="bg-surface border-b border-outline-variant flex justify-between items-center w-full px-gutter h-8 shrink-0">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">hub</span>
+<span class="font-display-mono text-display-mono text-primary-fixed-dim text-sm uppercase">Agent Mesh</span>
+</div>
+<div class="hidden md:flex items-center gap-4 ml-4">
+<a class="text-primary border-b-2 border-primary pb-1 font-body-md text-body-md" href="#">Dashboard</a>
+<a class="text-on-surface-variant hover:text-primary-container transition-colors font-body-md text-body-md" href="#">Blackboard</a>
+<a class="text-on-surface-variant hover:text-primary-container transition-colors font-body-md text-body-md" href="#">Documentation</a>
+<a class="text-on-surface-variant hover:text-primary-container transition-colors font-body-md text-body-md" href="#">CLI</a>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-4 font-code-sm text-code-sm text-on-surface-variant hidden lg:flex">
+<span>Active Agents: <strong class="text-primary">4</strong></span>
+<span class="text-outline-variant">|</span>
+<span>Health: <strong class="text-tertiary">98%</strong></span>
+<span class="text-outline-variant">|</span>
+<span>Throughput: <strong class="text-secondary">2.5 MB/s</strong></span>
+<span class="text-outline-variant">|</span>
+<div class="flex items-center gap-1 border border-outline-variant px-1.5 py-0.5 rounded bg-surface-container-low">
+<div class="w-1.5 h-1.5 rounded-full bg-tertiary"></div>
+<span class="text-tertiary font-label-xs text-label-xs uppercase">Online</span>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<button aria-label="Settings" class="text-on-surface-variant hover:text-primary-container transition-colors scale-95 active:opacity-80">
+<span class="material-symbols-outlined text-[18px]">settings</span>
+</button>
+<button aria-label="Terminal" class="text-on-surface-variant hover:text-primary-container transition-colors scale-95 active:opacity-80">
+<span class="material-symbols-outlined text-[18px]">terminal</span>
+</button>
+<button class="flex items-center gap-1 text-on-surface-variant hover:text-error transition-colors scale-95 active:opacity-80 ml-2 border border-outline-variant px-2 py-0.5 rounded text-xs">
+<span class="material-symbols-outlined text-[14px]">logout</span>
+<span>Logout</span>
+</button>
+</div>
+</div>
+</nav>
+<!-- Main Content Layout -->
+<main class="flex-1 flex flex-col lg:flex-row gap-gutter p-gutter overflow-hidden h-full">
+<!-- Left Column: Topology & Active Stream -->
+<div class="w-full lg:w-[320px] xl:w-[380px] flex flex-col gap-gutter shrink-0">
+<!-- Mesh Topology Panel -->
+<div class="bg-surface-container border border-outline-variant rounded-lg flex flex-col flex-1 min-h-[300px]">
+<div class="flex justify-between items-center p-panel-padding border-b border-outline-variant bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">share</span>
+<h2 class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider">Mesh Topology</h2>
+</div>
+<button aria-label="Topology panel options" class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[16px]">more_horiz</span></button>
+</div>
+<div class="flex-1 relative bg-surface-container-lowest flex items-center justify-center p-4 overflow-hidden">
+<!-- SVG Network Visualization -->
+<svg class="absolute inset-0 w-full h-full" viewbox="0 0 300 250">
+<!-- Links -->
+<line stroke="#2d3449" stroke-width="1.5" x1="80" x2="220" y1="70" y2="70"></line>
+<line stroke="#2d3449" stroke-width="1.5" x1="80" x2="80" y1="70" y2="180"></line>
+<line class="data-link" stroke="#22d3ee" stroke-dasharray="4" stroke-width="1.5" x1="220" x2="220" y1="70" y2="180"></line>
+<line stroke="#2d3449" stroke-width="1.5" x1="80" x2="220" y1="180" y2="180"></line>
+<line stroke="#2d3449" stroke-width="1.5" x1="80" x2="220" y1="70" y2="180"></line>
+<line class="data-link" opacity="0.5" stroke="#68f5b8" stroke-width="1.5" x1="220" x2="80" y1="70" y2="180"></line>
+<!-- Nodes -->
+<!-- Alpha (Top Left) -->
+<g transform="translate(80, 70)">
+<circle class="pulse-thinking" fill="#171f33" r="18" stroke="#22d3ee" stroke-width="1.5"></circle>
+<text fill="#dae2fd" font-family="JetBrains Mono" font-size="10" text-anchor="middle" x="0" y="4">Alpha</text>
+</g>
+<!-- Beta (Top Right) -->
+<g transform="translate(220, 70)">
+<circle fill="#171f33" r="18" stroke="#ffb95f" stroke-width="1.5"></circle>
+<text fill="#dae2fd" font-family="JetBrains Mono" font-size="10" text-anchor="middle" x="0" y="4">Beta</text>
+</g>
+<!-- Gamma (Bottom Left) -->
+<g transform="translate(80, 180)">
+<circle fill="#171f33" r="18" stroke="#68f5b8" stroke-width="1.5"></circle>
+<text fill="#dae2fd" font-family="JetBrains Mono" font-size="10" text-anchor="middle" x="0" y="4">Gamma</text>
+</g>
+<!-- Delta (Bottom Right) -->
+<g transform="translate(220, 180)">
+<circle fill="#171f33" r="18" stroke="#a2eeff" stroke-width="1.5"></circle>
+<text fill="#dae2fd" font-family="JetBrains Mono" font-size="10" text-anchor="middle" x="0" y="4">Delta</text>
+</g>
+</svg>
+</div>
+</div>
+<!-- Active Dialogue Stream (mini) -->
+<div class="bg-surface-container border border-outline-variant rounded-lg flex flex-col flex-1 min-h-[200px]">
+<div class="flex justify-between items-center p-panel-padding border-b border-outline-variant bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">forum</span>
+<h2 class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider">Active Dialogue</h2>
+</div>
+<button aria-label="Active dialogue options" class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[16px]">more_horiz</span></button>
+</div>
+<div class="p-panel-padding flex-1 overflow-y-auto custom-scrollbar bg-surface-container-lowest">
+<!-- Recent Message Callout -->
+<div class="border border-primary-container/30 bg-surface-container rounded p-3 relative shadow-[0_0_10px_rgba(34,211,238,0.05)]">
+<div class="absolute left-0 top-0 bottom-0 w-0.5 bg-primary-container rounded-l"></div>
+<div class="font-code-sm text-code-sm text-primary-container mb-1">Agent Alpha (Architect)</div>
+<div class="font-code-sm text-code-sm text-on-surface-variant mb-1">-&gt; Agent Beta (Refactor):</div>
+<p class="font-body-md text-body-md text-on-surface text-sm">I've updated the API schema, please adjust the components.</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Center Column: Shared Agent Dialogue -->
+<div class="flex-1 bg-surface-container border border-outline-variant rounded-lg flex flex-col min-w-[400px]">
+<div class="flex justify-between items-center p-panel-padding border-b border-outline-variant bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">chat</span>
+<h2 class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider">Shared Agent Dialogue &amp; Events</h2>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-code-sm text-[10px] text-outline-variant">Auto-scroll</span>
+<button aria-label="Toggle auto-scroll" class="text-primary hover:text-primary-container"><span class="material-symbols-outlined text-[16px]">toggle_on</span></button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4 custom-scrollbar bg-surface-container-lowest">
+<!-- Chat Bubble Left -->
+<div class="self-start max-w-[80%] flex flex-col">
+<div class="flex items-center gap-2 mb-1 px-1">
+<span class="font-code-sm text-[10px] text-outline-variant">[2024-06-27 10:02:30]</span>
+<div class="w-2 h-2 rounded-full bg-primary-container"></div>
+<span class="font-code-sm text-xs text-primary-container">Agent Alpha</span>
+</div>
+<div class="bg-surface-container border border-outline-variant rounded-lg rounded-tl-none p-3 shadow-sm">
+<div class="font-code-sm text-code-sm text-on-surface-variant mb-1 opacity-70">-&gt; Agent Beta (Refactor):</div>
+<p class="font-body-md text-sm text-on-surface">I've updated the API schema, please adjust the components.</p>
+</div>
+</div>
+<!-- Chat Bubble Right -->
+<div class="self-end max-w-[80%] flex flex-col items-end">
+<div class="flex items-center gap-2 mb-1 px-1">
+<span class="font-code-sm text-xs text-secondary">Agent Beta</span>
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="font-code-sm text-[10px] text-outline-variant">[2024-06-27 10:02:32]</span>
+</div>
+<div class="bg-surface-variant border border-outline-variant rounded-lg rounded-tr-none p-3 shadow-sm text-left">
+<p class="font-body-md text-sm text-on-surface">Acknowledged. Initiating 'codebase-search' for 'getUserData'.</p>
+</div>
+</div>
+<!-- System Event log style in stream -->
+<div class="self-center flex items-center justify-center my-2 w-full">
+<div class="h-px bg-outline-variant/30 flex-1"></div>
+<span class="font-code-sm text-[10px] text-outline-variant px-2 bg-surface-container-lowest">[SYSTEM TOOL CALL: codebase-search completed in 1.2s]</span>
+<div class="h-px bg-outline-variant/30 flex-1"></div>
+</div>
+<!-- Chat Bubble Right -->
+<div class="self-end max-w-[80%] flex flex-col items-end">
+<div class="flex items-center gap-2 mb-1 px-1">
+<span class="font-code-sm text-xs text-secondary">Agent Beta</span>
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="font-code-sm text-[10px] text-outline-variant">[2024-06-27 10:02:34]</span>
+</div>
+<div class="bg-surface-variant border border-outline-variant rounded-lg rounded-tr-none p-3 shadow-sm text-left">
+<p class="font-body-md text-sm text-on-surface">Search complete. Found 3 references. Beginning refactor of userController.ts.</p>
+</div>
+</div>
+<!-- Chat Bubble Left Warning -->
+<div class="self-start max-w-[80%] flex flex-col">
+<div class="flex items-center gap-2 mb-1 px-1">
+<span class="font-code-sm text-[10px] text-outline-variant">[2024-06-27 10:02:35]</span>
+<div class="w-2 h-2 rounded-full bg-tertiary pulse-locked"></div>
+<span class="font-code-sm text-xs text-tertiary">Agent Gamma (Debugger)</span>
+</div>
+<div class="bg-[#1e1400] border border-secondary-container/50 rounded-lg rounded-tl-none p-3 shadow-sm relative overflow-hidden">
+<div class="absolute top-0 left-0 w-1 h-full bg-secondary-container"></div>
+<div class="font-code-sm text-code-sm text-secondary-container mb-1">-&gt; Agent Alpha (Architect):</div>
+<p class="font-body-md text-sm text-secondary-fixed">Potential conflict detected in 'src/api/userController.ts' during schema update. Awaiting resolution.</p>
+</div>
+</div>
+</div>
+<!-- Input Area -->
+<div class="p-3 bg-surface-container-low border-t border-outline-variant">
+<div class="relative flex items-center">
+<input class="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 text-sm font-code-sm text-on-surface focus:outline-none focus:border-primary-container focus:ring-1 focus:ring-primary-container transition-all placeholder:text-outline-variant" placeholder="Type a message to inject into stream..." type="text"/>
+<button aria-label="Send message" class="absolute right-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-[18px]">send</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Right Column: Locks & Blackboard -->
+<div class="w-full lg:w-[300px] xl:w-[350px] flex flex-col gap-gutter shrink-0">
+<!-- File Locks Panel -->
+<div class="bg-surface-container border border-outline-variant rounded-lg flex flex-col flex-1">
+<div class="flex justify-between items-center p-panel-padding border-b border-outline-variant bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">lock</span>
+<h2 class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider">File Locks</h2>
+</div>
+<span class="font-code-sm text-[10px] bg-surface-variant px-1.5 py-0.5 rounded text-on-surface-variant">4 Active</span>
+</div>
+<div class="flex-1 p-panel-padding overflow-y-auto custom-scrollbar bg-surface-container-lowest">
+<div class="flex flex-col gap-1">
+<!-- Lock Row -->
+<div class="flex items-center justify-between p-2 hover:bg-surface-container transition-colors rounded group border border-transparent hover:border-outline-variant/50">
+<span class="font-code-sm text-xs text-on-surface truncate pr-2">src/api/userController.ts</span>
+<span class="font-label-xs text-[9px] bg-[#1a2e22] text-tertiary px-1.5 py-0.5 rounded uppercase whitespace-nowrap border border-tertiary/30">Gamma</span>
+</div>
+<!-- Lock Row -->
+<div class="flex items-center justify-between p-2 hover:bg-surface-container transition-colors rounded group border border-transparent hover:border-outline-variant/50">
+<span class="font-code-sm text-xs text-on-surface truncate pr-2">src/components/Header.tsx</span>
+<span class="font-label-xs text-[9px] bg-[#2d2100] text-secondary px-1.5 py-0.5 rounded uppercase whitespace-nowrap border border-secondary/30">Beta</span>
+</div>
+<!-- Lock Row -->
+<div class="flex items-center justify-between p-2 hover:bg-surface-container transition-colors rounded group border border-transparent hover:border-outline-variant/50">
+<span class="font-code-sm text-xs text-on-surface truncate pr-2">tests/unit/auth.test.ts</span>
+<span class="font-label-xs text-[9px] bg-[#002f38] text-primary px-1.5 py-0.5 rounded uppercase whitespace-nowrap border border-primary/30">Delta</span>
+</div>
+<!-- Lock Row -->
+<div class="flex items-center justify-between p-2 hover:bg-surface-container transition-colors rounded group border border-transparent hover:border-outline-variant/50">
+<span class="font-code-sm text-xs text-on-surface truncate pr-2">package.json</span>
+<span class="font-label-xs text-[9px] bg-[#002f38] text-primary-container px-1.5 py-0.5 rounded uppercase whitespace-nowrap border border-primary-container/30">Alpha</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Shared Blackboard Panel -->
+<div class="bg-surface-container border border-outline-variant rounded-lg flex flex-col flex-1">
+<div class="flex justify-between items-center p-panel-padding border-b border-outline-variant bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">dashboard</span>
+<h2 class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider">Shared Blackboard</h2>
+</div>
+<button aria-label="Open blackboard in new view" class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[16px]">open_in_new</span></button>
+</div>
+<div class="flex-1 p-panel-padding overflow-y-auto custom-scrollbar bg-surface-container-lowest font-code-sm text-xs">
+<div class="flex flex-col gap-3">
+<div class="flex gap-2">
+<span class="text-primary-container font-bold shrink-0">[NOTE]</span>
+<span class="text-on-surface">Project Goal: Implement new user authentication flow by EOD.</span>
+</div>
+<div class="h-px bg-outline-variant/30 w-full"></div>
+<div class="flex gap-2">
+<span class="text-primary font-bold shrink-0">[TASK]</span>
+<span class="text-on-surface-variant">Agent Alpha: Finalize architecture for auth service.</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary font-bold shrink-0">[TASK]</span>
+<span class="text-on-surface-variant">Agent Beta: Refactor existing user components for new auth.</span>
+</div>
+<div class="flex gap-2">
+<span class="text-tertiary font-bold shrink-0">[TASK]</span>
+<span class="text-on-surface-variant">Agent Gamma: Debug connection issues with auth provider.</span>
+</div>
+<div class="h-px bg-outline-variant/30 w-full"></div>
+<div class="flex gap-2 border-l-2 border-error pl-2">
+<span class="text-error font-bold shrink-0">[ALERT]</span>
+<span class="text-error-container">Code freeze approaching for release candidate. Resolve conflicts immediately.</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="bg-surface-container-lowest border-t border-outline-variant flex justify-between items-center px-margin-safe py-1 w-full shrink-0">
+<div class="flex items-center gap-4 text-outline-variant font-code-sm text-[10px]">
+<span>Uptime: 10 minutes [7:50:12 M]</span>
+</div>
+<div class="flex items-center gap-4 text-outline-variant font-code-sm text-[10px]">
+<span>Version: 2.10.39</span>
+</div>
+</footer>
+</body></html>

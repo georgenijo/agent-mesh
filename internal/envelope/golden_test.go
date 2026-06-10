@@ -290,6 +290,17 @@ func TestContractStrings(t *testing.T) {
 		{"FleetPaused", string(FleetPaused), "paused"},
 		{"FleetBudgetExhausted", string(FleetBudgetExhausted), "budget_exhausted"},
 		{"FleetBillingError", string(FleetBillingError), "billing_error"},
+		// Audit categories (#29 unified audit log).
+		{"AuditPresence", string(AuditPresence), "presence"},
+		{"AuditClaim", string(AuditClaim), "claim"},
+		{"AuditTicket", string(AuditTicket), "ticket"},
+		{"AuditAsk", string(AuditAsk), "ask"},
+		{"AuditAnswer", string(AuditAnswer), "answer"},
+		{"AuditJob", string(AuditJob), "job"},
+		{"AuditTask", string(AuditTask), "task"},
+		{"AuditTriage", string(AuditTriage), "triage"},
+		{"AuditWorker", string(AuditWorker), "worker"},
+		{"AuditFleet", string(AuditFleet), "fleet"},
 		// Kinds.
 		{"KindRegister", string(KindRegister), "register"},
 		{"KindLeave", string(KindLeave), "leave"},

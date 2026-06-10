@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-09: Fleet billing posture = hard cap, no overflow; budget is the scheduler's first-class scarce resource
+
+**Decision:** Resolving the fleet-feasibility spike gate (#68, verdict FEASIBLE-WITH-LIMITS): keep subscription **usage credits DISABLED** (no pay-as-you-go overflow) and treat the monthly Agent-SDK credit as the first-class scarce scheduling resource. Per Anthropic Help Center article 15036540 (verified 2026-06-09), from **2026-06-15** `claude -p` / Agent SDK usage moves off the subscription's usage limits onto a separate monthly credit (Pro $20 / Max 5x $100 / Max 20x $200), metered at standard API rates, that **hard-stops when exhausted** unless usage credits are enabled. So the #25 scheduler must: accumulate per-task `total_cost_usd` (present in every `--output-format json` envelope), enforce a configurable budget cap (e.g. `MESH_BUDGET_USD`), and on hitting the cap or a `billing_error` **pause the fleet** (jobs stay queued, never failed) until credit refresh; back off only on `rate_limit`/`overloaded`; always pin `--model`; never pass `--bare` (breaks subscription OAuth and is slated to become the `-p` default). Safe parallelism is 4–8 workers (host-bound, not API-bound).
+
+**Rationale:** Empirical concurrency was clean (16/16 at up to 8-way today; M0 saw 30-way), so concurrency is not the constraint — monthly dollars are. A hard cap with queue-don't-fail semantics is the cheapest, surprise-bill-proof posture and keeps the "no API key in core" lock intact economically (revisiting that lock was raised by the spike but deferred — post-June-15 a key buys little but reshapes the architecture). Building/testing #25/#26 costs $0 regardless: CI drives the fake planner/worker binaries (`fakeplanner`/`fakeclaude`), so real spend begins only when the operator points the runtime at the real `claude`.
+
+**Status:** active
+
+**References:** #68, #25, #26, docs/spikes/fleet-feasibility.md; extends 2026-06-05 "All cognition is a CLI invocation on the user's subscription" and 2026-06-08 "P3 execution plan — cheap-end-first, fleet-gated"
+
+---
+
 ## 2026-06-09: Triage = coordinator-embedded sweep loop, opt-in via MESH_PLANNER_CLI; one attempt per job; tasks-first commit
 
 **Decision:** #24 triage runs inside the coordinator as a sweep loop (cadence HeartbeatInterval/2, same as the presence janitor), gated on `MESH_PLANNER_CLI` being set — **no default planner binary**: unset means triage is off. The planner is one one-shot `<cli> -p --output-format json` child per job (model pinned via `MESH_PLANNER_MODEL`, default `sonnet`; wall-clock bound `MESH_TRIAGE_TIMEOUT`, default 2m, with a WaitDelay so a grandchild holding the stdout pipe cannot wedge the loop); stdout is parsed with internal/runtime's never-fake-success result discriminators. Plan-document shape + DAG validation (cycles via Kahn, duplicate/missing node ids, unknown deps, role exact-token match) live in `internal/task` beside the golden-pinned Task record (`BucketTasks`, deps stored as resolved task ids); prompt/model/invocation/orchestration live in `internal/triage`. Each job is attempted **once per coordinator lifetime**; any typed failure (`planner_unavailable | planner_failed | bad_plan | invalid_dag | internal`) transitions the job open→failed — retry/backoff is deferred policy. Commit order is tasks-first, then CAS job open→triaged, so a job that never reaches triaged can never expose a partial DAG to the #25 scheduler (which only reads tasks of triaged jobs).

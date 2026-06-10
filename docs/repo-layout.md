@@ -45,7 +45,8 @@ agent-mesh/
 │   └── style.css
 │
 ├── hooks/                      # §6 agent-CLI integration glue (shipped, not compiled in)
-│   ├── claude-code/            #   PreToolUse (claim check) + Stop (inbox drain)
+│   ├── claude-code/            #   Claude Code lifecycle hooks
+│   ├── codex/                  #   Codex CLI lifecycle hooks + optional launcher
 │   └── README.md               #   per-CLI install instructions; parity caveats
 │
 ├── deploy/                     # packaging (the multi-host / isolation path — later)
@@ -102,6 +103,6 @@ agent-mesh/
 - **P0** (presence): `cmd/{meshd,mesh}`, `internal/{envelope,bus,socket,sidecar,coordinator,cli,agentcard,config}`, minimal `web/`.
 - **P1** (announce + blackboard): `internal/{claim}`; blackboard lives in `bus` (streams).
 - **P2** (ask/answer): `internal/{ticket}`; `hooks/claude-code/`.
-- **P3** (experts/caching/multi-CLI): more under `hooks/`; cache/policy inside `coordinator`.
+- **P3** (experts/caching/multi-CLI): `hooks/codex/` and more per-CLI adapters; cache/policy inside `coordinator`.
 - **P4** (live dashboard): flesh out `web/`; `internal/dashboard` switches the mockup feed to the live tap.
 - **later**: `deploy/`.

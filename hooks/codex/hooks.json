@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/agent-mesh/hooks/codex/mesh-session-start.sh",
+            "timeout": 15,
+            "statusMessage": "Joining Agent Mesh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/agent-mesh/hooks/codex/mesh-claim-guard.sh",
+            "timeout": 10,
+            "statusMessage": "Claiming patch targets"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/agent-mesh/hooks/codex/mesh-inbox-drain.sh",
+            "timeout": 15,
+            "statusMessage": "Checking mesh inbox"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -10,5 +10,5 @@
     "repo": "testrepo",
     "role": "builder"
   },
-  "rejoined": true
+  "rejoined": false
 }

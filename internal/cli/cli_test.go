@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/georgenijo/agent-mesh/internal/config"
+	"github.com/georgenijo/agent-mesh/internal/socket"
 	"github.com/georgenijo/agent-mesh/internal/testsock"
 )
 
@@ -98,5 +100,175 @@ func TestOpsJSONOnEmptyMeshDir(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"meshDir"`) {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+// TestExitCodeConstants pins the numeric values of all documented exit codes.
+// These are the frozen taxonomy (ARCHITECTURE §4, agent-runbook.md):
+// 0 ok · 1 error · 2 usage · 3 no-answer-yet · 4 no-such-ticket · 5 not-joined
+// · 6 claim-lost · 7 dirty.
+// Changing any constant here is a contract break that requires a decision log entry.
+func TestExitCodeConstants(t *testing.T) {
+	type codeRow struct {
+		name string
+		got  int
+		want int
+	}
+	rows := []codeRow{
+		{"ExitOK", ExitOK, 0},
+		{"ExitError", ExitError, 1},
+		{"ExitUsage", ExitUsage, 2},
+		{"ExitNoAnswer", ExitNoAnswer, 3},
+		{"ExitNoTicket", ExitNoTicket, 4},
+		{"ExitNotJoined", ExitNotJoined, 5},
+		{"ExitClaimLost", ExitClaimLost, 6},
+		{"ExitDirty", ExitDirty, 7},
+	}
+	for _, row := range rows {
+		if row.got != row.want {
+			t.Errorf("%s = %d, want %d (frozen contract — requires decision log entry to change)",
+				row.name, row.got, row.want)
+		}
+	}
+}
+
+// TestUnitExitCodeMatrix consolidates unit-level exit-code coverage for every
+// verb path that does not require a live daemon. Rows that need a real
+// coordinator are in test/e2e/contract_test.go TestExitCodeMatrix.
+//
+// Codes 3 and 4 are reserved for the P2 poll verb; they are rows here so the
+// full taxonomy is enumerated in one place.
+func TestUnitExitCodeMatrix(t *testing.T) {
+	type row struct {
+		name     string
+		skip     string
+		args     []string
+		wantCode int
+	}
+	rows := []row{
+		// --- exit 0 ---
+		{"version_ok", "", []string{"version"}, ExitOK},
+		{"help_ok", "", []string{"help"}, ExitOK},
+
+		// --- exit 2: usage ---
+		{"no_args", "", []string{}, ExitUsage},
+		{"unknown_verb", "", []string{"frobnicate"}, ExitUsage},
+		{"join_no_name", "", []string{"join", "--role", "builder"}, ExitUsage},
+		{"join_no_role", "", []string{"join", "--name", "x"}, ExitUsage},
+		{"join_invalid_name", "", []string{"join", "--name", "bad.name", "--role", "r"}, ExitUsage},
+		{"status_no_text", "", []string{"status"}, ExitUsage},
+
+		// --- exit 5: not joined (no sidecar in empty MESH_DIR) ---
+		{"who_not_joined", "", []string{"who"}, ExitNotJoined},
+		{"status_not_joined", "", []string{"status", "hi"}, ExitNotJoined},
+		{"leave_not_joined", "", []string{"leave"}, ExitNotJoined},
+		{"join_no_autostart", "", []string{"join", "--name", "x", "--role", "r", "--no-autostart"}, ExitNotJoined},
+
+		// --- exit 3 reserved ---
+		{
+			name:     "reserved_exit_3_no_answer_yet",
+			skip:     "exit 3 reserved for P2 poll (not yet covered at unit level)",
+			args:     nil,
+			wantCode: ExitNoAnswer,
+		},
+
+		// --- exit 4 reserved ---
+		{
+			name:     "reserved_exit_4_no_such_ticket",
+			skip:     "exit 4 reserved for P2 poll (not yet covered at unit level)",
+			args:     nil,
+			wantCode: ExitNoTicket,
+		},
+	}
+	for _, row := range rows {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			if row.skip != "" {
+				t.Skip(row.skip)
+			}
+			code, _, _ := run(t, row.args...)
+			if code != row.wantCode {
+				t.Errorf("exit = %d, want %d", code, row.wantCode)
+			}
+		})
+	}
+}
+
+// TestExitForCode covers the exitForCode mapping that turns socket error codes
+// into process exit codes.
+func TestExitForCode(t *testing.T) {
+	rows := []struct {
+		code     string
+		wantExit int
+	}{
+		{socket.CodeNotJoined, ExitNotJoined},
+		{socket.CodeBadRequest, ExitUsage},
+		{socket.CodeUnavailable, ExitError},
+		{socket.CodeInternal, ExitError},
+		{"unknown_code", ExitError},
+		{"", ExitError},
+	}
+	for _, row := range rows {
+		got := exitForCode(row.code)
+		if got != row.wantExit {
+			t.Errorf("exitForCode(%q) = %d, want %d", row.code, got, row.wantExit)
+		}
+	}
+}
+
+// TestErrorJSONShape pins the {"ok":false,"code":"...","message":"..."} shape
+// that emit() writes to stdout when --json is set and the verb fails with a
+// socket-level error response. A fake socket server is used so this test needs
+// no live daemon.
+//
+// Note: pre-socket failures (resolveSocket returning not-joined when no socket
+// file exists) bypass emit() and print to stderr even with --json. That
+// asymmetry is frozen as-is; changing it is a separate decision.
+func TestErrorJSONShape(t *testing.T) {
+	// Start a fake socket server that returns a not_joined failure response.
+	sockPath := testsock.Path(t, "fake.sock")
+	srv := socket.NewServer(sockPath, func(req socket.Request) socket.Response {
+		return socket.Fail(socket.CodeNotJoined, "not joined: no agent registered")
+	})
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start fake server: %v", err)
+	}
+	defer srv.Stop()
+
+	dir := testsock.Dir(t)
+	t.Setenv(config.EnvMeshDir, dir)
+	t.Setenv(config.EnvAgentSocket, sockPath)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"who", "--json"}, &stdout, &stderr)
+	if code != ExitNotJoined {
+		t.Fatalf("exit = %d, want %d\nstdout: %s\nstderr: %s",
+			code, ExitNotJoined, stdout.String(), stderr.String())
+	}
+	// The JSON error object must be on stdout (not stderr) when --json is set.
+	if stdout.Len() == 0 {
+		t.Fatal("stdout empty: JSON error object must go to stdout with --json")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &obj); err != nil {
+		t.Fatalf("error object not valid JSON: %v\nstdout: %s", err, stdout.String())
+	}
+	// Required fields: ok (bool false), code (string), message (string).
+	if ok, exists := obj["ok"]; !exists || ok != false {
+		t.Errorf("error object missing or wrong 'ok': %v", obj)
+	}
+	if _, exists := obj["code"]; !exists {
+		t.Errorf("error object missing 'code': %v", obj)
+	}
+	if _, exists := obj["message"]; !exists {
+		t.Errorf("error object missing 'message': %v", obj)
+	}
+	// No unexpected extra fields (keep the contract minimal).
+	for k := range obj {
+		switch k {
+		case "ok", "code", "message":
+		default:
+			t.Errorf("error object has unexpected field %q: %v", k, obj)
+		}
 	}
 }

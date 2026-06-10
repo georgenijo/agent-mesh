@@ -1,0 +1,46 @@
+{
+  "children": null,
+  "coordinator": {
+    "busDialable": true,
+    "busSocketPresent": true,
+    "lockPresent": false,
+    "logPath": "\u003clogPath\u003e",
+    "pid": "\u003cpid\u003e",
+    "pidAlive": true
+  },
+  "meta": {
+    "collectedAt": "\u003cts\u003e",
+    "meshDir": "\u003cmeshDir\u003e"
+  },
+  "sidecars": [
+    {
+      "logPath": "\u003clogPath\u003e",
+      "name": "alpha",
+      "pid": "\u003cpid\u003e",
+      "pidAlive": true,
+      "pidFile": "\u003cpidFile\u003e",
+      "pidFilePid": "\u003cpid\u003e",
+      "registry": {
+        "card": {
+          "caps": [
+            "go"
+          ],
+          "cwd": "\u003ccwd\u003e",
+          "id": "\u003cid\u003e",
+          "name": "alpha",
+          "pid": "\u003cpid\u003e",
+          "repo": "testrepo",
+          "role": "builder"
+        },
+        "lastSeen": "\u003cts\u003e",
+        "lastStatus": "working on tests",
+        "lastStatusAt": "\u003cts\u003e",
+        "registeredAt": "\u003cts\u003e",
+        "state": "live"
+      },
+      "socket": "\u003csocket\u003e",
+      "socketDialable": true,
+      "socketPresent": true
+    }
+  ]
+}

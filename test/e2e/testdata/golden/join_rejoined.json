@@ -1,0 +1,14 @@
+{
+  "card": {
+    "caps": [
+      "go"
+    ],
+    "cwd": "\u003ccwd\u003e",
+    "id": "\u003cid\u003e",
+    "name": "alpha",
+    "pid": "\u003cpid\u003e",
+    "repo": "testrepo",
+    "role": "builder"
+  },
+  "rejoined": true
+}

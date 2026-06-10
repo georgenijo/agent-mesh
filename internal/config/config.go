@@ -174,8 +174,8 @@ func (c Config) DashboardAddrFile() string { return filepath.Join(c.MeshDir, "da
 func (c Config) DashboardLock() string { return filepath.Join(c.MeshDir, "dashboard.lock") }
 
 // DashboardTokenFile holds the write-API bearer token the dashboard generated
-// on start. The UI reads it from the page's own JSON embedding (never directly
-// from disk); CLI users can read it too. Observer endpoints stay unauthenticated.
+// on start. The UI fetches it from GET /api/write-token (never directly from
+// disk); CLI users can read the file. Observer endpoints stay unauthenticated.
 func (c Config) DashboardTokenFile() string {
 	return filepath.Join(c.MeshDir, "dashboard.token")
 }

@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Mesh - Ticket Lifecycle</title>
+<style>
+  :root {
+    --bg: #f5f7fb;
+    --ink: #172033;
+    --muted: #667085;
+    --panel: #ffffff;
+    --panel-2: #eef4ff;
+    --line: #d7dfec;
+    --line-strong: #a7b4ca;
+    --ask: #f59e0b;
+    --answer: #16a34a;
+    --ticket: #2563eb;
+    --accepted: #7c3aed;
+    --danger: #dc2626;
+    --bus: #0891b2;
+    --shadow: 0 14px 36px rgba(24, 39, 75, 0.12);
+    --radius: 8px;
+    --speed: 900ms;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+  }
+
+  body {
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  .app {
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  .topbar {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(10px);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .brand-mark {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+  }
+
+  .brand h1 {
+    margin: 0;
+    font-size: 17px;
+    letter-spacing: 0;
+    line-height: 1.1;
+  }
+
+  .brand p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .btn {
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    min-height: 34px;
+  }
+
+  .btn.primary {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #fff;
+    min-width: 72px;
+  }
+
+  .btn:focus-visible,
+  .dot-button:focus-visible {
+    outline: 3px solid rgba(37, 99, 235, 0.28);
+    outline-offset: 2px;
+  }
+
+  .speed {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .speed input {
+    width: 108px;
+  }
+
+  .workspace {
+    width: min(1440px, 100%);
+    margin: 0 auto;
+    padding: 18px;
+    display: grid;
+    grid-template-columns: 300px minmax(480px, 1fr) 330px;
+    gap: 14px;
+    min-height: calc(100vh - 56px);
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    min-width: 0;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .panel-head h2 {
+    margin: 0;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    background: #eef4ff;
+    color: #1d4ed8;
+    white-space: nowrap;
+  }
+
+  .left,
+  .right {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .stage-panel {
+    position: relative;
+    overflow: hidden;
+    min-height: 704px;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+  }
+
+  .story {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    min-height: 96px;
+  }
+
+  .story-kicker {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .story h2 {
+    margin: 6px 0 4px;
+    font-size: 20px;
+    letter-spacing: 0;
+  }
+
+  .story p {
+    margin: 0;
+    color: #48566d;
+    line-height: 1.45;
+    font-size: 14px;
+  }
+
+  .stage {
+    position: relative;
+    min-height: 488px;
+    padding: 18px;
+    background:
+      linear-gradient(#e8eef8 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(90deg, #e8eef8 1px, transparent 1px) 0 0 / 32px 32px,
+      #f8fbff;
+  }
+
+  .agent {
+    position: absolute;
+    width: 172px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.96);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 10px 24px rgba(24, 39, 75, 0.12);
+    transition: border-color 240ms ease, box-shadow 240ms ease, transform 240ms ease, opacity 240ms ease;
+  }
+
+  .agent.active {
+    border-color: var(--ticket);
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12), 0 12px 28px rgba(24, 39, 75, 0.16);
+    transform: translateY(-2px);
+  }
+
+  .agent.answering {
+    border-color: var(--answer);
+    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14), 0 12px 28px rgba(24, 39, 75, 0.16);
+  }
+
+  .agent.lost {
+    opacity: 0.62;
+  }
+
+  .agent-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    color: #fff;
+  }
+
+  .avatar.asker {
+    background: var(--ticket);
+  }
+
+  .avatar.db {
+    background: var(--answer);
+  }
+
+  .avatar.api {
+    background: var(--accepted);
+  }
+
+  .avatar.ui {
+    background: var(--ask);
+  }
+
+  .agent h3 {
+    margin: 0;
+    font-size: 13px;
+  }
+
+  .agent p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .agent-status {
+    margin-top: 8px;
+    min-height: 34px;
+    border-radius: 6px;
+    background: #f4f7fb;
+    padding: 7px;
+    color: #4b5870;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .asker-card {
+    left: 26px;
+    top: 40px;
+  }
+
+  .db-card {
+    right: 30px;
+    top: 36px;
+  }
+
+  .api-card {
+    right: 30px;
+    top: 176px;
+  }
+
+  .ui-card {
+    right: 30px;
+    top: 316px;
+  }
+
+  .bus {
+    position: absolute;
+    left: 238px;
+    right: 238px;
+    top: 212px;
+    height: 76px;
+    border-radius: 8px;
+    border: 1px solid #67c1d4;
+    background:
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0 10px, transparent 10px 26px),
+      linear-gradient(90deg, #dff8ff, #cdf0f8);
+    color: #075985;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    box-shadow: inset 0 0 28px rgba(8, 145, 178, 0.18);
+    overflow: hidden;
+  }
+
+  .bus::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.75), transparent);
+    animation: busSweep 2.4s linear infinite;
+  }
+
+  @keyframes busSweep {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(280%); }
+  }
+
+  .bus strong,
+  .bus span {
+    position: relative;
+    z-index: 1;
+  }
+
+  .bus strong {
+    display: block;
+    font-size: 13px;
+  }
+
+  .bus span {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    color: #0e7490;
+  }
+
+  .kv {
+    position: absolute;
+    left: 50%;
+    top: 354px;
+    width: 258px;
+    transform: translateX(-50%);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 10px 24px rgba(24, 39, 75, 0.12);
+    padding: 10px;
+  }
+
+  .kv h3 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #1f2a44;
+  }
+
+  .kv pre {
+    margin: 0;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    color: #334155;
+  }
+
+  .sidecar {
+    position: absolute;
+    left: 232px;
+    top: 66px;
+    width: 154px;
+    border: 1px dashed #94a3b8;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.86);
+    padding: 10px;
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .sidecar.active {
+    border-color: var(--ticket);
+    color: #1d4ed8;
+    background: #eff6ff;
+  }
+
+  .answer-badge {
+    position: absolute;
+    left: 50%;
+    top: 308px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    border: 1px solid #bbf7d0;
+    background: #ecfdf5;
+    color: #166534;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 800;
+    opacity: 0;
+    transition: opacity 240ms ease, transform 240ms ease;
+  }
+
+  .answer-badge.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-2px);
+  }
+
+  .ticket-token {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 98px;
+    min-height: 54px;
+    border: 2px solid var(--ticket);
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 7px;
+    box-shadow: 0 16px 30px rgba(37, 99, 235, 0.22);
+    transform: translate(var(--ticket-x, 74px), var(--ticket-y, 156px));
+    transition: transform var(--speed) cubic-bezier(.2, .82, .2, 1), border-color 240ms ease, background 240ms ease, color 240ms ease;
+    z-index: 8;
+  }
+
+  .ticket-token.answer {
+    border-color: var(--answer);
+    background: #ecfdf5;
+    color: #166534;
+    box-shadow: 0 16px 30px rgba(22, 163, 74, 0.18);
+  }
+
+  .ticket-token strong {
+    display: block;
+    font-size: 11px;
+    line-height: 1.1;
+  }
+
+  .ticket-token span {
+    display: block;
+    margin-top: 3px;
+    font-size: 10px;
+    color: currentColor;
+    opacity: 0.82;
+  }
+
+  .route-svg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .route {
+    stroke: #b5c3d7;
+    stroke-width: 2;
+    stroke-dasharray: 6 7;
+    fill: none;
+  }
+
+  .route.active {
+    stroke: var(--ticket);
+    stroke-width: 3;
+    animation: dash 1s linear infinite;
+  }
+
+  .route.answer {
+    stroke: var(--answer);
+  }
+
+  @keyframes dash {
+    to { stroke-dashoffset: -26; }
+  }
+
+  .timeline {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border-top: 1px solid var(--line);
+    background: #fff;
+  }
+
+  .state-step {
+    min-width: 0;
+    padding: 10px 12px;
+    border-right: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    position: relative;
+  }
+
+  .state-step:last-child {
+    border-right: 0;
+  }
+
+  .state-step strong {
+    display: block;
+    color: #334155;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+
+  .state-step.done strong {
+    color: var(--answer);
+  }
+
+  .state-step.active {
+    background: #eff6ff;
+  }
+
+  .state-step.active strong {
+    color: var(--ticket);
+  }
+
+  .state-step.active::before {
+    content: "";
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 0;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--ticket);
+  }
+
+  .stack {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .mini-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    padding: 10px;
+  }
+
+  .mini-card h3 {
+    margin: 0 0 6px;
+    font-size: 13px;
+  }
+
+  .mini-card p,
+  .mini-card li {
+    margin: 0;
+    color: #56637a;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .mini-card ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+  }
+
+  .question {
+    border-color: #fed7aa;
+    background: #fff7ed;
+  }
+
+  .answer {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+  }
+
+  .answering-now {
+    border-color: #86efac;
+    background: #ecfdf5;
+  }
+
+  .answering-now strong {
+    color: #166534;
+  }
+
+  .code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px;
+    color: #334155;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .event-log {
+    padding: 12px;
+    display: grid;
+    gap: 8px;
+    max-height: 308px;
+    overflow: auto;
+  }
+
+  .event {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: 8px;
+    align-items: start;
+    border: 1px solid #edf1f7;
+    border-radius: 8px;
+    padding: 8px;
+    background: #fff;
+    animation: eventIn 220ms ease both;
+  }
+
+  @keyframes eventIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .event .time {
+    color: var(--muted);
+    font-size: 11px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  .event strong {
+    display: block;
+    font-size: 12px;
+    color: #22304a;
+  }
+
+  .event span {
+    display: block;
+    margin-top: 2px;
+    color: #667085;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .dots {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .dot-button {
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: #cbd5e1;
+    cursor: pointer;
+  }
+
+  .dot-button.done {
+    background: #93c5fd;
+  }
+
+  .dot-button.active {
+    width: 24px;
+    border-radius: 999px;
+    background: #2563eb;
+  }
+
+  @media (max-width: 1180px) {
+    .workspace {
+      grid-template-columns: 1fr;
+    }
+
+    .left,
+    .right {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .stage-panel {
+      min-height: 720px;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .topbar {
+      height: auto;
+      align-items: flex-start;
+      padding: 12px;
+      flex-direction: column;
+    }
+
+    .controls {
+      justify-content: flex-start;
+    }
+
+    .workspace {
+      padding: 10px;
+    }
+
+    .left,
+    .right {
+      grid-template-columns: 1fr;
+    }
+
+    .stage {
+      min-height: 760px;
+    }
+
+    .agent {
+      width: 150px;
+    }
+
+    .asker-card {
+      left: 12px;
+      top: 30px;
+    }
+
+    .sidecar {
+      left: 12px;
+      top: 176px;
+      width: 150px;
+    }
+
+    .bus {
+      left: 12px;
+      right: 12px;
+      top: 302px;
+    }
+
+    .db-card {
+      left: 12px;
+      right: auto;
+      top: 436px;
+    }
+
+    .api-card {
+      right: 12px;
+      top: 436px;
+    }
+
+    .ui-card {
+      left: 50%;
+      right: auto;
+      top: 600px;
+      transform: translateX(-50%);
+    }
+
+    .kv {
+      top: 600px;
+      width: calc(100% - 24px);
+    }
+
+    .answer-badge {
+      top: 392px;
+    }
+
+    .timeline {
+      grid-template-columns: 1fr;
+    }
+
+    .state-step {
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">AM</div>
+      <div>
+        <h1>Agent Mesh ticket lifecycle</h1>
+        <p>How one agent asks, how one responder accepts, and how the answer returns.</p>
+      </div>
+    </div>
+    <div class="controls" aria-label="Animation controls">
+      <button class="btn" id="restart">Restart</button>
+      <button class="btn" id="prev">Prev</button>
+      <button class="btn primary" id="playPause">Pause</button>
+      <button class="btn" id="next">Next</button>
+      <label class="speed">Speed <input id="speed" type="range" min="0.7" max="1.6" step="0.1" value="1" /></label>
+      <div class="dots" id="dots" aria-label="Step picker"></div>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="left">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Current command</h2>
+          <span class="pill" id="commandPill">ask</span>
+        </div>
+        <div class="stack">
+          <div class="mini-card question">
+            <h3>Question</h3>
+            <p>"Should this migration use a partial index?"</p>
+          </div>
+          <div class="code" id="commandBox">mesh ask --role db "Should this migration use a partial index?"</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Ticket state</h2>
+          <span class="pill" id="statePill">open</span>
+        </div>
+        <div class="stack">
+          <div class="mini-card">
+            <h3>What is true right now</h3>
+            <p id="stateTruth">A new ticket record exists. The question has not been accepted yet.</p>
+          </div>
+          <div class="mini-card">
+            <h3>Exit behavior</h3>
+            <p id="exitBehavior">The asker gets a ticket id immediately and can keep working.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel stage-panel">
+      <div class="story">
+        <div class="story-kicker" id="kicker">Step 1 of 7</div>
+        <h2 id="storyTitle">The asker creates a question.</h2>
+        <p id="storyBody">The CLI sends one request to the local sidecar. The CLI is not the brain; it is just the edge.</p>
+      </div>
+
+      <div class="stage" id="stage">
+        <svg class="route-svg" viewBox="0 0 800 488" preserveAspectRatio="none" aria-hidden="true">
+          <path class="route" id="routeAsk" d="M 110 120 C 220 120, 250 230, 400 230 C 560 230, 590 82, 700 82" />
+          <path class="route" id="routeAnswer" d="M 700 82 C 600 120, 560 230, 400 230 C 260 230, 220 120, 110 120" />
+        </svg>
+
+        <article class="agent asker-card" id="agentAsker">
+          <div class="agent-title">
+            <div class="avatar asker">A</div>
+            <div>
+              <h3>codex-a</h3>
+              <p>asker / builder</p>
+            </div>
+          </div>
+          <div class="agent-status" id="askerStatus">Thinking about a database migration.</div>
+        </article>
+
+        <div class="sidecar" id="sidecar">
+          <strong>local sidecar</strong><br />
+          unix socket, validates command, writes ticket
+        </div>
+
+        <div class="bus">
+          <div>
+            <strong>mesh bus</strong>
+            <span id="busLabel">waiting for a subject</span>
+          </div>
+        </div>
+
+        <article class="agent db-card" id="agentDb">
+          <div class="agent-title">
+            <div class="avatar db">DB</div>
+            <div>
+              <h3>schema-expert</h3>
+              <p>role=db</p>
+            </div>
+          </div>
+          <div class="agent-status" id="dbStatus">Live and subscribed to mesh.ask.role.db.</div>
+        </article>
+
+        <article class="agent api-card" id="agentApi">
+          <div class="agent-title">
+            <div class="avatar api">API</div>
+            <div>
+              <h3>api-worker</h3>
+              <p>role=db</p>
+            </div>
+          </div>
+          <div class="agent-status" id="apiStatus">Also hears DB asks.</div>
+        </article>
+
+        <article class="agent ui-card" id="agentUi">
+          <div class="agent-title">
+            <div class="avatar ui">UI</div>
+            <div>
+              <h3>ui-worker</h3>
+              <p>role=frontend</p>
+            </div>
+          </div>
+          <div class="agent-status" id="uiStatus">Different role, so it ignores this ask.</div>
+        </article>
+
+        <div class="kv">
+          <h3>tickets KV record</h3>
+          <pre id="kvText"></pre>
+        </div>
+
+        <div class="answer-badge" id="answerBadge">Answering agent: schema-expert</div>
+
+        <div class="ticket-token" id="ticketToken">
+          <strong id="tokenTitle">Ticket</strong>
+          <span id="tokenSub">open</span>
+        </div>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="state-step" data-state="open"><strong>open</strong><span>record created</span></div>
+        <div class="state-step" data-state="routed"><strong>routed</strong><span>published to role</span></div>
+        <div class="state-step" data-state="accepted"><strong>accepted</strong><span>one CAS winner</span></div>
+        <div class="state-step" data-state="answered"><strong>answered</strong><span>owner replies</span></div>
+        <div class="state-step" data-state="closed"><strong>closed</strong><span>asker polls</span></div>
+      </div>
+    </section>
+
+    <section class="right">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Who answers?</h2>
+          <span class="pill" id="answererPill">unassigned</span>
+        </div>
+        <div class="stack">
+          <div class="mini-card answering-now" id="answererCard">
+            <h3 id="answererName">No one yet</h3>
+            <p id="answererDetail">The ticket must be routed and CAS-accepted before anyone owns the answer.</p>
+          </div>
+          <div class="mini-card answer">
+            <h3>Answer text</h3>
+            <p id="answerText">Waiting for the accepted responder.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Event stream</h2>
+          <span class="pill" id="eventCount">0</span>
+        </div>
+        <div class="event-log" id="eventLog"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const positions = {
+    askStart: { x: 62, y: 154 },
+    sidecar: { x: 256, y: 112 },
+    kv: { x: 350, y: 376 },
+    bus: { x: 350, y: 222 },
+    db: { x: 634, y: 76 },
+    dbInbox: { x: 634, y: 130 },
+    answerBus: { x: 350, y: 222 },
+    asker: { x: 62, y: 154 },
+    done: { x: 62, y: 154 }
+  };
+
+  const states = ["open", "routed", "accepted", "answered", "closed"];
+  const steps = [
+    {
+      title: "The asker creates a question.",
+      body: "The CLI sends one request to the local sidecar. The CLI is not the brain; it is just the edge.",
+      command: 'mesh ask --role db "Should this migration use a partial index?"',
+      commandPill: "ask",
+      state: "open",
+      truth: "A new ticket record exists. The question has not been accepted yet.",
+      exit: "The asker gets a ticket id immediately and can keep working.",
+      pos: "askStart",
+      bus: "waiting for a subject",
+      token: ["Ticket", "open"],
+      answerer: ["No one yet", "The ticket must be routed and CAS-accepted before anyone owns the answer.", "unassigned"],
+      answer: "Waiting for the accepted responder.",
+      active: ["asker", "sidecar"],
+      events: [["00:00", "ask command", "codex-a asks role=db for migration advice."]]
+    },
+    {
+      title: "The sidecar validates and writes the ticket.",
+      body: "The sidecar checks that codex-a is joined, the role is valid, and a live db responder exists. Then it writes the tickets KV record.",
+      command: "sidecar: ticket.Store.Create(...)",
+      commandPill: "create",
+      state: "open",
+      truth: "The tickets KV bucket is the authority. Bus messages are only announcements about that truth.",
+      exit: "If no live db agent exists, the ask fails here and no ticket is created.",
+      pos: "kv",
+      bus: "KV create: bucket=tickets",
+      token: ["KV record", "state=open"],
+      answerer: ["No one yet", "The ticket is real, but nobody owns it until routing and acceptance happen.", "unassigned"],
+      answer: "Waiting for the accepted responder.",
+      active: ["sidecar"],
+      events: [["00:01", "tickets KV", "ticket 019... is created with state=open and ttl=30m."]]
+    },
+    {
+      title: "The ask is routed to a role subject.",
+      body: "The ticket moves open -> routed. The sidecar publishes the question on mesh.ask.role.db so live db agents can hear it.",
+      command: "publish mesh.ask.role.db",
+      commandPill: "route",
+      state: "routed",
+      truth: "The question is now public to the db role, but still not answered or owned.",
+      exit: "A normal ask returns now. Only --wait keeps polling in the foreground.",
+      pos: "bus",
+      bus: "subject: mesh.ask.role.db",
+      token: ["Ask packet", "routed"],
+      answerer: ["No one yet", "Both db-capable agents can hear it. Only one can win the accept transition.", "unassigned"],
+      answer: "Waiting for the accepted responder.",
+      active: ["asker", "db", "api"],
+      route: "ask",
+      events: [["00:02", "ticket routed", "state changes open -> routed; ask packet is published."]]
+    },
+    {
+      title: "Matching agents race to accept it.",
+      body: "schema-expert and api-worker both hear the ask. They race the same CAS update. schema-expert wins; api-worker loses and backs off.",
+      command: "ticket.Store.Accept(ticket, schema-expert)",
+      commandPill: "accept",
+      state: "accepted",
+      truth: "Exactly one responder owns the ticket now: schema-expert.",
+      exit: "This prevents duplicate answers even when multiple agents heard the same ask.",
+      pos: "db",
+      bus: "CAS accept race",
+      token: ["Ticket", "accepted"],
+      answerer: ["schema-expert", "role=db; acceptedBy=schema-expert; this is the agent that will answer.", "answering"],
+      answer: "Composing answer from the accepted responder.",
+      active: ["db", "api"],
+      lost: ["api"],
+      route: "ask",
+      badge: true,
+      events: [["00:03", "CAS winner", "schema-expert changes state routed -> accepted."], ["00:03", "CAS loser", "api-worker sees the ticket is already accepted and ignores it."]]
+    },
+    {
+      title: "The accepted ticket lands in the responder inbox.",
+      body: "The winning sidecar puts the ask into its inbox. A human can run mesh inbox, or an expert loop can answer automatically.",
+      command: "mesh inbox",
+      commandPill: "inbox",
+      state: "accepted",
+      truth: "The owner is still schema-expert. Other agents cannot answer this ticket.",
+      exit: "The asker is still free to keep coding and can poll later.",
+      pos: "dbInbox",
+      bus: "inbox: schema-expert",
+      token: ["Inbox item", "schema-expert"],
+      answerer: ["schema-expert", "The accepted ticket is sitting in this agent's inbox.", "answering"],
+      answer: "Composing answer from the accepted responder.",
+      active: ["db"],
+      badge: true,
+      events: [["00:04", "inbox", "accepted ask is delivered to schema-expert's responder inbox."]]
+    },
+    {
+      title: "The responder records the answer.",
+      body: "The answer path checks acceptedBy. Because schema-expert owns the ticket, it can move accepted -> answered and publish the answer.",
+      command: 'mesh answer 019... "Use a partial index when the predicate matches the hot query."',
+      commandPill: "answer",
+      state: "answered",
+      truth: "The ticket record now contains the answer and answeredBy=schema-expert.",
+      exit: "A response event is published back toward the asker.",
+      pos: "answerBus",
+      bus: "subject: mesh.answer.019...",
+      token: ["Answer packet", "answered"],
+      answerer: ["schema-expert", "This is the answering agent. It won the CAS accept and wrote the answer.", "answering"],
+      answer: "Use a partial index when the predicate matches the hot query.",
+      active: ["db", "asker"],
+      route: "answer",
+      answerToken: true,
+      badge: true,
+      events: [["00:08", "answer recorded", "state changes accepted -> answered; answeredBy=schema-expert."]]
+    },
+    {
+      title: "The asker polls and closes the loop.",
+      body: "codex-a runs mesh poll. It receives the answer, and the ticket closes so the lifecycle is finished.",
+      command: "mesh poll 019...",
+      commandPill: "poll",
+      state: "closed",
+      truth: "The happy path is complete: open -> routed -> accepted -> answered -> closed.",
+      exit: "If polled too early, mesh poll exits 3 with no-answer-yet.",
+      pos: "done",
+      bus: "ticket closed",
+      token: ["Answer", "closed"],
+      answerer: ["schema-expert", "schema-expert answered; codex-a received and closed the ticket.", "done"],
+      answer: "Use a partial index when the predicate matches the hot query.",
+      active: ["asker"],
+      route: "answer",
+      answerToken: true,
+      badge: true,
+      events: [["00:09", "poll", "codex-a polls the ticket and receives the answer."], ["00:09", "closed", "ticket state changes answered -> closed."]]
+    }
+  ];
+
+  const els = {
+    kicker: document.getElementById("kicker"),
+    title: document.getElementById("storyTitle"),
+    body: document.getElementById("storyBody"),
+    command: document.getElementById("commandBox"),
+    commandPill: document.getElementById("commandPill"),
+    statePill: document.getElementById("statePill"),
+    stateTruth: document.getElementById("stateTruth"),
+    exitBehavior: document.getElementById("exitBehavior"),
+    busLabel: document.getElementById("busLabel"),
+    token: document.getElementById("ticketToken"),
+    tokenTitle: document.getElementById("tokenTitle"),
+    tokenSub: document.getElementById("tokenSub"),
+    kvText: document.getElementById("kvText"),
+    answererName: document.getElementById("answererName"),
+    answererDetail: document.getElementById("answererDetail"),
+    answererPill: document.getElementById("answererPill"),
+    answerText: document.getElementById("answerText"),
+    answerBadge: document.getElementById("answerBadge"),
+    eventLog: document.getElementById("eventLog"),
+    eventCount: document.getElementById("eventCount"),
+    routeAsk: document.getElementById("routeAsk"),
+    routeAnswer: document.getElementById("routeAnswer"),
+    playPause: document.getElementById("playPause"),
+    speed: document.getElementById("speed"),
+    dots: document.getElementById("dots")
+  };
+
+  const agentEls = {
+    asker: document.getElementById("agentAsker"),
+    db: document.getElementById("agentDb"),
+    api: document.getElementById("agentApi"),
+    ui: document.getElementById("agentUi"),
+    sidecar: document.getElementById("sidecar")
+  };
+
+  const statusEls = {
+    asker: document.getElementById("askerStatus"),
+    db: document.getElementById("dbStatus"),
+    api: document.getElementById("apiStatus"),
+    ui: document.getElementById("uiStatus")
+  };
+
+  const statusByStep = [
+    { asker: "Runs mesh ask.", db: "Live and subscribed to mesh.ask.role.db.", api: "Also hears DB asks.", ui: "Different role; ignores this ask." },
+    { asker: "Sidecar owns the write.", db: "Available responder found.", api: "Available responder found.", ui: "No matching role." },
+    { asker: "Gets ticket id immediately.", db: "Receives ask packet.", api: "Receives ask packet.", ui: "No role match." },
+    { asker: "Keeps working.", db: "CAS accept wins.", api: "CAS accept loses.", ui: "Still uninvolved." },
+    { asker: "Can poll later.", db: "Ticket is in inbox.", api: "No ownership.", ui: "Still uninvolved." },
+    { asker: "Waiting for answer event.", db: "Writes the answer.", api: "Cannot answer.", ui: "Still uninvolved." },
+    { asker: "Poll receives answer.", db: "Answer complete.", api: "No duplicate answer.", ui: "Still uninvolved." }
+  ];
+
+  let index = 0;
+  let playing = true;
+  let timer = null;
+  let seenEvents = [];
+
+  function safeText(value) {
+    return String(value);
+  }
+
+  function kvFor(step) {
+    const base = {
+      ticket: "019...",
+      state: step.state,
+      asker: "codex-a",
+      role: "db",
+      q: "Should this migration use a partial index?"
+    };
+    if (["accepted", "answered", "closed"].includes(step.state)) {
+      base.acceptedBy = "schema-expert";
+      base.to = "schema-expert";
+    }
+    if (["answered", "closed"].includes(step.state)) {
+      base.answeredBy = "schema-expert";
+      base.answer = "Use a partial index...";
+    }
+    return JSON.stringify(base, null, 2);
+  }
+
+  function setTokenPosition(posKey) {
+    const pos = positions[posKey] || positions.askStart;
+    els.token.style.setProperty("--ticket-x", `${pos.x}px`);
+    els.token.style.setProperty("--ticket-y", `${pos.y}px`);
+  }
+
+  function setStateRail(state) {
+    const activeIndex = states.indexOf(state);
+    document.querySelectorAll(".state-step").forEach((el, i) => {
+      el.classList.toggle("active", i === activeIndex);
+      el.classList.toggle("done", i < activeIndex || state === "closed");
+    });
+  }
+
+  function setDots() {
+    Array.from(els.dots.children).forEach((dot, i) => {
+      dot.classList.toggle("active", i === index);
+      dot.classList.toggle("done", i < index);
+      dot.setAttribute("aria-label", `Go to step ${i + 1}`);
+    });
+  }
+
+  function setAgents(step) {
+    Object.values(agentEls).forEach((el) => {
+      el.classList.remove("active", "answering", "lost");
+    });
+    (step.active || []).forEach((name) => {
+      const el = agentEls[name];
+      if (el) el.classList.add(name === "db" && step.badge ? "answering" : "active");
+    });
+    (step.lost || []).forEach((name) => {
+      const el = agentEls[name];
+      if (el) el.classList.add("lost");
+    });
+    const status = statusByStep[index] || statusByStep[0];
+    Object.entries(statusEls).forEach(([name, el]) => {
+      el.textContent = status[name];
+    });
+  }
+
+  function setRoutes(step) {
+    els.routeAsk.classList.remove("active", "answer");
+    els.routeAnswer.classList.remove("active", "answer");
+    if (step.route === "ask") {
+      els.routeAsk.classList.add("active");
+    }
+    if (step.route === "answer") {
+      els.routeAnswer.classList.add("active", "answer");
+    }
+  }
+
+  function addEvents(step) {
+    if (index === 0) {
+      seenEvents = [];
+    }
+    (step.events || []).forEach((event) => {
+      const key = `${index}:${event[0]}:${event[1]}`;
+      if (!seenEvents.some((item) => item.key === key)) {
+        seenEvents.unshift({ key, event });
+      }
+    });
+    seenEvents = seenEvents.slice(0, 10);
+    els.eventLog.innerHTML = seenEvents.map(({ event }) => `
+      <div class="event">
+        <div class="time">${safeText(event[0])}</div>
+        <div><strong>${safeText(event[1])}</strong><span>${safeText(event[2])}</span></div>
+      </div>
+    `).join("");
+    els.eventCount.textContent = String(seenEvents.length);
+  }
+
+  function render() {
+    const step = steps[index];
+    document.documentElement.style.setProperty("--speed", `${900 / Number(els.speed.value)}ms`);
+    els.kicker.textContent = `Step ${index + 1} of ${steps.length}`;
+    els.title.textContent = step.title;
+    els.body.textContent = step.body;
+    els.command.textContent = step.command;
+    els.commandPill.textContent = step.commandPill;
+    els.statePill.textContent = step.state;
+    els.stateTruth.textContent = step.truth;
+    els.exitBehavior.textContent = step.exit;
+    els.busLabel.textContent = step.bus;
+    els.tokenTitle.textContent = step.token[0];
+    els.tokenSub.textContent = step.token[1];
+    els.token.classList.toggle("answer", Boolean(step.answerToken));
+    els.kvText.textContent = kvFor(step);
+    els.answererName.textContent = step.answerer[0];
+    els.answererDetail.textContent = step.answerer[1];
+    els.answererPill.textContent = step.answerer[2];
+    els.answerText.textContent = step.answer;
+    els.answerBadge.classList.toggle("show", Boolean(step.badge));
+    setTokenPosition(step.pos);
+    setStateRail(step.state);
+    setDots();
+    setAgents(step);
+    setRoutes(step);
+    addEvents(step);
+  }
+
+  function next() {
+    index = (index + 1) % steps.length;
+    render();
+  }
+
+  function prev() {
+    index = (index - 1 + steps.length) % steps.length;
+    render();
+  }
+
+  function startTimer() {
+    clearInterval(timer);
+    if (!playing) return;
+    const delay = 2600 / Number(els.speed.value);
+    timer = setInterval(next, delay);
+  }
+
+  function setPlaying(value) {
+    playing = value;
+    els.playPause.textContent = playing ? "Pause" : "Play";
+    startTimer();
+  }
+
+  steps.forEach((_, i) => {
+    const dot = document.createElement("button");
+    dot.className = "dot-button";
+    dot.type = "button";
+    dot.addEventListener("click", () => {
+      index = i;
+      render();
+      startTimer();
+    });
+    els.dots.appendChild(dot);
+  });
+
+  document.getElementById("restart").addEventListener("click", () => {
+    index = 0;
+    seenEvents = [];
+    render();
+    startTimer();
+  });
+  document.getElementById("prev").addEventListener("click", () => {
+    prev();
+    startTimer();
+  });
+  document.getElementById("next").addEventListener("click", () => {
+    next();
+    startTimer();
+  });
+  els.playPause.addEventListener("click", () => setPlaying(!playing));
+  els.speed.addEventListener("input", startTimer);
+
+  render();
+  startTimer();
+})();
+</script>
+</body>
+</html>

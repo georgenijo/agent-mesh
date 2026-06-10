@@ -190,6 +190,22 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 	sc.TrackChild(cfg.ExpertCLI, childPID)
 	log.Info("expert serving", "agent", card.ID, "role", role, "runtime", cfg.ExpertCLI, "child", childPID)
 
+	// restartAndReprime crash-recovers the runtime child via --resume and asks
+	// the responder loop to re-prime from the blackboard (#28): --resume reloads
+	// the on-disk session, which may be cold or stale relative to the durable
+	// record, so the blackboard is re-injected even when --resume "worked".
+	resync := sidecar.NewResyncSignal()
+	restartAndReprime := func(askCtx context.Context) error {
+		if rerr := proxy.Restart(askCtx); rerr != nil {
+			return rerr
+		}
+		sc.MarkChildExited(childPID)
+		childPID = proxy.Pid()
+		sc.TrackChild(cfg.ExpertCLI, childPID)
+		resync.Request()
+		return nil
+	}
+
 	fn := func(askCtx context.Context, question, contextText string) (sidecar.ExpertResult, error) {
 		content := question
 		if contextText != "" {
@@ -200,13 +216,10 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 
 		turn, err := proxy.Ask(turnCtx, content)
 		if errors.Is(err, agentruntime.ErrProcessExited) && askCtx.Err() == nil {
-			// Best-effort crash recovery: rehydrate via --resume and retry once.
-			if rerr := proxy.Restart(askCtx); rerr != nil {
+			// Best-effort crash recovery: rehydrate via --resume + re-prime, retry once.
+			if rerr := restartAndReprime(askCtx); rerr != nil {
 				return sidecar.ExpertResult{}, err
 			}
-			sc.MarkChildExited(childPID)
-			childPID = proxy.Pid()
-			sc.TrackChild(cfg.ExpertCLI, childPID)
 			turn, err = proxy.Ask(turnCtx, content)
 		}
 		if err != nil {
@@ -215,8 +228,29 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 		return sidecar.ExpertResult{Answer: turn.Text, OK: turn.Status == agentruntime.TurnAnswered}, nil
 	}
 
+	// prime injects the compacted blackboard memory primer into the warm child
+	// as one context-setting turn. The child's reply is discarded — this is
+	// one-way rehydration, not a ticket — but a runtime failure surfaces so the
+	// loop retries on its next tick. A --resume restart is attempted once if the
+	// child died, mirroring the answer path.
+	prime := func(primeCtx context.Context, primer string) error {
+		turnCtx, turnCancel := context.WithTimeout(primeCtx, expertAskTimeout)
+		defer turnCancel()
+		_, err := proxy.Ask(turnCtx, primer)
+		if errors.Is(err, agentruntime.ErrProcessExited) && primeCtx.Err() == nil {
+			if rerr := restartAndReprime(primeCtx); rerr != nil {
+				return err
+			}
+			// restartAndReprime re-requested a resync; this primer attempt has
+			// rebuilt the child, so retry the inject directly.
+			_, err = proxy.Ask(turnCtx, primer)
+		}
+		return err
+	}
+
 	go func() {
-		if err := sc.ServeExpert(ctx, fn, cfg.HeartbeatInterval); err != nil && !errors.Is(err, context.Canceled) {
+		opts := sidecar.ExpertOptions{Repo: repo, Prime: prime, Resync: resync}
+		if err := sc.ServeExpertWithMemory(ctx, fn, cfg.HeartbeatInterval, opts); err != nil && !errors.Is(err, context.Canceled) {
 			log.Warn("expert loop ended", "err", err)
 		}
 	}()

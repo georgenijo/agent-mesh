@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-09: Expert memory = a compacted blackboard primer injected into the warm child; no separate checkpoint store
+
+**Decision:** An expert's long-term memory is the durable per-repo blackboard, not a new artifact (#28). On (re)start the responder loop builds a **memory primer** — a byte-bounded, compacted projection of `mesh.note.<repo>` (decisions/summaries kept ahead of context/other when the budget bites, elision disclosed honestly) — and injects it into the warm runtime child as one context-setting turn before answering. It re-primes on two signals: a new note landing on the blackboard (high-water seq advance — the in-mesh "worker recorded a decision after landing a diff" signal) and after a `--resume` restart (whose on-disk session may be cold/stale vs the durable record), the latter via a concurrency-safe `ResyncSignal` the runtime closure raises. The blackboard is never mutated by priming. Authority split is now documented (ARCHITECTURE.md §7e): the note stream is authoritative for durable facts, the child's RAM is a volatile non-authoritative cache. `internal/sidecar/memory.go` + `ServeExpertWithMemory`; the pre-#28 `ServeExpert` stays as the no-memory loop.
+
+**Rationale:** The hybrid-model decision already named the blackboard as expert memory, and notes already persist decisions, so a dedicated "checkpoint store" (repo map / session-id artifact) would be a second source of truth for facts the blackboard already owns — a one-authority violation. Compaction at the *injection* layer (bounded primer) complements the existing JSONL storage compaction: the durable record keeps everything, the finite runtime context gets a bounded, value-ranked slice. Notes are stream-only (never published), so re-sync is a high-water poll on the loop's existing tick, not a new pub/sub path. Deferred (filed as #28 follow-up comments): a literal session-id/repo-map checkpoint artifact, and a filesystem-watch re-sync trigger (the in-mesh note signal is the documented file-change signal for now).
+
+**Status:** active
+
+**References:** internal/sidecar/memory.go, internal/sidecar/expert.go (ServeExpertWithMemory, ResyncSignal), cmd/meshd/main.go (runExpert prime/restart), test/e2e/expert_memory_test.go, ARCHITECTURE.md §7e, #28; extends 2026-06-05 "Hybrid agent model — blackboard = expert memory" and 2026-06-06 "Expert responder loop"
+
+---
+
 ## 2026-06-09: P4 dashboard write path — POST /api/jobs on the dashboard server, protected by a local bearer token
 
 **Decision:** The job-submit form (issue #47) is backed by a `POST /api/jobs` endpoint on the dashboard's own HTTP server, delegating to `job.Store.Create` (the one authority, same as `mesh submit`). A 32-byte random hex bearer token is generated on `Start`, written to `MESH_DIR/dashboard.token` (owner-only), and removed on `Stop`. The UI fetches it from `GET /api/write-token` (same loopback origin). Observer endpoints (`/`, `/events`, `/api/roster`, `/api/claims`, `/api/notes`, `GET /api/jobs`) remain unauthenticated.

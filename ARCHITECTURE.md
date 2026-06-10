@@ -194,6 +194,31 @@ cursor: mesh context --repo stbasils
   → replays all notes → conforms to the convention without asking anyone.
 ```
 
+### 7e. Expert memory = the blackboard (restart-without-amnesia)
+
+A persistent expert holds the warm codebase context in its runtime child's RAM,
+but RAM is volatile: a crash, a cold start, or a `--resume` miss empties it. The
+**durable per-repo blackboard is the expert's long-term memory** — so a restarted
+expert recovers prior project decisions without a manual reload.
+
+**Authority split (one authority per fact):**
+
+| Fact | Authority | Survives restart? |
+|------|-----------|-------------------|
+| Project decisions, conventions, summaries, recorded context | **Blackboard note stream** (`mesh.note.<repo>`, the durable JSONL) | yes — it *is* the durable record |
+| The warm conversation (last live turns held in the child) | Runtime child RAM | no — a volatile cache, never authoritative |
+| Claims, presence, ticket state | their KV buckets (claim / registry / tickets) | rebuilt by reclaim-on-reconnect |
+
+On (re)start the expert builds a **memory primer** — a compacted, byte-bounded
+view of the blackboard, decisions and summaries kept ahead of context/other when
+the budget bites — and injects it into the warm child as a context-setting turn.
+It re-primes when new notes land (a worker recording a decision after landing a
+diff: the in-mesh re-sync signal) and after a `--resume` restart (whose on-disk
+session may be cold or stale relative to the durable record). The blackboard is
+never mutated by priming — the primer is a read-only derived projection.
+(`internal/sidecar/memory.go`, decision 2026-06-05 "blackboard = expert memory",
+issue #28.)
+
 ---
 
 ## 8. Performance model

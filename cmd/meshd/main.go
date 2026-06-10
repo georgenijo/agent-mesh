@@ -22,6 +22,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/coordinator"
 	"github.com/georgenijo/agent-mesh/internal/dashboard"
+	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/observe"
 	agentruntime "github.com/georgenijo/agent-mesh/internal/runtime"
 	"github.com/georgenijo/agent-mesh/internal/sidecar"
@@ -249,6 +250,33 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 		return err
 	}
 
+	// reviewFn is the expert's REVIEW capability (#27): drive the SAME resident
+	// child to review a worker diff and map the runtime's typed outcome onto the
+	// envelope.ReviewVerdict contract — never fake-success. It mirrors the answer
+	// path's best-effort --resume recovery on child death. Wired and available
+	// for the scheduler→expert review-gating integration (a tracked follow-up);
+	// no inbound review-request transport exists yet, so nothing drives it
+	// automatically in this slice. The mapping itself is exercised by the
+	// runtime package (Review) and sidecar package (Review) tests.
+	reviewFn := func(askCtx context.Context, req sidecar.ReviewRequest) (sidecar.ReviewResult, error) {
+		rreq := agentruntime.ReviewRequest{
+			Instruction: req.Instruction, Diff: req.Diff, ChangedFiles: req.ChangedFiles,
+			BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA, Branch: req.Branch,
+		}
+		turnCtx, turnCancel := context.WithTimeout(askCtx, expertAskTimeout)
+		defer turnCancel()
+
+		out, err := proxy.Review(turnCtx, rreq)
+		if errors.Is(err, agentruntime.ErrProcessExited) && askCtx.Err() == nil {
+			// Best-effort crash recovery: rehydrate via --resume + re-prime, retry once.
+			if rerr := restartAndReprime(askCtx); rerr == nil {
+				out, err = proxy.Review(turnCtx, rreq)
+			}
+		}
+		return mapReviewOutcome(out, err), nil
+	}
+	_ = reviewFn // available for review-gating wiring; see #27 follow-up
+
 	go func() {
 		opts := sidecar.ExpertOptions{Repo: repo, Prime: prime, Resync: resync}
 		if err := sc.ServeExpertWithMemory(ctx, fn, cfg.HeartbeatInterval, opts); err != nil && !errors.Is(err, context.Canceled) {
@@ -273,6 +301,57 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 		sc.Leave("expert shutdown")
 	}
 	return 0
+}
+
+// mapReviewOutcome translates the runtime's typed review outcome + error onto
+// the sidecar ReviewResult (the envelope.ReviewVerdict contract). Never
+// fake-success: every non-clean outcome maps to a typed ReviewError with a
+// discriminating code, so an absent verdict is never a silent approve.
+//
+//   - ErrEmptyReview        -> error / empty_diff
+//   - ErrProcessExited      -> error / runtime_lost   (child died; recoverable)
+//   - ctx cancel / timeout  -> error / runtime_lost   (no result arrived)
+//   - *ResultError          -> error / runtime_error  (non-success turn)
+//   - ErrNoVerdict          -> error / bad_verdict     (answered, unparseable)
+//   - nil + valid verdict   -> the clean judgement
+func mapReviewOutcome(out agentruntime.ReviewOutcome, err error) sidecar.ReviewResult {
+	base := sidecar.ReviewResult{Notes: out.Notes, SessionID: out.SessionID, NumTurns: out.NumTurns}
+	if err == nil {
+		switch out.Verdict {
+		case agentruntime.VerdictApprove:
+			base.Verdict = envelope.ReviewApprove
+		case agentruntime.VerdictRequestChanges:
+			base.Verdict = envelope.ReviewRequestChanges
+		case agentruntime.VerdictReject:
+			base.Verdict = envelope.ReviewReject
+		default:
+			// Defense in depth: a nil error must carry a real verdict.
+			base.Verdict, base.Code = envelope.ReviewError, envelope.ReviewBadVerdict
+		}
+		return base
+	}
+
+	base.Verdict = envelope.ReviewError
+	switch {
+	case errors.Is(err, agentruntime.ErrEmptyReview):
+		base.Code = envelope.ReviewEmptyDiff
+	case errors.Is(err, agentruntime.ErrProcessExited):
+		base.Code = envelope.ReviewRuntimeLost
+	case errors.Is(err, agentruntime.ErrNoVerdict):
+		base.Code = envelope.ReviewBadVerdict
+	default:
+		var re *agentruntime.ResultError
+		if errors.As(err, &re) {
+			base.Code = envelope.ReviewRuntimeError
+		} else {
+			// ctx cancel / AskTimeout / stdin write failure: the turn was lost.
+			base.Code = envelope.ReviewRuntimeLost
+		}
+	}
+	if base.Notes == "" {
+		base.Notes = err.Error()
+	}
+	return base
 }
 
 func runCoordinator(cfg config.Config, log *slog.Logger) int {

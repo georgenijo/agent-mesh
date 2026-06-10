@@ -186,7 +186,7 @@ func selectWithinBudget(repo string, notes []memoryNote, budget int) ([]memoryNo
 	keep := make([]memoryNote, 0, len(order))
 	for _, idx := range order {
 		cost := lineLen(notes[idx])
-		if used+cost > budget && len(keep) > 0 {
+		if used+cost > budget {
 			break
 		}
 		used += cost

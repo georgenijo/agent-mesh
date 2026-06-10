@@ -140,6 +140,36 @@ func TestSelectWithinBudgetKeepsDecisionsOverContext(t *testing.T) {
 	}
 }
 
+// TestSelectWithinBudgetOversizedFirstNote proves that a single note whose
+// rendered size alone exceeds the budget is elided, not kept, so the returned
+// primer is never over budget even when len(keep)==0 during the first iteration.
+func TestSelectWithinBudgetOversizedFirstNote(t *testing.T) {
+	// Build a note whose line length alone exceeds a small budget.
+	bigText := strings.Repeat("x", 2000)
+	notes := []memoryNote{
+		{Seq: 1, Kind: envelope.NoteKindDecision, Text: bigText, Author: "w1"},
+	}
+	// Budget = overhead only (header + elision marker for 1 note), definitely
+	// smaller than overhead + the note line.
+	budget := len(renderPrimer("demo", nil, len(notes)))
+	keep, dropped := selectWithinBudget("demo", notes, budget)
+	if len(keep) != 0 {
+		t.Fatalf("oversized first note was kept (%d notes kept), want 0", len(keep))
+	}
+	if dropped != 1 {
+		t.Fatalf("dropped = %d, want 1", dropped)
+	}
+	// Render the final primer: it must be within budget and still disclose the
+	// elision (dropped > 0 path in renderPrimer).
+	primer := renderPrimer("demo", keep, dropped)
+	if len(primer) > budget {
+		t.Fatalf("primer is %d bytes, over budget %d:\n%s", len(primer), budget, primer)
+	}
+	if !strings.Contains(primer, "elided") {
+		t.Fatalf("primer must disclose elision when a note is dropped:\n%s", primer)
+	}
+}
+
 // --- ServeExpertWithMemory: priming + re-sync ---------------------------------
 
 // recordingPrimer is a fake PrimerFunc that records every injected primer.

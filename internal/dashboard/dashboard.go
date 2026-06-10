@@ -158,6 +158,7 @@ func (d *Dashboard) Start() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", d.serveIndex)
+	mux.HandleFunc("GET /classic", d.serveClassicIndex)
 	mux.HandleFunc("GET /events", d.serveSSE)
 	mux.HandleFunc("GET /api/roster", d.serveRoster)
 	mux.HandleFunc("GET /api/claims", d.serveClaims)
@@ -426,6 +427,19 @@ func (d *Dashboard) serveIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Root redirects to the #31 production dashboard (/ui/): the actively-built
+	// UI with the live work queue, the submit-job form (#47), and claim
+	// history. The P0 observer (dashboard.html) predates the autonomous
+	// pipeline and can't render jobs/tasks; it stays reachable at /classic.
+	target := "/ui/"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// serveClassicIndex serves the frozen P0 observer page for reference.
+func (d *Dashboard) serveClassicIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML) //nolint:errcheck
 }

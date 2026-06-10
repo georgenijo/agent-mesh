@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
@@ -364,17 +363,11 @@ func ReadPIDFile(path string) (int, error) {
 	return pid, nil
 }
 
-// PIDAlive reports whether the pid exists (signal-0 probe). Note: an unreaped
-// zombie still counts as alive here; internal/ops uses ps state for teardown.
+// PIDAlive reports whether the pid exists. Note: on Unix an unreaped zombie
+// may still count as alive here; internal/ops uses process-state details for
+// teardown where available.
 func PIDAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return pidAlive(pid)
 }
 
 // Dialable reports whether something accepts connections at the socket path.

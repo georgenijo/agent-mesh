@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -203,7 +202,7 @@ func TestP1AcceptanceFlow(t *testing.T) {
 	if !ok || rec.Card.PID <= 0 {
 		t.Fatalf("no pid for %s", loser.agent)
 	}
-	if err := syscall.Kill(rec.Card.PID, syscall.SIGKILL); err != nil {
+	if err := killProcess(rec.Card.PID); err != nil {
 		t.Fatal(err)
 	}
 	m.eventually(5*time.Second, "killed holder's claim is reclaimed", func() bool {

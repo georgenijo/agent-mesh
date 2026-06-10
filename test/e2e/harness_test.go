@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -42,9 +43,9 @@ func testMain(m *testing.M) int {
 	}
 	defer os.RemoveAll(binDir)
 
-	meshBin = filepath.Join(binDir, "mesh")
-	meshdBin = filepath.Join(binDir, "meshd")
-	fakeClaudeBin = filepath.Join(binDir, "fakeclaude")
+	meshBin = filepath.Join(binDir, exeName("mesh"))
+	meshdBin = filepath.Join(binDir, exeName("meshd"))
+	fakeClaudeBin = filepath.Join(binDir, exeName("fakeclaude"))
 	for target, pkg := range map[string]string{
 		meshBin:       "github.com/georgenijo/agent-mesh/cmd/mesh",
 		meshdBin:      "github.com/georgenijo/agent-mesh/cmd/meshd",
@@ -58,6 +59,13 @@ func testMain(m *testing.M) int {
 		}
 	}
 	return m.Run()
+}
+
+func exeName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
 }
 
 // mesh is one test mesh: an isolated MESH_DIR with fast presence timings.

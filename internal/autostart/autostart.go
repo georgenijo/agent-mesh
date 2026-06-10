@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
@@ -30,9 +29,12 @@ func FindMeshd() (string, error) {
 		return p, nil
 	}
 	if self, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(self), "meshd")
-		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
-			return cand, nil
+		dir := filepath.Dir(self)
+		for _, name := range meshdNames() {
+			cand := filepath.Join(dir, name)
+			if info, err := os.Stat(cand); err == nil && !info.IsDir() {
+				return cand, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("autostart: meshd binary not found (install it beside mesh, or set %s)", config.EnvMeshdBin)
@@ -65,10 +67,10 @@ func EnsureCoordinator(cfg config.Config) (bool, error) {
 		return false, fmt.Errorf("autostart: open coordinator lock: %w", err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockExclusive(lock); err != nil {
 		return false, fmt.Errorf("autostart: flock: %w", err)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	defer unlockFile(lock) //nolint:errcheck
 
 	// Someone else may have spawned it while we waited for the lock.
 	if dialable(cfg.BusSocket()) {
@@ -136,7 +138,7 @@ func spawnDetached(cfg config.Config, logName, bin string, args ...string) error
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = os.Environ()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // survive the parent
+	cmd.SysProcAttr = detachedSysProcAttr() // survive the parent
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("autostart: start %s: %w", logName, err)
 	}

@@ -21,7 +21,7 @@ import (
 // buildFakePlanner compiles the fakeplanner binary into this mesh's dir.
 func buildFakePlanner(t *testing.T, m *mesh) string {
 	t.Helper()
-	bin := filepath.Join(m.dir, "fakeplanner")
+	bin := filepath.Join(m.dir, exeName("fakeplanner"))
 	cmd := exec.Command("go", "build", "-o", bin, "github.com/georgenijo/agent-mesh/test/e2e/fakeplanner")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

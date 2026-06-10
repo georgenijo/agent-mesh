@@ -192,10 +192,11 @@ func checkGolden(t *testing.T, name, got string) {
 	if err != nil {
 		t.Fatalf("read golden %s: %v\nRun: go test ./test/e2e -run TestCLIContract -update", path, err)
 	}
-	if normalized != string(want) {
+	wantNormalized := strings.ReplaceAll(string(want), "\r\n", "\n")
+	if normalized != wantNormalized {
 		t.Fatalf("mesh %s --json contract changed; if intentional, run "+
 			"`go test ./test/e2e -run TestCLIContract -update` and commit the golden diff in this PR\n\n"+
-			"GOT:\n%s\nWANT:\n%s", name, normalized, string(want))
+			"GOT:\n%s\nWANT:\n%s", name, normalized, wantNormalized)
 	}
 }
 

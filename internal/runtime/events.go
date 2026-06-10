@@ -48,6 +48,7 @@ type ResultEvent struct {
 	NumTurns          int             `json:"num_turns"` // NOT a session-reuse proof (see spike)
 	DurationMS        int64           `json:"duration_ms"`
 	DurationAPIMS     int64           `json:"duration_api_ms"`
+	TotalCostUSD      float64         `json:"total_cost_usd"` // per-call cost; the #25 scheduler's budget currency
 	StopReason        string          `json:"stop_reason"`
 	TerminalReason    string          `json:"terminal_reason"`
 	APIErrorStatus    json.RawMessage `json:"api_error_status"`

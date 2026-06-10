@@ -83,6 +83,12 @@ func goldenCases() []goldenCase {
 		{KindFleet, "", SubjectFleet,
 			&FleetPayload{State: FleetPaused, Code: FleetBudgetExhausted,
 				Reason: "spent 5.25 of 5.00 USD", SpentUSD: 5.25, BudgetUSD: 5}, &FleetPayload{}},
+		{KindReview, "", SubjectReview("01976f00-0000-7000-8000-0000000000a1"),
+			&ReviewPayload{Task: "01976f00-0000-7000-8000-0000000000a1", Job: goldenTicket,
+				Branch:  "mesh/worker/01976f00-0000-7000-8000-0000000000a1",
+				HeadSHA: "deadbeefcafef00ddeadbeefcafef00ddeadbeef", Verdict: ReviewRequestChanges,
+				Notes: "missing error handling on the RLS path", SessionID: "sess-auth-expert",
+				NumTurns: 3}, &ReviewPayload{}},
 	}
 }
 
@@ -209,6 +215,7 @@ func TestContractStrings(t *testing.T) {
 		{"SubjectTriage", SubjectTriage("J1"), "mesh.triage.J1"},
 		{"SubjectWorker", SubjectWorker("T1"), "mesh.worker.T1"},
 		{"SubjectFleet", SubjectFleet, "mesh.fleet"},
+		{"SubjectReview", SubjectReview("T1"), "mesh.review.T1"},
 		// Patterns.
 		{"PatternAll", PatternAll, "mesh.>"},
 		{"PatternHeartbeats", PatternHeartbeats, "mesh.heartbeat.>"},
@@ -222,6 +229,7 @@ func TestContractStrings(t *testing.T) {
 		{"PatternTasks", PatternTasks, "mesh.task.>"},
 		{"PatternTriage", PatternTriage, "mesh.triage.>"},
 		{"PatternWorkers", PatternWorkers, "mesh.worker.>"},
+		{"PatternReviews", PatternReviews, "mesh.review.>"},
 		// Buckets and streams.
 		{"BucketRegistry", BucketRegistry, "registry"},
 		{"BucketClaims", BucketClaims, "claims"},
@@ -301,6 +309,16 @@ func TestContractStrings(t *testing.T) {
 		{"AuditTriage", string(AuditTriage), "triage"},
 		{"AuditWorker", string(AuditWorker), "worker"},
 		{"AuditFleet", string(AuditFleet), "fleet"},
+		// Review verdicts and error codes.
+		{"ReviewApprove", string(ReviewApprove), "approve"},
+		{"ReviewRequestChanges", string(ReviewRequestChanges), "request_changes"},
+		{"ReviewReject", string(ReviewReject), "reject"},
+		{"ReviewError", string(ReviewError), "error"},
+		{"ReviewRuntimeLost", string(ReviewRuntimeLost), "runtime_lost"},
+		{"ReviewRuntimeError", string(ReviewRuntimeError), "runtime_error"},
+		{"ReviewBadVerdict", string(ReviewBadVerdict), "bad_verdict"},
+		{"ReviewEmptyDiff", string(ReviewEmptyDiff), "empty_diff"},
+		{"ReviewInternal", string(ReviewInternal), "internal"},
 		// Kinds.
 		{"KindRegister", string(KindRegister), "register"},
 		{"KindLeave", string(KindLeave), "leave"},
@@ -317,6 +335,7 @@ func TestContractStrings(t *testing.T) {
 		{"KindTriage", string(KindTriage), "triage"},
 		{"KindWorker", string(KindWorker), "worker"},
 		{"KindFleet", string(KindFleet), "fleet"},
+		{"KindReview", string(KindReview), "review"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

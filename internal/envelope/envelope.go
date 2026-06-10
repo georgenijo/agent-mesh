@@ -64,6 +64,12 @@ const (
 	// tasks stay queued in their KV records — this event is the observable
 	// signal that nothing new will spawn until the fleet is reset.
 	KindFleet Kind = "fleet"
+	// KindReview is the expert-review observability event (#27): one per review
+	// an expert produces over a task's worker diff, carrying the typed verdict
+	// (approve|request_changes|reject|error). Like KindWorker it holds no
+	// authority over a KV record; it records how a diff was judged so the
+	// dashboard and a future review-gating scheduler can see the verdict.
+	KindReview Kind = "review"
 )
 
 var knownKinds = map[Kind]bool{
@@ -82,6 +88,7 @@ var knownKinds = map[Kind]bool{
 	KindTriage:    true,
 	KindWorker:    true,
 	KindFleet:     true,
+	KindReview:    true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

@@ -12,6 +12,14 @@
 // /api/roster, /api/claims, /api/notes) remain unauthenticated. One
 // authority per fact: the POST delegates to job.Store — the same machinery
 // `mesh submit` uses — and never maintains parallel job state.
+//
+// Security (issue #61): all dashboard routes are wrapped with
+// hostCheckMiddleware, which validates the Host header against the loopback
+// allow-list (localhost, 127.0.0.1, [::1], with optional port). Any other
+// Host value — including a missing one that Go fills from a non-loopback
+// forwarded address — is rejected with 403. This closes the DNS-rebinding
+// vector: a malicious page on evil.example that re-points to 127.0.0.1 sends
+// Host: evil.example, which the middleware rejects before any handler fires.
 package dashboard
 
 import (
@@ -160,6 +168,7 @@ func (d *Dashboard) Start() error {
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
+
 	if err != nil {
 		cli.Close()
 		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
@@ -176,7 +185,7 @@ func (d *Dashboard) Start() error {
 		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: %w", err)
 	}
-	d.httpSrv = &http.Server{Handler: mux}
+	d.httpSrv = &http.Server{Handler: hostCheckMiddleware(mux)}
 
 	d.wg.Add(2)
 	go func() {
@@ -619,6 +628,55 @@ func writeJSONError(w http.ResponseWriter, body string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Write([]byte(body)) //nolint:errcheck
+}
+
+// isLoopbackHost reports whether host (the hostname part of the HTTP Host
+// header, with any port already stripped) is one of the canonical loopback
+// names accepted by the dashboard.
+//
+// Accepted: "localhost", "127.0.0.1", "::1", "[::1]".
+// The bracketed form "[::1]" is how net.SplitHostPort leaves the host when
+// the original Host header was "[::1]:port", and is included for robustness
+// even though Go's own http.Server normalises IPv6 addresses.
+func isLoopbackHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	return false
+}
+
+// hostCheckMiddleware is an HTTP middleware that validates the Host header
+// against the loopback allow-list before passing the request to next.
+//
+// DNS-rebinding attack: a malicious page on evil.example that re-points its
+// domain to 127.0.0.1 becomes same-origin in the browser's view, but the
+// browser still sends Host: evil.example. Checking the Host header here
+// rejects such requests before any handler fires, at the cost of one string
+// comparison per request (negligible on a local server).
+//
+// If the Host header is absent or its hostname cannot be parsed the request
+// is also rejected — an absent Host is allowed by HTTP/1.0 but not by
+// HTTP/1.1, and the dashboard is only ever accessed on loopback where a
+// well-behaved client always supplies it.
+func hostCheckMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if host == "" {
+			writeJSONError(w, `{"error":"forbidden","message":"missing Host header"}`, http.StatusForbidden)
+			return
+		}
+		// Strip the port if present. net.SplitHostPort returns an error for
+		// bare hostnames (no colon) which we treat as the full hostname.
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !isLoopbackHost(host) {
+			writeJSONError(w, `{"error":"forbidden","message":"Host not allowed"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // generateToken creates a 32-byte random hex bearer token.

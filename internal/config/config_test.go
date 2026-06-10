@@ -211,3 +211,42 @@ func TestLoadRejectsBadKeepWorktrees(t *testing.T) {
 		t.Fatal("Load accepted MESH_KEEP_WORKTREES=sometimes")
 	}
 }
+
+func TestLoadAuditFanoutKnob(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	// Default: on.
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AuditFanout {
+		t.Fatal("AuditFanout default = false, want true (on by default)")
+	}
+
+	for _, on := range []string{"on", "true", "1"} {
+		t.Setenv(EnvAuditFanout, on)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("MESH_AUDIT_FANOUT=%q: %v", on, err)
+		}
+		if !cfg.AuditFanout {
+			t.Fatalf("MESH_AUDIT_FANOUT=%q gave AuditFanout=false", on)
+		}
+	}
+	for _, off := range []string{"off", "false", "0"} {
+		t.Setenv(EnvAuditFanout, off)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("MESH_AUDIT_FANOUT=%q: %v", off, err)
+		}
+		if cfg.AuditFanout {
+			t.Fatalf("MESH_AUDIT_FANOUT=%q gave AuditFanout=true", off)
+		}
+	}
+
+	t.Setenv(EnvAuditFanout, "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted MESH_AUDIT_FANOUT=maybe")
+	}
+}

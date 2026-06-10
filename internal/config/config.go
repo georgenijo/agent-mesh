@@ -35,6 +35,7 @@ const (
 	EnvMaxWorkers        = "MESH_MAX_WORKERS"    // max concurrent workers (default 4)
 	EnvReposDir          = "MESH_REPOS_DIR"      // dir mapping job repo names to git checkouts; required by the #26 worker driver
 	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES" // worker worktree retention: on-failure (default) | always | never
+	EnvAuditFanout       = "MESH_AUDIT_FANOUT"   // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -126,6 +127,16 @@ type Config struct {
 	// KeepWorktrees is the worker worktree retention policy
 	// (KeepWorktreesOnFailure | KeepWorktreesAlways | KeepWorktreesNever).
 	KeepWorktrees string
+
+	// AuditFanout enables the #29 unified audit log: the coordinator taps
+	// mesh.> and fans the major lifecycle events of every domain (ask/answer/
+	// ticket/job/task/triage/worker/fleet, on top of the always-on presence/
+	// claim audits) into envelope.StreamAudit, so one ordered read reconstructs
+	// how any ticket/job/claim reached its state. On by default; MESH_AUDIT_FANOUT=off
+	// disables only the bus-observed fan-out (presence/claim audits, which
+	// existing reducer/sweep paths depend on, are always emitted) — for local
+	// tuning and test determinism (issue #29: "knobs for ... test determinism").
+	AuditFanout bool
 }
 
 // Load resolves config from the environment with defaults.
@@ -144,6 +155,7 @@ func Load() (Config, error) {
 		WorkerTimeout:     DefaultWorkerTimeout,
 		MaxWorkers:        DefaultMaxWorkers,
 		KeepWorktrees:     KeepWorktreesOnFailure,
+		AuditFanout:       true,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -212,6 +224,16 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvMaxWorkers, raw)
 		}
 		cfg.MaxWorkers = n
+	}
+	if raw := os.Getenv(EnvAuditFanout); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.AuditFanout = true
+		case "off", "false", "0":
+			cfg.AuditFanout = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAuditFanout, raw)
+		}
 	}
 	cfg.ReposDir = os.Getenv(EnvReposDir) // empty = worker driver refuses to construct
 	if raw := os.Getenv(EnvKeepWorktrees); raw != "" {

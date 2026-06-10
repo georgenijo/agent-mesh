@@ -20,6 +20,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -521,9 +522,15 @@ func (d *Dashboard) serveCreateJob(w http.ResponseWriter, r *http.Request) {
 	if !d.checkWriteAuth(w, r) {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxJobBodyLen+maxJobTitleLen+4096)
 	var req jobCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, `{"error":"bad_request","message":"invalid JSON body"}`, http.StatusBadRequest)
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeJSONError(w, `{"error":"bad_request","message":"body too large"}`, http.StatusBadRequest)
+		} else {
+			writeJSONError(w, `{"error":"bad_request","message":"invalid JSON body"}`, http.StatusBadRequest)
+		}
 		return
 	}
 	req.Repo = strings.TrimSpace(req.Repo)

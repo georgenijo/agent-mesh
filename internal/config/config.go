@@ -173,6 +173,13 @@ func (c Config) DashboardAddrFile() string { return filepath.Join(c.MeshDir, "da
 // DashboardLock is the flock file electing a single dashboard autostarter.
 func (c Config) DashboardLock() string { return filepath.Join(c.MeshDir, "dashboard.lock") }
 
+// DashboardTokenFile holds the write-API bearer token the dashboard generated
+// on start. The UI fetches it from GET /api/write-token (never directly from
+// disk); CLI users can read the file. Observer endpoints stay unauthenticated.
+func (c Config) DashboardTokenFile() string {
+	return filepath.Join(c.MeshDir, "dashboard.token")
+}
+
 // ObservePID is written by the running observe server for ops inspection.
 func (c Config) ObservePID() string { return filepath.Join(c.MeshDir, "observe.pid") }
 

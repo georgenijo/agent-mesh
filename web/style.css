@@ -762,3 +762,141 @@ body {
   height: 1px;
   overflow: hidden;
 }
+
+/* ══════════════════════════════════════════
+   P4: JOB SUBMIT FORM
+══════════════════════════════════════════ */
+
+/* Floating action button in the topbar */
+.jf-fab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  background: var(--primary-mid);
+  color: #0b1326;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.jf-fab:hover { background: var(--primary); }
+.jf-fab:active { opacity: 0.8; }
+
+/* Overlay backdrop */
+.jf-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(11,19,38,0.8);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.jf-overlay[hidden] { display: none; }
+
+/* Sheet */
+.jf-sheet {
+  background: var(--surface);
+  border: 1px solid var(--outline-dim);
+  border-radius: var(--r-lg);
+  width: min(480px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+}
+
+.jf-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--outline-dim);
+}
+.jf-title {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--primary-mid);
+}
+.jf-close {
+  background: none;
+  border: none;
+  color: var(--outline);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  line-height: 1;
+  border-radius: var(--r);
+}
+.jf-close:hover { color: var(--on-surface); background: var(--surface-high); }
+
+.jf-body {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.jf-label {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--on-surface-dim);
+  margin-bottom: -0.3rem;
+}
+.jf-req { color: var(--error); }
+.jf-opt { color: var(--outline); font-size: 0.65rem; }
+.jf-input {
+  background: var(--surface-low);
+  border: 1px solid var(--outline-dim);
+  border-radius: var(--r);
+  color: var(--on-surface);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: 0.45rem 0.6rem;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.jf-input:focus { border-color: var(--primary-mid); }
+.jf-input::placeholder { color: var(--outline); }
+.jf-textarea { resize: vertical; min-height: 7rem; }
+
+.jf-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+.jf-submit {
+  background: var(--primary-mid);
+  color: #0b1326;
+  border: none;
+  border-radius: var(--r);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.45rem 1.1rem;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.jf-submit:hover { background: var(--primary); }
+.jf-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.jf-status {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--on-surface-dim);
+}
+.jf-status.ok  { color: var(--tertiary); }
+.jf-status.err { color: var(--error); }

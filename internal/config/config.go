@@ -38,6 +38,8 @@ const (
 	EnvReposDir          = "MESH_REPOS_DIR"           // dir mapping job repo names to git checkouts; required by the #26 worker driver
 	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES"      // worker worktree retention: on-failure (default) | always | never
 	EnvAuditFanout       = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
+	EnvReviewRole        = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
+	EnvReviewTimeout     = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -95,6 +97,12 @@ const (
 	// is host-bound at 4–8).
 	DefaultMaxWorkers = 4
 
+	// DefaultReviewTimeout bounds one review round trip (#80): publish the
+	// review request, wait for the expert's typed verdict event. A review is
+	// one resident-expert LLM turn (5–60s observed), so this is generous;
+	// past it the gate treats the review as lost — never as an approval.
+	DefaultReviewTimeout = 5 * time.Minute
+
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
 	DefaultEvictAfter        = 60 * time.Second
@@ -145,6 +153,16 @@ type Config struct {
 	BudgetUSD     float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
 	MaxWorkers    int           // max concurrent workers
 
+	// ReviewRole gates the #80 review integration: when set (and the scheduler
+	// is enabled), every successful worker diff is routed to the expert serving
+	// this role and the task's terminal state is gated on the typed verdict.
+	// Deliberately NO default, exactly like PlannerCLI/WorkerCLI: unset means
+	// review gating is off and a worker success transitions the task to done
+	// exactly as before.
+	ReviewRole string
+	// ReviewTimeout bounds one review round trip (request → verdict event).
+	ReviewTimeout time.Duration
+
 	// ReposDir maps a job's repo NAME to a git checkout at <ReposDir>/<name>.
 	// Deliberately NO default: the #26 worker driver refuses to start without
 	// it (a worker must never guess which directory tree it may rewrite).
@@ -182,6 +200,7 @@ func Load() (Config, error) {
 		WorkerModel:       DefaultWorkerModel,
 		WorkerTimeout:     DefaultWorkerTimeout,
 		MaxWorkers:        DefaultMaxWorkers,
+		ReviewTimeout:     DefaultReviewTimeout,
 		KeepWorktrees:     KeepWorktreesOnFailure,
 		AuditFanout:       true,
 	}
@@ -208,6 +227,7 @@ func Load() (Config, error) {
 		{EnvTriageTimeout, &cfg.TriageTimeout},
 		{EnvTriageBackoff, &cfg.TriageBackoff},
 		{EnvWorkerTimeout, &cfg.WorkerTimeout},
+		{EnvReviewTimeout, &cfg.ReviewTimeout},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -271,7 +291,8 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAuditFanout, raw)
 		}
 	}
-	cfg.ReposDir = os.Getenv(EnvReposDir) // empty = worker driver refuses to construct
+	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off
+	cfg.ReposDir = os.Getenv(EnvReposDir)     // empty = worker driver refuses to construct
 	if raw := os.Getenv(EnvKeepWorktrees); raw != "" {
 		switch raw {
 		case KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever:

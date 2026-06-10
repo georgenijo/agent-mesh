@@ -253,11 +253,9 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 	// reviewFn is the expert's REVIEW capability (#27): drive the SAME resident
 	// child to review a worker diff and map the runtime's typed outcome onto the
 	// envelope.ReviewVerdict contract — never fake-success. It mirrors the answer
-	// path's best-effort --resume recovery on child death. Wired and available
-	// for the scheduler→expert review-gating integration (a tracked follow-up);
-	// no inbound review-request transport exists yet, so nothing drives it
-	// automatically in this slice. The mapping itself is exercised by the
-	// runtime package (Review) and sidecar package (Review) tests.
+	// path's best-effort --resume recovery on child death. Driven automatically
+	// by ServeReviews below (#80): the review-gating scheduler publishes
+	// role-addressed review requests and gates tasks on the verdict event.
 	reviewFn := func(askCtx context.Context, req sidecar.ReviewRequest) (sidecar.ReviewResult, error) {
 		rreq := agentruntime.ReviewRequest{
 			Instruction: req.Instruction, Diff: req.Diff, ChangedFiles: req.ChangedFiles,
@@ -275,7 +273,12 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 		}
 		return mapReviewOutcome(out, err), nil
 	}
-	_ = reviewFn // available for review-gating wiring; see #27 follow-up
+	// Inbound review transport (#80): serve mesh.review-req.<role> requests
+	// through the review capability. Failure to subscribe degrades the expert
+	// to answers-only — logged, never fatal (asks must keep working).
+	if err := sc.ServeReviews(ctx, reviewFn); err != nil {
+		log.Warn("expert: review-request subscription failed; reviews disabled", "err", err)
+	}
 
 	go func() {
 		opts := sidecar.ExpertOptions{Repo: repo, Prime: prime, Resync: resync}
@@ -316,6 +319,11 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 //   - nil + valid verdict   -> the clean judgement
 func mapReviewOutcome(out agentruntime.ReviewOutcome, err error) sidecar.ReviewResult {
 	base := sidecar.ReviewResult{Notes: out.Notes, SessionID: out.SessionID, NumTurns: out.NumTurns}
+	if out.Turn.Result != nil {
+		// The review turn's reported cost rides on the verdict (#80) so the
+		// scheduler's budget meter accounts it like a worker run.
+		base.CostUSD = out.Turn.Result.TotalCostUSD
+	}
 	if err == nil {
 		switch out.Verdict {
 		case agentruntime.VerdictApprove:

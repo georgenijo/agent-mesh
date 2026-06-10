@@ -195,3 +195,68 @@ func TestReviewUsageErrors(t *testing.T) {
 		t.Fatal("empty task accepted")
 	}
 }
+
+// TestServeReviewsAnswersRoleAddressedRequest proves the #80 inbound review
+// transport: a KindReviewRequest published on the expert's role subject
+// (mesh.review-req.<role>) is decoded, served through the ReviewFunc, and the
+// typed verdict — cost included — lands as the mesh.review.<task> event the
+// review-gating scheduler awaits. No inbox, no ticket: the verdict event is
+// the reply, correlated by task id.
+func TestServeReviewsAnswersRoleAddressedRequest(t *testing.T) {
+	cfg := fastConfig(t)
+	sc := startMesh(t, cfg, "builder-expert")
+	tap := newReviewTap(t, cfg)
+
+	var (
+		mu  sync.Mutex
+		got []ReviewRequest
+	)
+	fn := func(_ context.Context, req ReviewRequest) (ReviewResult, error) {
+		mu.Lock()
+		got = append(got, req)
+		mu.Unlock()
+		return ReviewResult{
+			Verdict: envelope.ReviewApprove,
+			Notes:   "diff matches the instruction",
+			CostUSD: 0.25,
+		}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := sc.ServeReviews(ctx, fn); err != nil {
+		t.Fatalf("ServeReviews: %v", err)
+	}
+
+	req, err := envelope.New(envelope.KindReviewRequest, "coordinator",
+		envelope.SubjectReviewRequest("builder"), &envelope.ReviewRequestPayload{
+			Task: "task-80", Job: "job-80", Role: "builder", Repo: "demo",
+			Branch: "mesh/worker/task-80", BaseSHA: "aaa", HeadSHA: "bbb",
+			ChangedFiles: []string{"main.go"},
+			Instruction:  "change main.go", Diff: "--- a\n+++ b\n",
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tap.cli.Publish(req); err != nil {
+		t.Fatal(err)
+	}
+
+	p := tap.await(t, "task-80", 5*time.Second)
+	if p.Verdict != envelope.ReviewApprove {
+		t.Fatalf("verdict = %q, want approve", p.Verdict)
+	}
+	if p.CostUSD != 0.25 {
+		t.Fatalf("verdict costUSD = %v, want 0.25 (review cost must reach the budget meter)", p.CostUSD)
+	}
+	if p.Branch != "mesh/worker/task-80" || p.HeadSHA != "bbb" || p.Job != "job-80" {
+		t.Fatalf("verdict event metadata = %+v", p)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("ReviewFunc called %d times, want 1", len(got))
+	}
+	if got[0].Diff != "--- a\n+++ b\n" || got[0].Instruction != "change main.go" || got[0].BaseSHA != "aaa" {
+		t.Fatalf("decoded request = %+v", got[0])
+	}
+}

@@ -151,6 +151,22 @@ func (c *Coordinator) auditEntryFor(env envelope.Envelope) (AuditEntry, bool) {
 		}
 		return base, true
 
+	case envelope.KindReview:
+		// The expert-review verdict over a worker diff (#27/#80): the gate's
+		// input. Event = the typed verdict; State carries the error class when
+		// the review could not be produced.
+		var p envelope.ReviewPayload
+		if envelope.DecodeInto(env, &p) != nil {
+			return AuditEntry{}, false
+		}
+		base.Kind = envelope.AuditReview
+		base.Event = string(p.Verdict)
+		base.Task, base.Job, base.Result, base.Detail = p.Task, p.Job, string(p.Verdict), p.Notes
+		if p.Code != "" {
+			base.State = string(p.Code)
+		}
+		return base, true
+
 	case envelope.KindFleet:
 		var p envelope.FleetPayload
 		if envelope.DecodeInto(env, &p) != nil {
@@ -165,8 +181,9 @@ func (c *Coordinator) auditEntryFor(env envelope.Envelope) (AuditEntry, bool) {
 		return base, true
 
 	default:
-		// KindAnnounce, KindNote (never published — stream-only), and any future
-		// chatter kind: no audit entry.
+		// KindAnnounce, KindNote (never published — stream-only),
+		// KindReviewRequest (the verdict, not the request, is the audited
+		// fact), and any future chatter kind: no audit entry.
 		return AuditEntry{}, false
 	}
 }

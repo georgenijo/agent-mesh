@@ -125,5 +125,12 @@ var repoRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,48}$`)
 // ValidRepo reports whether s is a legal repo id.
 func ValidRepo(s string) bool { return repoRE.MatchString(s) }
 
+// ValidRole reports whether s is a legal role token for a subject segment
+// (mesh.ask.role.<role>, mesh.review-req.<role>). Same character class as repo
+// ids — see the repoRE note above. Roles minted at join are validated by the
+// agent card; this is for roles minted from configuration (e.g.
+// MESH_REVIEW_ROLE), which never pass through a card.
+func ValidRole(s string) bool { return repoRE.MatchString(s) }
+
 // DefaultRepo is the repo identity used when an agent does not set one.
 const DefaultRepo = "default"

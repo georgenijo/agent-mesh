@@ -49,6 +49,16 @@ type Options struct {
 	Interval    time.Duration // sweep cadence (default 5s)
 	Backoff     time.Duration // rate-limit re-dispatch delay (default 30s)
 	Log         *slog.Logger
+
+	// Reviewer gates worker successes on an expert review (#80). Nil = review
+	// gating off: a worker success transitions the task to done exactly as
+	// before. Set (the coordinator wires a BusReviewer when MESH_REVIEW_ROLE
+	// is configured), every typed worker success is routed for review and the
+	// task's terminal state follows the gate policy (review.go): only approve
+	// — or a success with no diff to review — reaches done; request_changes,
+	// reject, and every review error fail the task, never silently pass it.
+	// Review cost accrues against the same budget meter as worker runs.
+	Reviewer Reviewer
 }
 
 // outcome is one finished worker run, delivered from a worker goroutine to
@@ -74,6 +84,7 @@ type Scheduler struct {
 	tasks task.Store
 
 	results chan outcome
+	reviews chan reviewOutcome
 
 	// Loop-goroutine-only state.
 	inflight map[string]string    // task id → job id, workers in flight this lifetime
@@ -114,6 +125,7 @@ func New(cli *bus.Client, opts Options) (*Scheduler, error) {
 		jobs:     job.NewStore(cli),
 		tasks:    task.NewStore(cli),
 		results:  make(chan outcome),
+		reviews:  make(chan reviewOutcome),
 		inflight: make(map[string]string),
 		retryAt:  make(map[string]time.Time),
 		ctx:      ctx,
@@ -157,6 +169,9 @@ func (s *Scheduler) loop() {
 		case o := <-s.results:
 			s.handleOutcome(o)
 			s.sweepOnce() // chain: a finished dependency may unlock dependents now
+		case ro := <-s.reviews:
+			s.handleReview(ro)
+			s.sweepOnce() // an approved dependency may unlock dependents now
 		case <-ticker.C:
 			s.sweepOnce()
 		}
@@ -364,16 +379,23 @@ func (s *Scheduler) handleOutcome(o outcome) {
 
 	switch {
 	case res.Succeeded():
-		// Record the output branch before marking done, so a dependent task
-		// dispatched on the next sweep can base its worktree on it (#26
-		// dependency inheritance). Best-effort: a missing branch only costs a
-		// dependent the inherited diff, never correctness of the state machine.
+		// Record the output branch before gating, so a dependent task
+		// dispatched after this one reaches done can base its worktree on it
+		// (#26 dependency inheritance). Done unconditionally and best-effort:
+		// the branch is recorded whether or not review gating is on, so a
+		// later approve→done needs no second write. A missing branch only
+		// costs a dependent the inherited diff, never state-machine correctness.
 		if res.Branch != "" {
 			if err := s.tasks.SetBranch(o.task.ID, res.Branch); err != nil {
 				s.log.Warn("scheduler: record task output branch failed", "task", o.task.ID, "err", err)
 			}
 		}
-		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone, "worker succeeded")
+		if s.opts.Reviewer == nil {
+			// Review gating off (the pre-#80 contract): success is done.
+			s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone, "worker succeeded")
+			break
+		}
+		s.maybeStartReview(o.task, res)
 	case res.Code == envelope.WorkerRateLimited:
 		// Back off, never fail: the task stays persisted running and is
 		// re-dispatched once the backoff elapses.
@@ -386,6 +408,103 @@ func (s *Scheduler) handleOutcome(o outcome) {
 	default:
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
 			truncate(fmt.Sprintf("%s: %s", res.Code, res.Summary), 512))
+	}
+
+	if s.opts.BudgetUSD > 0 && s.spent >= s.opts.BudgetUSD {
+		s.pause(envelope.FleetBudgetExhausted,
+			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, s.opts.BudgetUSD))
+	}
+}
+
+// --- review gating (#80) -----------------------------------------------------------
+
+// reviewOutcome is one resolved review, delivered from a review goroutine to
+// the loop goroutine — the same single-writer discipline as worker outcomes.
+type reviewOutcome struct {
+	task task.Record
+	dec  ReviewDecision
+}
+
+// maybeStartReview routes a typed worker success to the reviewer. The task
+// stays persisted running and stays in s.inflight while the review is in
+// flight, so sweeps neither re-dispatch nor cancel it; a coordinator restart
+// loses only the in-memory review state and honestly re-runs the task (the
+// same posture as an orphaned running worker). When the fleet is paused (the
+// run that just landed may have exhausted the budget), no review is requested
+// — a review is an expert LLM turn and must respect the same hard cap; the
+// task stays running and the next coordinator lifetime resumes it.
+// Loop goroutine only.
+func (s *Scheduler) maybeStartReview(rec task.Record, res Result) {
+	if !s.checkBudgetBeforeSpawn() {
+		s.log.Warn("scheduler: fleet paused; review deferred, task stays running", "task", rec.ID)
+		return
+	}
+	repo := ""
+	if j, found, err := s.jobs.Get(rec.Job); err == nil && found {
+		repo = j.Repo
+	}
+	s.inflight[rec.ID] = rec.Job
+	s.workWG.Add(1)
+	go s.runReview(rec, repo, res.Summary)
+}
+
+// runReview runs on its own goroutine: one Reviewer round trip, then report
+// to the loop. A reviewer Go error (a fault it could not classify) maps to a
+// typed ReviewError — never an approval; a panicking reviewer likewise.
+func (s *Scheduler) runReview(rec task.Record, repo, summary string) {
+	defer s.workWG.Done()
+	var dec ReviewDecision
+	var err error
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				err = fmt.Errorf("reviewer panicked: %v", p)
+			}
+		}()
+		dec, err = s.opts.Reviewer.Review(s.ctx, ReviewTarget{Task: rec, Repo: repo, Summary: summary})
+	}()
+	if err != nil {
+		dec = ReviewDecision{Verdict: envelope.ReviewError, Code: envelope.ReviewInternal,
+			Notes: err.Error(), CostUSD: dec.CostUSD}
+	}
+	select {
+	case s.reviews <- reviewOutcome{task: rec, dec: dec}:
+	case <-s.stop:
+		// Shutting down: drop the outcome. The task stays persisted running
+		// and the next coordinator lifetime re-runs and re-reviews it.
+	}
+}
+
+// handleReview applies the gate policy (review.go) to one resolved review:
+// cost accounting against the same budget meter as worker runs, then the task
+// transition. Only approve — or a success with no diff to review — reaches
+// done; everything else, including every review error, fails the task (the
+// existing fail-fast sweep then cancels dependents). Never a silent approve.
+// Loop goroutine only.
+func (s *Scheduler) handleReview(o reviewOutcome) {
+	delete(s.inflight, o.task.ID)
+	dec := o.dec
+	s.spent += dec.CostUSD
+
+	switch {
+	case dec.NoDiff:
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone,
+			"worker succeeded (no diff to review)")
+	case dec.Verdict == envelope.ReviewApprove:
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone,
+			truncate("review approved: "+dec.Notes, 512))
+	case dec.Verdict == envelope.ReviewRequestChanges, dec.Verdict == envelope.ReviewReject:
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
+			truncate(fmt.Sprintf("review %s: %s", dec.Verdict, dec.Notes), 512))
+	default:
+		// ReviewError — or anything outside the closed verdict set (defense in
+		// depth). The absence of a clean verdict is never an approval.
+		code := dec.Code
+		if code == "" {
+			code = envelope.ReviewInternal
+		}
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
+			truncate(fmt.Sprintf("review error (%s): %s", code, dec.Notes), 512))
 	}
 
 	if s.opts.BudgetUSD > 0 && s.spent >= s.opts.BudgetUSD {

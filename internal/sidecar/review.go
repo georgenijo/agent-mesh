@@ -58,6 +58,10 @@ type ReviewResult struct {
 	Notes     string
 	SessionID string
 	NumTurns  int
+	// CostUSD is the review turn's reported total_cost_usd (#80): a review is
+	// an expert LLM turn and its cost travels on the verdict event so the
+	// scheduler's budget meter accounts it like a worker run.
+	CostUSD float64
 }
 
 // ReviewFunc reviews one worker diff through the resident runtime child and
@@ -120,6 +124,62 @@ func (s *Sidecar) Review(ctx context.Context, fn ReviewFunc, req ReviewRequest) 
 	return res, nil
 }
 
+// ServeReviews subscribes this expert to its role's review-request subject
+// (mesh.review-req.<role>, #80) and serves each inbound request through fn via
+// Review — which publishes the typed verdict as the mesh.review.<task> event
+// the review-gating scheduler awaits. Non-blocking: it returns once the
+// subscription is up; the subscription is dropped when ctx is cancelled or the
+// sidecar stops. Requests are handled inline on the subscription's delivery
+// goroutine — reviews are rare and the runtime proxy serializes turns anyway,
+// so queueing would only add state.
+//
+// This is the inbound transport for the #27 review capability: requests are
+// NOT asks (no ticket, no inbox) — the request envelope is fire-and-forget and
+// the verdict event is the reply, correlated by task id.
+func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
+	if fn == nil {
+		return errNilReviewFunc
+	}
+	subject := envelope.SubjectReviewRequest(s.card.Role)
+	sub, err := s.bus.Subscribe(subject, func(env envelope.Envelope) {
+		if ctx.Err() != nil {
+			return
+		}
+		var p envelope.ReviewRequestPayload
+		if err := envelope.DecodeInto(env, &p); err != nil {
+			s.log.Warn("expert: drop malformed review request", "subject", env.Subject, "err", err)
+			return
+		}
+		req := ReviewRequest{
+			Task:         p.Task,
+			Job:          p.Job,
+			Instruction:  p.Instruction,
+			Diff:         p.Diff,
+			ChangedFiles: p.ChangedFiles,
+			BaseSHA:      p.BaseSHA,
+			HeadSHA:      p.HeadSHA,
+			Branch:       p.Branch,
+		}
+		if _, err := s.Review(ctx, fn, req); err != nil {
+			// Review already recorded the typed error verdict event; this is
+			// the unclassifiable-internal-fault surface, log only.
+			s.log.Warn("expert: review failed", "task", p.Task, "err", err)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-s.stop:
+		}
+		sub.Unsubscribe()
+	}()
+	s.log.Info("expert: serving review requests", "subject", subject)
+	return nil
+}
+
 // publishReview emits the typed verdict as a mesh.review.<task> observability
 // event. Best-effort: a publish failure is logged, never fatal.
 func (s *Sidecar) publishReview(req ReviewRequest, res ReviewResult) {
@@ -134,6 +194,7 @@ func (s *Sidecar) publishReview(req ReviewRequest, res ReviewResult) {
 		Notes:     truncateNotes(res.Notes, maxReviewNotesBytes),
 		SessionID: res.SessionID,
 		NumTurns:  res.NumTurns,
+		CostUSD:   res.CostUSD,
 	}
 	env, err := envelope.New(envelope.KindReview, id, envelope.SubjectReview(req.Task), payload)
 	if err != nil {

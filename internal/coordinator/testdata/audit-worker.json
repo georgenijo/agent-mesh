@@ -1,0 +1,11 @@
+{
+  "kind": "worker",
+  "id": "scheduler",
+  "event": "error",
+  "ts": "2026-06-10T00:00:00Z",
+  "job": "01976f00-0000-7000-8000-00000000007e",
+  "task": "01976f00-0000-7000-8000-0000000000a1",
+  "state": "rate_limited",
+  "result": "error",
+  "detail": "api_error_status 429"
+}

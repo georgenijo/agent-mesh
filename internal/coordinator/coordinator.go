@@ -30,16 +30,37 @@ import (
 // coordinatorID is the From id the coordinator uses on the bus.
 const coordinatorID = "coordinator"
 
-// AuditEntry is one transition record appended to the audit stream.
-// Presence entries track an agent's lifecycle; claim entries track the
-// coordinator freeing a departed agent's claims (Path/Repo identify which).
+// AuditEntry is one record appended to the unified audit stream
+// (envelope.StreamAudit) — the #29 policy/audit substrate. The coordinator is
+// its sole writer (one authority per fact), so the record shape lives here, in
+// the package that owns the stream, while the typed Kind vocabulary lives in
+// internal/envelope (AuditCategory) beside the other enums.
+//
+// The original presence/claim fields (Kind/ID/Event/Path/Repo/TS) are
+// unchanged and frozen — existing reducer/sweep/claims paths and their tests
+// depend on them. #29 adds optional correlation fields so a single ordered
+// read of the stream can reconstruct how a ticket/job/task reached its state:
+// Ticket/Job/Task tie an entry to a work unit, Role/By/State/Result carry the
+// typed lifecycle detail, and Detail is free-text context (never parsed — taps
+// discriminate on the typed fields). Every added field is omitempty, so a
+// presence/claim entry serializes byte-identically to before (golden-pinned).
 type AuditEntry struct {
-	Kind  string    `json:"kind"`  // "presence" | "claim"
-	ID    string    `json:"id"`    // the agent
-	Event string    `json:"event"` // presence: registered|left|away|recovered|evicted; claim: released|reclaimed
-	Path  string    `json:"path,omitempty"`
-	Repo  string    `json:"repo,omitempty"`
-	TS    time.Time `json:"ts"`
+	Kind  envelope.AuditCategory `json:"kind"`  // presence|claim|ticket|ask|answer|job|task|triage|worker|fleet
+	ID    string                 `json:"id"`    // the agent or actor; empty for actorless events
+	Event string                 `json:"event"` // the lifecycle verb/state within the category
+	Path  string                 `json:"path,omitempty"`
+	Repo  string                 `json:"repo,omitempty"`
+	TS    time.Time              `json:"ts"`
+
+	// #29 correlation fields — all omitempty, additive.
+	Ticket string `json:"ticket,omitempty"` // ask-ticket id (ticket/ask/answer)
+	Job    string `json:"job,omitempty"`    // job id (job/task/triage/worker)
+	Task   string `json:"task,omitempty"`   // task id (task/worker)
+	Role   string `json:"role,omitempty"`   // role addressed/owning (ask/task)
+	By     string `json:"by,omitempty"`     // actor that caused a transition, when distinct from ID
+	State  string `json:"state,omitempty"`  // resulting lifecycle state (ticket/job/task/fleet)
+	Result string `json:"result,omitempty"` // typed outcome (claim/triage/worker result)
+	Detail string `json:"detail,omitempty"` // free-text context; never parsed
 }
 
 // Coordinator runs the bus server and the registry reducer.
@@ -223,8 +244,11 @@ func writeCoordinatorPID(path string) error {
 
 // reduce dispatches every tapped envelope to the matching presence handler.
 // Runs on the subscription's single delivery goroutine, so events for one
-// agent are reduced in publish order. Non-presence kinds (P1+ announce/claim/
-// note/...) are not control-plane events and are ignored here.
+// agent are reduced in publish order. Presence kinds mutate the registry; the
+// rest (P1+ announce/claim/ask/answer/ticket/job/task/...) are not control-plane
+// events but ARE fanned into the unified audit log (#29) — the coordinator is
+// the one component that taps every subject, so it is the natural single writer
+// of the audit trail (see auditObserved).
 func (c *Coordinator) reduce(env envelope.Envelope) {
 	switch env.Kind {
 	case envelope.KindRegister:
@@ -235,6 +259,14 @@ func (c *Coordinator) reduce(env envelope.Envelope) {
 		c.handleHeartbeat(env)
 	case envelope.KindStatus:
 		c.handleStatus(env)
+	default:
+		// Non-presence lifecycle event: record it in the audit log. Presence is
+		// audited at its mutation site (register/leave/away/evict) so the entry
+		// reflects the reduced outcome, not just the wire event; claims are
+		// audited where the coordinator reclaims them. Everything else is
+		// observed here. Heartbeats are intentionally not audited (every-5s
+		// noise, no lifecycle meaning).
+		c.auditObserved(env)
 	}
 }
 
@@ -481,7 +513,7 @@ func (c *Coordinator) putRecord(rec agentcard.RegistryRecord) {
 }
 
 func (c *Coordinator) audit(id, event string) {
-	entry := AuditEntry{Kind: "presence", ID: id, Event: event, TS: time.Now().UTC()}
+	entry := AuditEntry{Kind: envelope.AuditPresence, ID: id, Event: event, TS: time.Now().UTC()}
 	if _, err := c.cli.StreamAppend(envelope.StreamAudit, entry); err != nil {
 		c.log.Warn("audit append failed", "id", id, "event", event, "err", err)
 	}
@@ -493,7 +525,7 @@ func (c *Coordinator) audit(id, event string) {
 // the reducer/sweep.
 func (c *Coordinator) releaseClaims(id, event string) {
 	for _, rec := range claim.ReleaseAllOwnedBy(c.cli, id) {
-		entry := AuditEntry{Kind: "claim", ID: id, Event: event, Path: rec.Path, Repo: rec.Repo, TS: time.Now().UTC()}
+		entry := AuditEntry{Kind: envelope.AuditClaim, ID: id, Event: event, Path: rec.Path, Repo: rec.Repo, TS: time.Now().UTC()}
 		if _, err := c.cli.StreamAppend(envelope.StreamAudit, entry); err != nil {
 			c.log.Warn("claim audit append failed", "id", id, "event", event, "path", rec.Path, "err", err)
 		}

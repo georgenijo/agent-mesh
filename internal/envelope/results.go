@@ -172,3 +172,43 @@ var triageErrorCodes = map[TriageErrorCode]bool{
 
 // ValidTriageErrorCode reports whether c is a recognized triage error code.
 func ValidTriageErrorCode(c TriageErrorCode) bool { return triageErrorCodes[c] }
+
+// AuditCategory groups an audit-log entry by the domain whose lifecycle it
+// records. The audit stream (envelope.StreamAudit, written only by the
+// coordinator) is the unified policy/audit substrate (#29): the coordinator
+// taps mesh.> and fans the major lifecycle events of every domain into it, so a
+// single ordered read reconstructs how a ticket / job / claim reached its
+// current state. The vocabulary is wire contract — observers (dashboard, ops,
+// e2e) discriminate on these typed strings, never on prose. Frozen here beside
+// the other enums; the audit record shape (AuditEntry) lives in the coordinator
+// package, its sole writer (one authority per fact).
+type AuditCategory string
+
+const (
+	AuditPresence AuditCategory = "presence" // agent join/leave/away/recover/evict (predates #29)
+	AuditClaim    AuditCategory = "claim"    // CAS file-claim attempt or coordinator reclaim
+	AuditTicket   AuditCategory = "ticket"   // ask-ticket FSM transition
+	AuditAsk      AuditCategory = "ask"      // an ask was opened (role/direct routed)
+	AuditAnswer   AuditCategory = "answer"   // an ask ticket was answered
+	AuditJob      AuditCategory = "job"      // autonomous job lifecycle transition
+	AuditTask     AuditCategory = "task"     // DAG-node task lifecycle transition
+	AuditTriage   AuditCategory = "triage"   // a planner triage attempt resolved
+	AuditWorker   AuditCategory = "worker"   // a worker run on a task resolved
+	AuditFleet    AuditCategory = "fleet"    // scheduler fleet pause/resume
+)
+
+var auditCategories = map[AuditCategory]bool{
+	AuditPresence: true,
+	AuditClaim:    true,
+	AuditTicket:   true,
+	AuditAsk:      true,
+	AuditAnswer:   true,
+	AuditJob:      true,
+	AuditTask:     true,
+	AuditTriage:   true,
+	AuditWorker:   true,
+	AuditFleet:    true,
+}
+
+// ValidAuditCategory reports whether c is a recognized audit category.
+func ValidAuditCategory(c AuditCategory) bool { return auditCategories[c] }

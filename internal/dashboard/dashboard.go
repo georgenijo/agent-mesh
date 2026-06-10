@@ -12,6 +12,14 @@
 // /api/roster, /api/claims, /api/notes) remain unauthenticated. One
 // authority per fact: the POST delegates to job.Store — the same machinery
 // `mesh submit` uses — and never maintains parallel job state.
+//
+// Security (issue #61): all dashboard routes are wrapped with
+// hostCheckMiddleware, which validates the Host header against the loopback
+// allow-list (localhost, 127.0.0.1, [::1], with optional port). Any other
+// Host value — including a missing one that Go fills from a non-loopback
+// forwarded address — is rejected with 403. This closes the DNS-rebinding
+// vector: a malicious page on evil.example that re-points to 127.0.0.1 sends
+// Host: evil.example, which the middleware rejects before any handler fires.
 package dashboard
 
 import (
@@ -47,6 +55,65 @@ var indexHTML []byte
 // useful on a busy mesh, small enough that replaying it to a new browser on
 // connect is cheap.
 const maxClaimLog = 200
+
+// maxJobSnapshot and maxTaskSnapshot bound the in-memory P3 state rings.
+// The dashboard is a pure observer: it reflects what the KV emits, bounded
+// so replaying to a new browser on connect is cheap.
+const (
+	maxJobSnapshot  = 500
+	maxTaskSnapshot = 1000
+)
+
+// jobSnap is one job row as carried in the "jobs" SSE frame.
+type jobSnap struct {
+	ID     string            `json:"id"`
+	Repo   string            `json:"repo"`
+	Source string            `json:"source"`
+	Title  string            `json:"title"`
+	State  envelope.JobState `json:"state"`
+	TS     time.Time         `json:"ts"`
+}
+
+// taskSnap is one task row as carried in the "tasks" SSE frame.
+type taskSnap struct {
+	ID    string             `json:"id"`
+	Job   string             `json:"job"`
+	Role  string             `json:"role"`
+	Title string             `json:"title"`
+	State envelope.TaskState `json:"state"`
+	TS    time.Time          `json:"ts"`
+}
+
+// workerSnap is one worker-run entry as carried in the "workers" SSE frame.
+type workerSnap struct {
+	Task    string                   `json:"task"`
+	Job     string                   `json:"job"`
+	Result  envelope.WorkerResult    `json:"result"`
+	Code    envelope.WorkerErrorCode `json:"code,omitempty"`
+	CostUSD float64                  `json:"costUSD,omitempty"`
+	Reason  string                   `json:"reason,omitempty"`
+	TS      time.Time                `json:"ts"`
+}
+
+// triageSnap is one triage-attempt entry as carried in the "triage" SSE frame.
+type triageSnap struct {
+	Job    string                   `json:"job"`
+	Result envelope.TriageResult    `json:"result"`
+	Tasks  int                      `json:"tasks,omitempty"`
+	Code   envelope.TriageErrorCode `json:"code,omitempty"`
+	Reason string                   `json:"reason,omitempty"`
+	TS     time.Time                `json:"ts"`
+}
+
+// fleetSnap carries the last observed fleet state, as carried in the "fleet" SSE frame.
+type fleetSnap struct {
+	State     envelope.FleetState     `json:"state"`
+	Code      envelope.FleetPauseCode `json:"code,omitempty"`
+	Reason    string                  `json:"reason,omitempty"`
+	SpentUSD  float64                 `json:"spentUSD,omitempty"`
+	BudgetUSD float64                 `json:"budgetUSD,omitempty"`
+	TS        time.Time               `json:"ts"`
+}
 
 // claimLogEntry is one observed claim lifecycle event for the history panel.
 // Result is the wire ClaimResult (claimed|lost|error) for takes, or the
@@ -96,6 +163,17 @@ type Dashboard struct {
 	// broadcasts only new blackboard entries (replay and live are one path).
 	noteSeq map[string]uint64
 
+	// P3 in-memory state: populated from the SSE tap (KindJob/KindTask/
+	// KindWorker/KindFleet/KindTriage). These are derived observability —
+	// the jobs/tasks KV records are the authorities. Replayed to each new
+	// browser on SSE connect so the panels survive a page refresh.
+	// All four are held under mu.
+	jobs    map[string]jobSnap  // job id -> latest job snapshot
+	tasks   map[string]taskSnap // task id -> latest task snapshot
+	workers []workerSnap        // bounded ring, newest last
+	triages []triageSnap        // bounded ring, newest last
+	fleet   *fleetSnap          // nil until the first KindFleet is observed
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -115,6 +193,8 @@ func New(cfg config.Config, addr string, log *slog.Logger) *Dashboard {
 		rosterEvery: 1 * time.Second,
 		clients:     make(map[chan []byte]struct{}),
 		noteSeq:     make(map[string]uint64),
+		jobs:        make(map[string]jobSnap),
+		tasks:       make(map[string]taskSnap),
 		stop:        make(chan struct{}),
 	}
 }
@@ -160,6 +240,7 @@ func (d *Dashboard) Start() error {
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
+
 	if err != nil {
 		cli.Close()
 		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
@@ -176,7 +257,7 @@ func (d *Dashboard) Start() error {
 		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: %w", err)
 	}
-	d.httpSrv = &http.Server{Handler: mux}
+	d.httpSrv = &http.Server{Handler: hostCheckMiddleware(mux)}
 
 	d.wg.Add(2)
 	go func() {
@@ -218,18 +299,212 @@ func (d *Dashboard) Stop() {
 	os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 }
 
-// onEvent forwards one tapped envelope to all SSE clients, and records claim
-// takes into the history ring (derived observability — the claims KV stays
-// the authority for current holders).
+// onEvent forwards one tapped envelope to all SSE clients, records claim
+// takes into the history ring, and updates the P3 in-memory snapshots.
 func (d *Dashboard) onEvent(env envelope.Envelope) {
-	if env.Kind == envelope.KindClaim {
+	switch env.Kind {
+	case envelope.KindClaim:
 		d.recordClaim(env)
+	case envelope.KindJob:
+		d.recordJob(env)
+	case envelope.KindTask:
+		d.recordTask(env)
+	case envelope.KindWorker:
+		d.recordWorker(env)
+	case envelope.KindTriage:
+		d.recordTriage(env)
+	case envelope.KindFleet:
+		d.recordFleet(env)
 	}
 	msg, err := json.Marshal(map[string]any{"type": "event", "envelope": env})
 	if err != nil {
 		return
 	}
 	d.broadcast(msg)
+}
+
+// recordJob upserts a job snapshot from a KindJob envelope and broadcasts a
+// "jobs" frame so all connected browsers see the update immediately.
+func (d *Dashboard) recordJob(env envelope.Envelope) {
+	var p envelope.JobPayload
+	if err := envelope.DecodeInto(env, &p); err != nil {
+		return
+	}
+	snap := jobSnap{
+		ID:     p.ID,
+		Repo:   p.Repo,
+		Source: p.Source,
+		Title:  p.Title,
+		State:  p.State,
+		TS:     env.TS,
+	}
+	d.mu.Lock()
+	d.jobs[p.ID] = snap
+	// Evict oldest when over the cap (iterate once; map order is random but
+	// bounded by maxJobSnapshot so the loop body runs at most once per call).
+	for len(d.jobs) > maxJobSnapshot {
+		var oldest string
+		var oldestTS time.Time
+		for id, j := range d.jobs {
+			if oldest == "" || j.TS.Before(oldestTS) {
+				oldest = id
+				oldestTS = j.TS
+			}
+		}
+		delete(d.jobs, oldest)
+	}
+	snapshot := d.jobsSnapshot()
+	d.mu.Unlock()
+	d.broadcastJobs(snapshot)
+}
+
+// recordTask upserts a task snapshot from a KindTask envelope.
+func (d *Dashboard) recordTask(env envelope.Envelope) {
+	var p envelope.TaskPayload
+	if err := envelope.DecodeInto(env, &p); err != nil {
+		return
+	}
+	snap := taskSnap{
+		ID:    p.ID,
+		Job:   p.Job,
+		Role:  p.Role,
+		Title: p.Title,
+		State: p.State,
+		TS:    env.TS,
+	}
+	d.mu.Lock()
+	d.tasks[p.ID] = snap
+	for len(d.tasks) > maxTaskSnapshot {
+		var oldest string
+		var oldestTS time.Time
+		for id, t := range d.tasks {
+			if oldest == "" || t.TS.Before(oldestTS) {
+				oldest = id
+				oldestTS = t.TS
+			}
+		}
+		delete(d.tasks, oldest)
+	}
+	snapshot := d.tasksSnapshot()
+	d.mu.Unlock()
+	d.broadcastTasks(snapshot)
+}
+
+// recordWorker appends a worker-run snapshot to the bounded ring.
+func (d *Dashboard) recordWorker(env envelope.Envelope) {
+	var p envelope.WorkerPayload
+	if err := envelope.DecodeInto(env, &p); err != nil {
+		return
+	}
+	snap := workerSnap{
+		Task:    p.Task,
+		Job:     p.Job,
+		Result:  p.Result,
+		Code:    p.Code,
+		CostUSD: p.CostUSD,
+		Reason:  p.Reason,
+		TS:      env.TS,
+	}
+	d.mu.Lock()
+	d.workers = append(d.workers, snap)
+	if len(d.workers) > maxClaimLog { // reuse the same cap
+		d.workers = d.workers[len(d.workers)-maxClaimLog:]
+	}
+	snapshot := append([]workerSnap(nil), d.workers...)
+	d.mu.Unlock()
+	if msg, err := json.Marshal(map[string]any{"type": "workers", "workers": snapshot}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// recordTriage appends a triage-attempt snapshot to the bounded ring.
+func (d *Dashboard) recordTriage(env envelope.Envelope) {
+	var p envelope.TriagePayload
+	if err := envelope.DecodeInto(env, &p); err != nil {
+		return
+	}
+	snap := triageSnap{
+		Job:    p.Job,
+		Result: p.Result,
+		Tasks:  p.Tasks,
+		Code:   p.Code,
+		Reason: p.Reason,
+		TS:     env.TS,
+	}
+	d.mu.Lock()
+	d.triages = append(d.triages, snap)
+	if len(d.triages) > maxClaimLog {
+		d.triages = d.triages[len(d.triages)-maxClaimLog:]
+	}
+	snapshot := append([]triageSnap(nil), d.triages...)
+	d.mu.Unlock()
+	if msg, err := json.Marshal(map[string]any{"type": "triage", "triages": snapshot}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// recordFleet stores the latest fleet-state snapshot and broadcasts it.
+func (d *Dashboard) recordFleet(env envelope.Envelope) {
+	var p envelope.FleetPayload
+	if err := envelope.DecodeInto(env, &p); err != nil {
+		return
+	}
+	snap := fleetSnap{
+		State:     p.State,
+		Code:      p.Code,
+		Reason:    p.Reason,
+		SpentUSD:  p.SpentUSD,
+		BudgetUSD: p.BudgetUSD,
+		TS:        env.TS,
+	}
+	d.mu.Lock()
+	d.fleet = &snap
+	d.mu.Unlock()
+	if msg, err := json.Marshal(map[string]any{"type": "fleet", "fleet": snap}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// jobsSnapshot returns a sorted slice of current job snapshots. Must be called
+// with mu held.
+func (d *Dashboard) jobsSnapshot() []jobSnap {
+	out := make([]jobSnap, 0, len(d.jobs))
+	for _, j := range d.jobs {
+		out = append(out, j)
+	}
+	sort.Slice(out, func(i, k int) bool { return out[i].TS.Before(out[k].TS) })
+	return out
+}
+
+// tasksSnapshot returns a sorted slice of current task snapshots. Must be
+// called with mu held.
+func (d *Dashboard) tasksSnapshot() []taskSnap {
+	out := make([]taskSnap, 0, len(d.tasks))
+	for _, t := range d.tasks {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, k int) bool { return out[i].TS.Before(out[k].TS) })
+	return out
+}
+
+// broadcastJobs broadcasts a "jobs" snapshot frame to all SSE clients.
+func (d *Dashboard) broadcastJobs(jobs []jobSnap) {
+	if jobs == nil {
+		jobs = []jobSnap{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "jobs", "jobs": jobs}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// broadcastTasks broadcasts a "tasks" snapshot frame to all SSE clients.
+func (d *Dashboard) broadcastTasks(tasks []taskSnap) {
+	if tasks == nil {
+		tasks = []taskSnap{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "tasks", "tasks": tasks}); err == nil {
+		d.broadcast(msg)
+	}
 }
 
 // recordClaim appends a claim take (claimed|lost|error) to the history ring,
@@ -621,6 +896,55 @@ func writeJSONError(w http.ResponseWriter, body string, code int) {
 	w.Write([]byte(body)) //nolint:errcheck
 }
 
+// isLoopbackHost reports whether host (the hostname part of the HTTP Host
+// header, with any port already stripped) is one of the canonical loopback
+// names accepted by the dashboard.
+//
+// Accepted: "localhost", "127.0.0.1", "::1", "[::1]".
+// The bracketed form "[::1]" is how net.SplitHostPort leaves the host when
+// the original Host header was "[::1]:port", and is included for robustness
+// even though Go's own http.Server normalises IPv6 addresses.
+func isLoopbackHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	return false
+}
+
+// hostCheckMiddleware is an HTTP middleware that validates the Host header
+// against the loopback allow-list before passing the request to next.
+//
+// DNS-rebinding attack: a malicious page on evil.example that re-points its
+// domain to 127.0.0.1 becomes same-origin in the browser's view, but the
+// browser still sends Host: evil.example. Checking the Host header here
+// rejects such requests before any handler fires, at the cost of one string
+// comparison per request (negligible on a local server).
+//
+// If the Host header is absent or its hostname cannot be parsed the request
+// is also rejected — an absent Host is allowed by HTTP/1.0 but not by
+// HTTP/1.1, and the dashboard is only ever accessed on loopback where a
+// well-behaved client always supplies it.
+func hostCheckMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if host == "" {
+			writeJSONError(w, `{"error":"forbidden","message":"missing Host header"}`, http.StatusForbidden)
+			return
+		}
+		// Strip the port if present. net.SplitHostPort returns an error for
+		// bare hostnames (no colon) which we treat as the full hostname.
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !isLoopbackHost(host) {
+			writeJSONError(w, `{"error":"forbidden","message":"Host not allowed"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // generateToken creates a 32-byte random hex bearer token.
 func generateToken() (string, error) {
 	b := make([]byte, 32)
@@ -649,6 +973,11 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 	d.clients[ch] = struct{}{}
 	roster := d.roster
 	claimLog := append([]claimLogEntry(nil), d.claimLog...)
+	jobsSnap := d.jobsSnapshot()
+	tasksSnap := d.tasksSnapshot()
+	workersSnap := append([]workerSnap(nil), d.workers...)
+	triagesSnap := append([]triageSnap(nil), d.triages...)
+	fleetSnap := d.fleet
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
@@ -673,6 +1002,43 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 	if msg, err := json.Marshal(map[string]any{"type": "claimlog", "entries": claimLog}); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
 		flusher.Flush()
+	}
+
+	// Send initial P3 snapshots. Each is always sent (even empty) so the
+	// browser renders its honest empty state without waiting for live traffic.
+	if jobsSnap == nil {
+		jobsSnap = []jobSnap{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "jobs", "jobs": jobsSnap}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
+	}
+	if tasksSnap == nil {
+		tasksSnap = []taskSnap{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "tasks", "tasks": tasksSnap}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
+	}
+	if workersSnap == nil {
+		workersSnap = []workerSnap{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "workers", "workers": workersSnap}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
+	}
+	if triagesSnap == nil {
+		triagesSnap = []triageSnap{}
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "triage", "triages": triagesSnap}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
+	}
+	if fleetSnap != nil {
+		if msg, err := json.Marshal(map[string]any{"type": "fleet", "fleet": *fleetSnap}); err == nil {
+			fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+			flusher.Flush()
+		}
 	}
 
 	for {

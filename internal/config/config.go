@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -27,6 +28,28 @@ const (
 	EnvPlannerCLI        = "MESH_PLANNER_CLI"    // CLI the coordinator's triage planner drives; empty = triage disabled
 	EnvPlannerModel      = "MESH_PLANNER_MODEL"  // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
 	EnvTriageTimeout     = "MESH_TRIAGE_TIMEOUT" // wall-clock bound on one planner invocation
+	EnvWorkerCLI         = "MESH_WORKER_CLI"     // CLI the coordinator's scheduler drives per task; empty = scheduler disabled
+	EnvWorkerModel       = "MESH_WORKER_MODEL"   // --model passed to the worker CLI (default "sonnet"; empty = CLI default)
+	EnvWorkerTimeout     = "MESH_WORKER_TIMEOUT" // wall-clock bound on one worker invocation
+	EnvBudgetUSD         = "MESH_BUDGET_USD"     // fleet budget cap in USD; 0/unset = unlimited
+	EnvMaxWorkers        = "MESH_MAX_WORKERS"    // max concurrent workers (default 4)
+	EnvReposDir          = "MESH_REPOS_DIR"      // dir mapping job repo names to git checkouts; required by the #26 worker driver
+	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES" // worker worktree retention: on-failure (default) | always | never
+	EnvAuditFanout       = "MESH_AUDIT_FANOUT"   // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
+)
+
+// Worker worktree retention policies (#26). The policy is deterministic:
+// teardown consults only the run's typed success and this knob.
+const (
+	// KeepWorktreesOnFailure (the default) removes a worker's worktree after a
+	// typed success — the work product survives as commits on the task branch —
+	// and preserves it after anything else, for inspection.
+	KeepWorktreesOnFailure = "on-failure"
+	// KeepWorktreesAlways never removes worker worktrees.
+	KeepWorktreesAlways = "always"
+	// KeepWorktreesNever removes the worktree regardless of outcome. The task
+	// branch (and any commits on it) is still never deleted.
+	KeepWorktreesNever = "never"
 )
 
 // Defaults.
@@ -43,6 +66,19 @@ const (
 	// DefaultTriageTimeout bounds one planner invocation. A planning turn is
 	// one LLM call (5–60s observed); minutes means a wedged child.
 	DefaultTriageTimeout = 2 * time.Minute
+
+	// DefaultWorkerModel pins the worker's model (locked fleet decision:
+	// always pin --model; an un-pinned `claude -p` defaults to the most
+	// expensive tier).
+	DefaultWorkerModel = "sonnet"
+
+	// DefaultWorkerTimeout bounds one worker invocation. A worker turn does
+	// real implementation work (multi-minute), unlike a planning call.
+	DefaultWorkerTimeout = 10 * time.Minute
+
+	// DefaultMaxWorkers caps concurrent workers (fleet spike: safe parallelism
+	// is host-bound at 4–8).
+	DefaultMaxWorkers = 4
 
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
@@ -72,6 +108,35 @@ type Config struct {
 	PlannerCLI    string
 	PlannerModel  string        // --model for the planner CLI; empty = CLI default
 	TriageTimeout time.Duration // wall-clock bound on one planner invocation
+
+	// WorkerCLI is the agent CLI the coordinator's scheduler (#25) drives to
+	// execute one task. Deliberately NO default, exactly like PlannerCLI: an
+	// autostarted coordinator must never spawn worker LLM processes unless the
+	// operator opted in. Empty disables the scheduler entirely.
+	WorkerCLI     string
+	WorkerModel   string        // --model for the worker CLI; empty = CLI default
+	WorkerTimeout time.Duration // wall-clock bound on one worker invocation
+	BudgetUSD     float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
+	MaxWorkers    int           // max concurrent workers
+
+	// ReposDir maps a job's repo NAME to a git checkout at <ReposDir>/<name>.
+	// Deliberately NO default: the #26 worker driver refuses to start without
+	// it (a worker must never guess which directory tree it may rewrite).
+	// Only consulted when WorkerCLI is set.
+	ReposDir string
+	// KeepWorktrees is the worker worktree retention policy
+	// (KeepWorktreesOnFailure | KeepWorktreesAlways | KeepWorktreesNever).
+	KeepWorktrees string
+
+	// AuditFanout enables the #29 unified audit log: the coordinator taps
+	// mesh.> and fans the major lifecycle events of every domain (ask/answer/
+	// ticket/job/task/triage/worker/fleet, on top of the always-on presence/
+	// claim audits) into envelope.StreamAudit, so one ordered read reconstructs
+	// how any ticket/job/claim reached its state. On by default; MESH_AUDIT_FANOUT=off
+	// disables only the bus-observed fan-out (presence/claim audits, which
+	// existing reducer/sweep paths depend on, are always emitted) — for local
+	// tuning and test determinism (issue #29: "knobs for ... test determinism").
+	AuditFanout bool
 }
 
 // Load resolves config from the environment with defaults.
@@ -86,6 +151,11 @@ func Load() (Config, error) {
 		ExpertCLI:         DefaultExpertCLI,
 		PlannerModel:      DefaultPlannerModel,
 		TriageTimeout:     DefaultTriageTimeout,
+		WorkerModel:       DefaultWorkerModel,
+		WorkerTimeout:     DefaultWorkerTimeout,
+		MaxWorkers:        DefaultMaxWorkers,
+		KeepWorktrees:     KeepWorktreesOnFailure,
+		AuditFanout:       true,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -108,6 +178,7 @@ func Load() (Config, error) {
 		{EnvRegistrationGrace, &cfg.RegistrationGrace},
 		{EnvClaimTTL, &cfg.ClaimTTL},
 		{EnvTriageTimeout, &cfg.TriageTimeout},
+		{EnvWorkerTimeout, &cfg.WorkerTimeout},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -135,6 +206,44 @@ func Load() (Config, error) {
 	cfg.PlannerCLI = os.Getenv(EnvPlannerCLI) // empty = triage disabled
 	if model, ok := os.LookupEnv(EnvPlannerModel); ok {
 		cfg.PlannerModel = model // explicit empty = use the CLI's default model
+	}
+	cfg.WorkerCLI = os.Getenv(EnvWorkerCLI) // empty = scheduler disabled
+	if model, ok := os.LookupEnv(EnvWorkerModel); ok {
+		cfg.WorkerModel = model // explicit empty = use the CLI's default model
+	}
+	if raw := os.Getenv(EnvBudgetUSD); raw != "" {
+		budget, err := strconv.ParseFloat(raw, 64)
+		if err != nil || budget < 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a non-negative USD amount", EnvBudgetUSD, raw)
+		}
+		cfg.BudgetUSD = budget
+	}
+	if raw := os.Getenv(EnvMaxWorkers); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvMaxWorkers, raw)
+		}
+		cfg.MaxWorkers = n
+	}
+	if raw := os.Getenv(EnvAuditFanout); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.AuditFanout = true
+		case "off", "false", "0":
+			cfg.AuditFanout = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAuditFanout, raw)
+		}
+	}
+	cfg.ReposDir = os.Getenv(EnvReposDir) // empty = worker driver refuses to construct
+	if raw := os.Getenv(EnvKeepWorktrees); raw != "" {
+		switch raw {
+		case KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever:
+			cfg.KeepWorktrees = raw
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want %s|%s|%s", EnvKeepWorktrees, raw,
+				KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever)
+		}
 	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {
@@ -184,6 +293,17 @@ func (c Config) CoordinatorLock() string { return filepath.Join(c.MeshDir, "coor
 // StreamsDir holds the bus server's durable stream files (one JSONL per
 // stream). Owned by the coordinator-embedded bus server only.
 func (c Config) StreamsDir() string { return filepath.Join(c.MeshDir, "streams") }
+
+// BucketsDir holds the bus server's durable KV op logs (one bucket-<name>.jsonl
+// per persisted bucket: jobs, tasks — #65). Owned by the coordinator-embedded
+// bus server only. The lease buckets (registry, claims) are NOT persisted here:
+// they self-heal by re-registration / re-establishment.
+func (c Config) BucketsDir() string { return filepath.Join(c.MeshDir, "buckets") }
+
+// WorkersDir holds the per-task worker worktrees the #26 driver creates
+// (one isolated git worktree per dispatched task). Owned by the
+// coordinator-embedded worker driver only.
+func (c Config) WorkersDir() string { return filepath.Join(c.MeshDir, "workers") }
 
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }

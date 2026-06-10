@@ -76,6 +76,13 @@ func goldenCases() []goldenCase {
 		{KindTriage, "", SubjectTriage(goldenTicket),
 			&TriagePayload{Job: goldenTicket, Result: TriageError, Tasks: 0,
 				Code: TriageInvalidDAG, Reason: "cycle: t1 -> t2 -> t1"}, &TriagePayload{}},
+		{KindWorker, "", SubjectWorker("01976f00-0000-7000-8000-0000000000a1"),
+			&WorkerPayload{Task: "01976f00-0000-7000-8000-0000000000a1", Job: goldenTicket,
+				Result: WorkerError, Code: WorkerRateLimited, CostUSD: 0.0421,
+				Reason: "api_error_status 429"}, &WorkerPayload{}},
+		{KindFleet, "", SubjectFleet,
+			&FleetPayload{State: FleetPaused, Code: FleetBudgetExhausted,
+				Reason: "spent 5.25 of 5.00 USD", SpentUSD: 5.25, BudgetUSD: 5}, &FleetPayload{}},
 	}
 }
 
@@ -200,6 +207,8 @@ func TestContractStrings(t *testing.T) {
 		{"SubjectJob", SubjectJob("J1"), "mesh.job.J1"},
 		{"SubjectTask", SubjectTask("T1"), "mesh.task.T1"},
 		{"SubjectTriage", SubjectTriage("J1"), "mesh.triage.J1"},
+		{"SubjectWorker", SubjectWorker("T1"), "mesh.worker.T1"},
+		{"SubjectFleet", SubjectFleet, "mesh.fleet"},
 		// Patterns.
 		{"PatternAll", PatternAll, "mesh.>"},
 		{"PatternHeartbeats", PatternHeartbeats, "mesh.heartbeat.>"},
@@ -212,6 +221,7 @@ func TestContractStrings(t *testing.T) {
 		{"PatternJobs", PatternJobs, "mesh.job.>"},
 		{"PatternTasks", PatternTasks, "mesh.task.>"},
 		{"PatternTriage", PatternTriage, "mesh.triage.>"},
+		{"PatternWorkers", PatternWorkers, "mesh.worker.>"},
 		// Buckets and streams.
 		{"BucketRegistry", BucketRegistry, "registry"},
 		{"BucketClaims", BucketClaims, "claims"},
@@ -267,6 +277,19 @@ func TestContractStrings(t *testing.T) {
 		{"TriageBadPlan", string(TriageBadPlan), "bad_plan"},
 		{"TriageInvalidDAG", string(TriageInvalidDAG), "invalid_dag"},
 		{"TriageInternal", string(TriageInternal), "internal"},
+		// Worker results and error codes.
+		{"WorkerOK", string(WorkerOK), "ok"},
+		{"WorkerError", string(WorkerError), "error"},
+		{"WorkerSpawnFailed", string(WorkerSpawnFailed), "spawn_failed"},
+		{"WorkerFailed", string(WorkerFailed), "worker_failed"},
+		{"WorkerRateLimited", string(WorkerRateLimited), "rate_limited"},
+		{"WorkerBillingError", string(WorkerBillingError), "billing_error"},
+		{"WorkerInternal", string(WorkerInternal), "internal"},
+		// Fleet states and pause codes.
+		{"FleetRunning", string(FleetRunning), "running"},
+		{"FleetPaused", string(FleetPaused), "paused"},
+		{"FleetBudgetExhausted", string(FleetBudgetExhausted), "budget_exhausted"},
+		{"FleetBillingError", string(FleetBillingError), "billing_error"},
 		// Kinds.
 		{"KindRegister", string(KindRegister), "register"},
 		{"KindLeave", string(KindLeave), "leave"},
@@ -281,6 +304,8 @@ func TestContractStrings(t *testing.T) {
 		{"KindJob", string(KindJob), "job"},
 		{"KindTask", string(KindTask), "task"},
 		{"KindTriage", string(KindTriage), "triage"},
+		{"KindWorker", string(KindWorker), "worker"},
+		{"KindFleet", string(KindFleet), "fleet"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

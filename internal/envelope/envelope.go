@@ -54,6 +54,16 @@ const (
 	// triage attempt, carrying the typed ok|error result so the dashboard and
 	// audit taps see why a job became triaged or failed without polling KV.
 	KindTriage Kind = "triage"
+	// KindWorker is the worker-outcome observability event (#25): one per
+	// worker run on a task, carrying the typed ok|error result, the failure
+	// class, and the run's reported cost. The tasks KV record stays the
+	// authority for task state; this event explains how a run ended.
+	KindWorker Kind = "worker"
+	// KindFleet is the scheduler fleet-state event (#25): published when the
+	// scheduler pauses the worker fleet (budget cap, billing error). Jobs and
+	// tasks stay queued in their KV records — this event is the observable
+	// signal that nothing new will spawn until the fleet is reset.
+	KindFleet Kind = "fleet"
 )
 
 var knownKinds = map[Kind]bool{
@@ -70,6 +80,8 @@ var knownKinds = map[Kind]bool{
 	KindJob:       true,
 	KindTask:      true,
 	KindTriage:    true,
+	KindWorker:    true,
+	KindFleet:     true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

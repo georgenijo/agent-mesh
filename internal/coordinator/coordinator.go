@@ -22,6 +22,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/scheduler"
 	"github.com/georgenijo/agent-mesh/internal/triage"
 )
 
@@ -52,6 +53,10 @@ type Coordinator struct {
 	// (an autostarted coordinator must never spawn LLM processes unless the
 	// operator opted in).
 	triager *triage.Triager
+
+	// scheduler is the #25 dependency-gated worker scheduler — nil unless
+	// cfg.WorkerCLI is set, under the same opt-in rule as the triager.
+	scheduler *scheduler.Scheduler
 
 	// mu serializes every registry read-modify-write: events arrive on
 	// independent subscription goroutines, and the KV store has no
@@ -139,6 +144,33 @@ func (c *Coordinator) Start() error {
 		c.log.Info("triage enabled", "planner", c.cfg.PlannerCLI)
 	}
 
+	// Scheduler (#25): opt-in via MESH_WORKER_CLI, same rule as triage — a
+	// bare `mesh join` coordinator must never start spawning workers. The
+	// provisional CLIDriver is the injection point #26's real worker runtime
+	// replaces; the scheduler itself only knows the Driver seam.
+	if c.cfg.WorkerCLI != "" {
+		sch, err := scheduler.New(cli, scheduler.Options{
+			Driver: scheduler.CLIDriver{
+				CLI:     c.cfg.WorkerCLI,
+				Model:   c.cfg.WorkerModel,
+				Timeout: c.cfg.WorkerTimeout,
+				WorkDir: c.cfg.MeshDir, // clean cwd, like the planner; real isolation is #26
+			},
+			BudgetUSD:   c.cfg.BudgetUSD,
+			MaxParallel: c.cfg.MaxWorkers,
+			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
+			Log:         c.log,
+		})
+		if err != nil {
+			c.Stop()
+			return fmt.Errorf("coordinator: scheduler: %w", err)
+		}
+		c.scheduler = sch
+		c.scheduler.Start()
+		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
+			"budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
+	}
+
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
 		c.Stop()
 		return fmt.Errorf("coordinator: write pid file: %w", err)
@@ -158,6 +190,9 @@ func (c *Coordinator) Stop() {
 	c.wg.Wait()
 	if c.triager != nil {
 		c.triager.Stop()
+	}
+	if c.scheduler != nil {
+		c.scheduler.Stop()
 	}
 	if c.cli != nil {
 		c.cli.Close()

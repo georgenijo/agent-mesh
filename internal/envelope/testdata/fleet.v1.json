@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "kind": "fleet",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.fleet",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "state": "paused",
+    "code": "budget_exhausted",
+    "reason": "spent 5.25 of 5.00 USD",
+    "spentUSD": 5.25,
+    "budgetUSD": 5
+  }
+}

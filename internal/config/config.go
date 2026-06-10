@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -27,6 +28,11 @@ const (
 	EnvPlannerCLI        = "MESH_PLANNER_CLI"    // CLI the coordinator's triage planner drives; empty = triage disabled
 	EnvPlannerModel      = "MESH_PLANNER_MODEL"  // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
 	EnvTriageTimeout     = "MESH_TRIAGE_TIMEOUT" // wall-clock bound on one planner invocation
+	EnvWorkerCLI         = "MESH_WORKER_CLI"     // CLI the coordinator's scheduler drives per task; empty = scheduler disabled
+	EnvWorkerModel       = "MESH_WORKER_MODEL"   // --model passed to the worker CLI (default "sonnet"; empty = CLI default)
+	EnvWorkerTimeout     = "MESH_WORKER_TIMEOUT" // wall-clock bound on one worker invocation
+	EnvBudgetUSD         = "MESH_BUDGET_USD"     // fleet budget cap in USD; 0/unset = unlimited
+	EnvMaxWorkers        = "MESH_MAX_WORKERS"    // max concurrent workers (default 4)
 )
 
 // Defaults.
@@ -43,6 +49,19 @@ const (
 	// DefaultTriageTimeout bounds one planner invocation. A planning turn is
 	// one LLM call (5–60s observed); minutes means a wedged child.
 	DefaultTriageTimeout = 2 * time.Minute
+
+	// DefaultWorkerModel pins the worker's model (locked fleet decision:
+	// always pin --model; an un-pinned `claude -p` defaults to the most
+	// expensive tier).
+	DefaultWorkerModel = "sonnet"
+
+	// DefaultWorkerTimeout bounds one worker invocation. A worker turn does
+	// real implementation work (multi-minute), unlike a planning call.
+	DefaultWorkerTimeout = 10 * time.Minute
+
+	// DefaultMaxWorkers caps concurrent workers (fleet spike: safe parallelism
+	// is host-bound at 4–8).
+	DefaultMaxWorkers = 4
 
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
@@ -72,6 +91,16 @@ type Config struct {
 	PlannerCLI    string
 	PlannerModel  string        // --model for the planner CLI; empty = CLI default
 	TriageTimeout time.Duration // wall-clock bound on one planner invocation
+
+	// WorkerCLI is the agent CLI the coordinator's scheduler (#25) drives to
+	// execute one task. Deliberately NO default, exactly like PlannerCLI: an
+	// autostarted coordinator must never spawn worker LLM processes unless the
+	// operator opted in. Empty disables the scheduler entirely.
+	WorkerCLI     string
+	WorkerModel   string        // --model for the worker CLI; empty = CLI default
+	WorkerTimeout time.Duration // wall-clock bound on one worker invocation
+	BudgetUSD     float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
+	MaxWorkers    int           // max concurrent workers
 }
 
 // Load resolves config from the environment with defaults.
@@ -86,6 +115,9 @@ func Load() (Config, error) {
 		ExpertCLI:         DefaultExpertCLI,
 		PlannerModel:      DefaultPlannerModel,
 		TriageTimeout:     DefaultTriageTimeout,
+		WorkerModel:       DefaultWorkerModel,
+		WorkerTimeout:     DefaultWorkerTimeout,
+		MaxWorkers:        DefaultMaxWorkers,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -108,6 +140,7 @@ func Load() (Config, error) {
 		{EnvRegistrationGrace, &cfg.RegistrationGrace},
 		{EnvClaimTTL, &cfg.ClaimTTL},
 		{EnvTriageTimeout, &cfg.TriageTimeout},
+		{EnvWorkerTimeout, &cfg.WorkerTimeout},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -135,6 +168,24 @@ func Load() (Config, error) {
 	cfg.PlannerCLI = os.Getenv(EnvPlannerCLI) // empty = triage disabled
 	if model, ok := os.LookupEnv(EnvPlannerModel); ok {
 		cfg.PlannerModel = model // explicit empty = use the CLI's default model
+	}
+	cfg.WorkerCLI = os.Getenv(EnvWorkerCLI) // empty = scheduler disabled
+	if model, ok := os.LookupEnv(EnvWorkerModel); ok {
+		cfg.WorkerModel = model // explicit empty = use the CLI's default model
+	}
+	if raw := os.Getenv(EnvBudgetUSD); raw != "" {
+		budget, err := strconv.ParseFloat(raw, 64)
+		if err != nil || budget < 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a non-negative USD amount", EnvBudgetUSD, raw)
+		}
+		cfg.BudgetUSD = budget
+	}
+	if raw := os.Getenv(EnvMaxWorkers); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvMaxWorkers, raw)
+		}
+		cfg.MaxWorkers = n
 	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {

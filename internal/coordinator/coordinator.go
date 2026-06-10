@@ -88,6 +88,10 @@ type Coordinator struct {
 	// cfg.WorkerCLI is set, under the same opt-in rule as the triager.
 	scheduler *scheduler.Scheduler
 
+	// reviewer is the #80 review-gating transport (scheduler→expert bus round
+	// trip) — nil unless BOTH cfg.WorkerCLI and cfg.ReviewRole are set.
+	reviewer *scheduler.BusReviewer
+
 	// mu serializes every registry read-modify-write: events arrive on
 	// independent subscription goroutines, and the KV store has no
 	// transactions across get+put.
@@ -194,13 +198,33 @@ func (c *Coordinator) Start() error {
 			c.Stop()
 			return fmt.Errorf("coordinator: worker driver: %w", err)
 		}
-		sch, err := scheduler.New(cli, scheduler.Options{
+		sopts := scheduler.Options{
 			Driver:      drv,
 			BudgetUSD:   c.cfg.BudgetUSD,
 			MaxParallel: c.cfg.MaxWorkers,
 			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
 			Log:         c.log,
-		})
+		}
+		// Review gating (#80): opt-in via MESH_REVIEW_ROLE, same posture as
+		// the planner/worker knobs — unset means a worker success transitions
+		// the task to done with no review, exactly as before. Set, every
+		// successful worker diff is routed to the expert serving that role and
+		// the task's terminal state is gated on the typed verdict.
+		if c.cfg.ReviewRole != "" {
+			rev, err := scheduler.NewBusReviewer(cli, scheduler.ReviewerOptions{
+				Role:     c.cfg.ReviewRole,
+				ReposDir: c.cfg.ReposDir,
+				Timeout:  c.cfg.ReviewTimeout,
+				Log:      c.log,
+			})
+			if err != nil {
+				c.Stop()
+				return fmt.Errorf("coordinator: reviewer: %w", err)
+			}
+			c.reviewer = rev
+			sopts.Reviewer = rev
+		}
+		sch, err := scheduler.New(cli, sopts)
 		if err != nil {
 			c.Stop()
 			return fmt.Errorf("coordinator: scheduler: %w", err)
@@ -209,6 +233,11 @@ func (c *Coordinator) Start() error {
 		c.scheduler.Start()
 		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
 			"reposDir", c.cfg.ReposDir, "budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
+		if c.reviewer != nil {
+			c.log.Info("review gating enabled", "role", c.cfg.ReviewRole, "timeout", c.cfg.ReviewTimeout)
+		}
+	} else if c.cfg.ReviewRole != "" {
+		c.log.Warn("MESH_REVIEW_ROLE set but MESH_WORKER_CLI unset; review gating inactive")
 	}
 
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
@@ -233,6 +262,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.scheduler != nil {
 		c.scheduler.Stop()
+	}
+	if c.reviewer != nil {
+		c.reviewer.Close()
 	}
 	if c.cli != nil {
 		c.cli.Close()

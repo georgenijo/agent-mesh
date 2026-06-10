@@ -79,7 +79,21 @@ func (c *Coordinator) Start() error {
 	// StreamDir makes the bus's durable subjects (the blackboard, the audit
 	// trail) survive a coordinator restart — the registry deliberately does
 	// not: it repopulates from sidecar re-registration.
-	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{StreamDir: c.cfg.StreamsDir()})
+	//
+	// PersistBuckets makes the jobs (#23) and tasks (#24) KV records durable
+	// too (#65). Unlike registry/claims — TTL leases a live owner re-asserts —
+	// a job/task has no live owner to re-establish it, so without this a
+	// coordinator restart would lose every open job and the persisted task
+	// DAG. The bus loads these buckets in Start() *before* binding the socket,
+	// so they are whole before the triage loop / #25 scheduler (started below,
+	// only after the bus is up) can sweep them. Registry/claims stay in-memory
+	// by omission — explicit non-goal (DECISIONS.md: lease + re-establishment).
+	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{
+		StreamDir:      c.cfg.StreamsDir(),
+		PersistDir:     c.cfg.BucketsDir(),
+		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks},
+		Logger:         c.log,
+	})
 	if err := c.srv.Start(); err != nil {
 		return fmt.Errorf("coordinator: start bus: %w", err)
 	}

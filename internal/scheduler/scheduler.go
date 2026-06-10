@@ -364,6 +364,15 @@ func (s *Scheduler) handleOutcome(o outcome) {
 
 	switch {
 	case res.Succeeded():
+		// Record the output branch before marking done, so a dependent task
+		// dispatched on the next sweep can base its worktree on it (#26
+		// dependency inheritance). Best-effort: a missing branch only costs a
+		// dependent the inherited diff, never correctness of the state machine.
+		if res.Branch != "" {
+			if err := s.tasks.SetBranch(o.task.ID, res.Branch); err != nil {
+				s.log.Warn("scheduler: record task output branch failed", "task", o.task.ID, "err", err)
+			}
+		}
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone, "worker succeeded")
 	case res.Code == envelope.WorkerRateLimited:
 		// Back off, never fail: the task stays persisted running and is

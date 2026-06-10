@@ -496,6 +496,105 @@ printf '%%s' "$last" > %q`, promptFile),
 	}
 }
 
+func TestDependentWorktreeInheritsDepCommit(t *testing.T) {
+	// A dep worker commits dep-file.txt onto its branch; a task that dependsOn
+	// it must start from a worktree that ALREADY contains that file — a DAG
+	// edge carries code forward, not just execution order (#26).
+	f := newFixture(t, workerScript(t, `echo dep-content > dep-file.txt`, successResult))
+	d := f.driver(t)
+	ctx := context.Background()
+	tasks := task.NewStore(f.cli)
+
+	dep := f.task("builder")
+	dep.CreatedAt = time.Now().UTC()
+	if err := tasks.CreateAll([]task.Record{dep}); err != nil {
+		t.Fatal(err)
+	}
+	dw, err := d.Spawn(ctx, dep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	depRes, err := dw.Run(ctx)
+	if err != nil || !depRes.Succeeded() {
+		t.Fatalf("dep run: %v %+v", err, depRes)
+	}
+	if depRes.Branch == "" {
+		t.Fatal("a successful worker did not report its output branch")
+	}
+	// The scheduler records this on success in production; do it explicitly.
+	if err := tasks.SetBranch(dep.ID, depRes.Branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := dw.Teardown(); err != nil {
+		t.Fatal(err)
+	}
+
+	child := f.task("reviewer")
+	child.DependsOn = []string{dep.ID}
+	cw, err := d.Spawn(ctx, child)
+	if err != nil {
+		t.Fatalf("spawn dependent: %v", err)
+	}
+	defer cw.Teardown() //nolint:errcheck
+	// Inherited purely from the spawn-time merge — before the child's own run.
+	got, err := os.ReadFile(filepath.Join(cw.(*worker).dir, "dep-file.txt"))
+	if err != nil {
+		t.Fatalf("dependent worktree did not inherit the dep's commit: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "dep-content" {
+		t.Fatalf("inherited file content = %q, want %q", strings.TrimSpace(string(got)), "dep-content")
+	}
+	// The child's recorded base is the inherited dep commit, so its own diff
+	// (baseSHA..head) excludes the inherited file rather than re-reporting it.
+	if cw.(*worker).baseSHA == f.gitInRepo(t, "rev-parse", "HEAD") {
+		t.Fatal("child base is the repo base, not the merged dependency state")
+	}
+}
+
+func TestDependencyMergeConflictFailsSpawn(t *testing.T) {
+	// Two sibling deps add the same file with different content (add/add). A
+	// task depending on both cannot auto-merge — Spawn must fail typed, never
+	// hand the worker a half-merged tree.
+	f := newFixture(t, workerScript(t, `echo "$PWD" > conflict.txt`, successResult))
+	d := f.driver(t)
+	ctx := context.Background()
+	tasks := task.NewStore(f.cli)
+
+	depIDs := make([]string, 2)
+	for i := range depIDs {
+		dep := f.task("builder")
+		dep.CreatedAt = time.Now().UTC()
+		if err := tasks.CreateAll([]task.Record{dep}); err != nil {
+			t.Fatal(err)
+		}
+		w, err := d.Spawn(ctx, dep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := w.Run(ctx)
+		if err != nil || !res.Succeeded() {
+			t.Fatalf("dep %d run: %v %+v", i, err, res)
+		}
+		if err := tasks.SetBranch(dep.ID, res.Branch); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Teardown(); err != nil {
+			t.Fatal(err)
+		}
+		depIDs[i] = dep.ID
+	}
+
+	child := f.task("reviewer")
+	child.DependsOn = depIDs
+	if _, err := d.Spawn(ctx, child); err == nil {
+		t.Fatal("Spawn accepted a task whose dependencies conflict")
+	}
+	// The aborted spawn must not leak a worktree.
+	if got := f.gitInRepo(t, "worktree", "list"); strings.Contains(got, child.ID) {
+		t.Fatalf("conflicting spawn leaked a worktree:\n%s", got)
+	}
+}
+
 func TestWorkerNameIsShortAndValid(t *testing.T) {
 	id := envelope.NewID()
 	name := workerName(id)

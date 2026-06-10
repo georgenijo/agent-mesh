@@ -50,6 +50,12 @@ type Record struct {
 	Acceptance  []string           `json:"acceptance,omitempty"`
 	State       envelope.TaskState `json:"state"`
 	CreatedAt   time.Time          `json:"createdAt"`
+	// Branch is the worker output branch (mesh/worker/<id>[-N]) that holds this
+	// task's committed work, recorded by the scheduler on success. A dependent
+	// task's worker bases its worktree on the merge of its deps' Branches, so
+	// the DAG carries code forward, not just execution order (#26). Empty until
+	// a worker succeeds (and stays empty for a task that committed nothing).
+	Branch string `json:"branch,omitempty"`
 }
 
 // Event records one task transition, appended to the task-events stream.
@@ -117,6 +123,36 @@ func (s Store) Get(id string) (Record, bool, error) {
 		return Record{}, false, err
 	}
 	return rec, true, nil
+}
+
+// SetBranch records the worker output branch holding this task's committed
+// work, so a dependent task's worker can base its worktree on it (#26
+// dependency inheritance). It leaves State untouched (not a lifecycle move)
+// and is idempotent. CAS on the read revision; the scheduler is the only
+// post-creation writer of task records, so this never contends in practice.
+func (s Store) SetBranch(id, branch string) error {
+	kv, found, err := s.cli.KVGet(envelope.BucketTasks, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNoSuchTask, id)
+	}
+	var rec Record
+	if err := json.Unmarshal(kv.Value, &rec); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrBadRecord, id, err)
+	}
+	if rec.Branch == branch {
+		return nil
+	}
+	rec.Branch = branch
+	if _, err := s.cli.KVPut(envelope.BucketTasks, id, rec, bus.PutOptions{CAS: bus.Rev(kv.Rev)}); err != nil {
+		if errors.Is(err, bus.ErrCASLost) {
+			return ErrCASLost
+		}
+		return err
+	}
+	return nil
 }
 
 // ListByJob returns every task of one job in stable plan order (creation

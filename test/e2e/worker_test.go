@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,63 @@ func TestWorkerWorktreeIsolationAndMeshAccessAcrossProcesses(t *testing.T) {
 	}
 	if status := gitInWorkerRepo(t, repo, "status", "--porcelain"); status != "" {
 		t.Fatalf("shared checkout dirty after worker runs:\n%s", status)
+	}
+}
+
+func TestDependentWorkerInheritsPredecessorDiffAcrossProcesses(t *testing.T) {
+	// The DAG carries code, not just order (#26): the default plan is a chain —
+	// impl (builder) then review (reviewer, dependsOn impl). Each worker child
+	// commits a worker-edit marker. With dependency inheritance the dependent's
+	// worktree merges impl's committed marker before it runs, so it holds TWO
+	// markers; the root holds one. Without inheritance both would hold one.
+	m := newMesh(t)
+	reposDir := makeWorkerRepoFixture(t, m)
+	m.env = append(m.env,
+		"MESH_PLANNER_CLI="+buildFakePlanner(t, m), // default mode: impl -> review chain
+		"MESH_WORKER_CLI="+buildFakeWorker(t, m),
+		"FAKEWORKER_MODE=mesh", // each worker commits worker-edit-<pid>.txt = its cwd
+		"FAKEWORKER_MESH_BIN="+meshBin,
+		"MESH_REPOS_DIR="+reposDir,
+		"MESH_KEEP_WORKTREES=always", // keep both trees for inspection
+	)
+	m.startCoordinator()
+	base := m.startDashboard()
+
+	if code, _, stderr := m.run("join", "--name", "intake", "--role", "intake-bot", "--repo", "demo"); code != 0 {
+		t.Fatalf("join exit %d: %s", code, stderr)
+	}
+	jobEnvelopes := tapJobEnvelopes(t, base+"/events")
+	jobID := submitSchedulerJob(t, m)
+
+	// A done job means BOTH chained workers succeeded — and review can only
+	// succeed if its spawn-time merge of impl's branch was clean.
+	m.eventually(25*time.Second, "KindJob done after the impl->review chain", func() bool {
+		for _, p := range jobEnvelopes() {
+			if p.ID == jobID && p.State == "done" {
+				return true
+			}
+		}
+		return false
+	})
+
+	workersDir := filepath.Join(m.dir, "workers")
+	entries, err := os.ReadDir(workersDir)
+	if err != nil {
+		t.Fatalf("read workers dir: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %d worker worktrees, want 2: %v", len(entries), entries)
+	}
+	counts := make([]int, 0, 2)
+	for _, e := range entries {
+		markers, _ := filepath.Glob(filepath.Join(workersDir, e.Name(), "worker-edit-*.txt"))
+		counts = append(counts, len(markers))
+	}
+	sort.Ints(counts)
+	// [1 2]: the root committed one marker; the dependent inherited it and added
+	// its own. [1 1] would mean the dependent branched off bare base — the bug.
+	if counts[0] != 1 || counts[1] != 2 {
+		t.Fatalf("worker-edit marker counts across worktrees = %v, want [1 2] (dependent inherits predecessor's diff)", counts)
 	}
 }
 

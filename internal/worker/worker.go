@@ -99,6 +99,7 @@ type Driver struct {
 	cfg     config.Config
 	log     *slog.Logger
 	jobs    job.Store
+	tasks   task.Store
 	join    JoinFunc
 	adapter cliexec.Adapter // nil → ClaudeAdapter{Binary: cfg.WorkerCLI}
 
@@ -137,7 +138,7 @@ func NewDriverWithAdapter(cli *bus.Client, cfg config.Config, join JoinFunc, log
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Driver{cfg: cfg, log: log, jobs: job.NewStore(cli), join: join, adapter: adapter}, nil
+	return &Driver{cfg: cfg, log: log, jobs: job.NewStore(cli), tasks: task.NewStore(cli), join: join, adapter: adapter}, nil
 }
 
 // effectiveAdapter returns the configured adapter, defaulting to
@@ -166,6 +167,16 @@ func (d *Driver) Spawn(ctx context.Context, rec task.Record) (scheduler.Worker, 
 	}
 	dir, branch, err := d.addWorktree(ctx, repoPath, rec.ID)
 	if err != nil {
+		return nil, err
+	}
+	// Carry dependency work forward: merge each done dependency's output branch
+	// into this worktree before the worker starts, so a `dependsOn` edge means
+	// "see and build on the predecessor's committed diff", not just "run after"
+	// (#26). Captured into baseSHA below, so the task's own reported diff
+	// excludes the inherited changes. A conflict between sibling deps is a typed
+	// spawn failure — honest, not a silent half-merge.
+	if err := d.mergeDeps(ctx, dir, rec); err != nil {
+		d.removeWorktree(repoPath, dir)
 		return nil, err
 	}
 	baseSHA, err := gitOut(ctx, dir, "rev-parse", "HEAD")
@@ -240,6 +251,38 @@ func (d *Driver) addWorktree(ctx context.Context, repoPath, taskID string) (stri
 		return dir, branch, nil
 	}
 	return "", "", fmt.Errorf("worker: no free worktree slot for task %s after %d probes", taskID, maxWorktreeProbes)
+}
+
+// mergeDeps merges the output branch of each done dependency into the fresh
+// worktree, giving the worker its predecessors' committed diffs to build on.
+// It runs after addWorktree (the worktree's HEAD is the repo base) and before
+// the worker starts. Deps with no recorded Branch (committed nothing, or a
+// pre-feature record) contribute nothing and are skipped. A merge conflict —
+// two sibling deps that edited the same lines — aborts and surfaces as a typed
+// spawn failure rather than a silent partial tree; the CAS file-claim is the
+// advisory signal meant to keep siblings off the same files in the first place.
+func (d *Driver) mergeDeps(ctx context.Context, dir string, rec task.Record) error {
+	for _, depID := range rec.DependsOn {
+		dep, found, err := d.tasks.Get(depID)
+		if err != nil {
+			return fmt.Errorf("worker: read dependency %s: %w", depID, err)
+		}
+		if !found || dep.Branch == "" {
+			continue // nothing committed by this dep to inherit
+		}
+		if _, err := gitOut(ctx, dir,
+			"-c", "user.name=mesh-worker", "-c", "user.email=mesh-worker@localhost",
+			"merge", "--no-edit", "--no-gpg-sign",
+			"-m", fmt.Sprintf("mesh worker: merge dependency %s (%s)", dep.Node, depID),
+			dep.Branch); err != nil {
+			// Leave no half-merged tree behind for the worker to trip over.
+			if _, abortErr := gitOut(ctx, dir, "merge", "--abort"); abortErr != nil {
+				d.log.Warn("worker: merge --abort failed after conflict", "task", rec.ID, "dep", depID, "err", abortErr)
+			}
+			return fmt.Errorf("worker: merge dependency %s (branch %s) into task %s: %w", depID, dep.Branch, rec.ID, err)
+		}
+	}
+	return nil
 }
 
 // removeWorktree unregisters and deletes one worktree (never its branch).
@@ -347,6 +390,7 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 			return res, nil
 		}
 		w.succeeded = true
+		res.Branch = w.branch // recorded on the task so dependents inherit this work
 		res.Summary = ev.Result.Result + "\n\n" + meta
 	case ev.Result.HasAPIError():
 		res.Code = envelope.WorkerRateLimited

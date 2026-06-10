@@ -20,7 +20,7 @@ export MESH_STUB_LOG="$TMP/mesh-args.log"
 
 cat >"$STUB/mesh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"${MESH_STUB_LOG:-/dev/null}"
+printf '%s | socket=%s\n' "$*" "${MESH_SOCKET:-}" >>"${MESH_STUB_LOG:-/dev/null}"
 case "${MESH_STUB_MODE:-claimed}" in
 claimed)
     echo '{"result":"claimed","path":"/tmp/demo/main.go","repo":"default","owner":"agent-me","since":"2026-06-05T12:00:00Z"}'
@@ -133,6 +133,47 @@ printf '%s' "$EDIT_JSON" | env -u MESH_SOCKET PATH="$STUB:$PATH" MESH_STUB_MODE=
     "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
 assert_eq "no MESH_SOCKET -> exit 0" 0 "$rc"
 assert_eq "no MESH_SOCKET -> mesh not invoked" "" "$(cat "$MESH_STUB_LOG")"
+
+# --- session-derived identity ----------------------------------------------------
+# No MESH_SOCKET, but the PreToolUse JSON carries a session_id and the
+# session's sidecar socket exists at the derived path → the hook claims via
+# that socket. session_id "abcd1234-..." derives agent "cc-abcd1234".
+MESH_DIR_T="$TMP/meshdir"
+mkdir -p "$MESH_DIR_T/agents"
+perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 1) or die $!' \
+    "$MESH_DIR_T/agents/cc-abcd1234.sock"
+SID_JSON='{"session_id":"abcd1234-ef56-7890-abcd-ef1234567890","tool_name":"Edit","tool_input":{"file_path":"/tmp/demo/main.go","old_string":"a","new_string":"b"},"cwd":"/tmp/demo"}'
+
+: >"$MESH_STUB_LOG"
+rc=0
+printf '%s' "$SID_JSON" | env -u MESH_SOCKET PATH="$STUB:$PATH" MESH_STUB_MODE=claimed MESH_DIR="$MESH_DIR_T" \
+    "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
+assert_eq "derived socket -> exit 0" 0 "$rc"
+assert_contains "derived socket -> mesh claim invoked" "claim /tmp/demo/main.go" "$MESH_STUB_LOG"
+assert_contains "derived socket -> claims via session socket" "socket=$MESH_DIR_T/agents/cc-abcd1234.sock" "$MESH_STUB_LOG"
+
+# Lost race through the derived identity still blocks with the owner.
+rc=0
+printf '%s' "$SID_JSON" | env -u MESH_SOCKET PATH="$STUB:$PATH" MESH_STUB_MODE=lost MESH_DIR="$MESH_DIR_T" \
+    "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
+assert_eq "derived socket lost -> exit 2" 2 "$rc"
+assert_contains "derived socket lost -> names owner" "agent-bob" "$TMP/err"
+
+# session_id present but no socket on disk → this session never joined → no-op.
+: >"$MESH_STUB_LOG"
+rc=0
+printf '%s' "$SID_JSON" | env -u MESH_SOCKET PATH="$STUB:$PATH" MESH_STUB_MODE=lost MESH_DIR="$TMP/empty-meshdir" \
+    "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
+assert_eq "derived socket absent -> exit 0" 0 "$rc"
+assert_eq "derived socket absent -> mesh not invoked" "" "$(cat "$MESH_STUB_LOG")"
+
+# Explicit MESH_SOCKET wins over derivation (claims via the explicit socket).
+: >"$MESH_STUB_LOG"
+rc=0
+printf '%s' "$SID_JSON" | env PATH="$STUB:$PATH" MESH_STUB_MODE=claimed MESH_DIR="$MESH_DIR_T" MESH_SOCKET="$TMP/explicit.sock" \
+    "$BASH_BIN" "$HOOK" >"$TMP/out" 2>"$TMP/err" || rc=$?
+assert_eq "explicit socket wins -> exit 0" 0 "$rc"
+assert_contains "explicit socket wins -> claims via explicit socket" "socket=$TMP/explicit.sock" "$MESH_STUB_LOG"
 
 # --- garbage stdin → fail-open --------------------------------------------------
 rc=0

@@ -200,6 +200,67 @@ func TestClaudeAdapterInvokeEnvForwarded(t *testing.T) {
 	}
 }
 
+// TestClaudeAdapterOnStartOnExitHooks verifies that InvokeOptions.OnStart and
+// OnExit are called with a real OS PID when ClaudeAdapter runs a child process.
+// This is the ops-plane regression guard: worker.Run wires OnStart →
+// TrackChild and OnExit → MarkChildExited through this seam.
+func TestClaudeAdapterOnStartOnExitHooks(t *testing.T) {
+	bin := fakeClaudeScript(t, "success")
+	a := cliexec.ClaudeAdapter{Binary: bin}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var startPID, exitPID int
+	out, err := a.Invoke(ctx, "do the work", cliexec.InvokeOptions{
+		OnStart: func(pid int) { startPID = pid },
+		OnExit:  func(pid int) { exitPID = pid },
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("expected non-empty output")
+	}
+	if startPID <= 0 {
+		t.Fatalf("OnStart not called or received invalid PID: %d", startPID)
+	}
+	if exitPID != startPID {
+		t.Fatalf("OnExit PID %d != OnStart PID %d", exitPID, startPID)
+	}
+}
+
+// TestClaudeAdapterOnStartOnExitNilSafe verifies that nil hooks are
+// safe — no panic when OnStart or OnExit are omitted.
+func TestClaudeAdapterOnStartOnExitNilSafe(t *testing.T) {
+	bin := fakeClaudeScript(t, "success")
+	a := cliexec.ClaudeAdapter{Binary: bin}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// All three combinations: both nil, only OnStart, only OnExit.
+	for _, tc := range []struct {
+		name    string
+		onStart func(int)
+		onExit  func(int)
+	}{
+		{"both nil", nil, nil},
+		{"only OnStart", func(int) {}, nil},
+		{"only OnExit", nil, func(int) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := a.Invoke(ctx, "work", cliexec.InvokeOptions{
+				OnStart: tc.onStart,
+				OnExit:  tc.onExit,
+			})
+			if err != nil {
+				t.Fatalf("unexpected panic or error: %v", err)
+			}
+		})
+	}
+}
+
 // TestStubAdaptersReturnNotImplemented confirms that all three stub adapters
 // return ErrNotImplemented when Invoke is called.
 func TestStubAdaptersReturnNotImplemented(t *testing.T) {

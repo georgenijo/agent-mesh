@@ -42,6 +42,7 @@
 package cliexec
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -105,6 +106,19 @@ type InvokeOptions struct {
 	// stdout pipe is forcibly closed. 0 defaults to 3 seconds (the same
 	// hardening applied in the triage planner and CLIDriver).
 	WaitDelay time.Duration
+
+	// OnStart is called once the child process has started, with its OS PID.
+	// Nil is a no-op. Adapters that actually start a child process (e.g.
+	// ClaudeAdapter) MUST call this immediately after cmd.Start() succeeds so
+	// callers can surface the PID to the ops plane (TrackChild). Stub adapters
+	// that never start a process simply never invoke it.
+	OnStart func(pid int)
+
+	// OnExit is called after the child process has exited (after cmd.Wait()
+	// returns), with the same PID that was passed to OnStart. Nil is a no-op.
+	// Callers use this to mark the child as exited on the ops plane
+	// (MarkChildExited).
+	OnExit func(pid int)
 }
 
 // Adapter is the per-CLI interface every supported agent CLI must satisfy to
@@ -198,17 +212,33 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 	}
 	cmd.WaitDelay = wd
 
-	out, err := cmd.Output()
-	if err != nil {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("claude: failed to start: %w", err)
+	}
+	pid := cmd.Process.Pid
+	if opts.OnStart != nil {
+		opts.OnStart(pid)
+	}
+
+	waitErr := cmd.Wait()
+	if opts.OnExit != nil {
+		opts.OnExit(pid)
+	}
+
+	if waitErr != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("claude: timed out or cancelled: %w", ctx.Err())
 		}
-		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("claude: exited: %w: %s", err, truncate(string(ee.Stderr), 2048))
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("claude: exited: %w: %s", waitErr, truncate(stderr.String(), 2048))
 		}
-		return nil, fmt.Errorf("claude: failed to run: %w", err)
+		return nil, fmt.Errorf("claude: failed to run: %w", waitErr)
 	}
-	return out, nil
+	return stdout.Bytes(), nil
 }
 
 // CodexAdapter is a STUB for OpenAI Codex CLI support.

@@ -316,6 +316,8 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 		Model:   w.d.cfg.WorkerModel,
 		WorkDir: w.dir,
 		Env:     env,
+		OnStart: func(pid int) { w.sc.TrackChild(w.d.cfg.WorkerCLI, pid) },
+		OnExit:  func(pid int) { w.sc.MarkChildExited(pid) },
 	})
 	if err != nil {
 		return scheduler.Result{}, fmt.Errorf("worker: %w", err)

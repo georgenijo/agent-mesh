@@ -25,13 +25,26 @@ import (
 // true or the deadline expires. Each predicate is called on every incoming
 // frame; once it returns true it is removed. Returns nil on success, the
 // first unsatisfied predicate name on timeout.
+//
+// Race-safety: the `want` predicates are accessed only by the scanner goroutine
+// (which calls them and sends matched names). The `remaining` map is accessed
+// only by the caller goroutine (which deletes matched names). The two goroutines
+// communicate exclusively through the `done` and `fail` channels.
 func collectP3Frames(t *testing.T, es *http.Response, deadline time.Duration, want map[string]func(msg map[string]json.RawMessage) bool) error {
 	t.Helper()
-	remaining := make(map[string]func(msg map[string]json.RawMessage) bool, len(want))
+	// preds is the scanner goroutine's exclusive copy of outstanding predicates.
+	// It is only ever accessed from inside the goroutine below.
+	preds := make(map[string]func(msg map[string]json.RawMessage) bool, len(want))
 	for k, v := range want {
-		remaining[k] = v
+		preds[k] = v
 	}
-	done := make(chan string, 1) // satisfied predicate name
+	// remaining tracks which names still need satisfying; owned by the caller.
+	remaining := make(map[string]struct{}, len(want))
+	for k := range want {
+		remaining[k] = struct{}{}
+	}
+
+	done := make(chan string, len(want)) // satisfied predicate names; buffered to avoid scanner blocking
 	fail := make(chan error, 1)
 
 	go func() {
@@ -46,8 +59,10 @@ func collectP3Frames(t *testing.T, es *http.Response, deadline time.Duration, wa
 			if err := json.Unmarshal([]byte(data), &raw); err != nil {
 				continue
 			}
-			for name, pred := range remaining {
+			// Iterate preds — exclusively owned by this goroutine.
+			for name, pred := range preds {
 				if pred(raw) {
+					delete(preds, name) // stop firing once satisfied
 					done <- name
 				}
 			}
@@ -69,7 +84,7 @@ func collectP3Frames(t *testing.T, es *http.Response, deadline time.Duration, wa
 		case err := <-fail:
 			return fmt.Errorf("scanner error: %w", err)
 		case name := <-done:
-			delete(remaining, name)
+			delete(remaining, name) // caller-goroutine exclusive write
 		}
 	}
 	return nil

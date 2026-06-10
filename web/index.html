@@ -49,6 +49,16 @@
       <span class="tm-label">Events</span>
       <span class="tm-val tm-violet" id="eventMetric">0</span>
     </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Jobs</span>
+      <span class="tm-val tm-green" id="jobMetric">0</span>
+    </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Tasks</span>
+      <span class="tm-val tm-cyan" id="taskMetric">0</span>
+    </div>
   </div>
 
   <div class="topbar-right">
@@ -61,7 +71,7 @@
   </div>
 </header>
 
-<!-- ══════ THREE-COLUMN WORKSPACE ══════ -->
+<!-- ══════ FOUR-COLUMN WORKSPACE ══════ -->
 <div class="workspace">
 
   <!-- LEFT: Topology + Agent Roster -->
@@ -165,6 +175,55 @@
       </div>
       <div class="panel-body">
         <div id="noteList" class="list"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- FAR RIGHT: P3 lifecycle panels (Fleet · Jobs · Tasks · Workers) -->
+  <div class="col col-p3">
+
+    <!-- Fleet status: authoritative from KindFleet envelopes -->
+    <div class="panel panel-fleet">
+      <div class="panel-hdr">
+        <span class="panel-title">FLEET</span>
+        <span id="fleetPill" class="pill">no data</span>
+      </div>
+      <div class="panel-body">
+        <div id="fleetStatus" class="list"></div>
+      </div>
+    </div>
+
+    <!-- Jobs panel: authoritative from KindJob envelopes -->
+    <div class="panel panel-jobs">
+      <div class="panel-hdr">
+        <span class="panel-title">JOBS</span>
+        <span id="jobsPill" class="pill">0</span>
+      </div>
+      <div class="panel-body">
+        <div id="jobList" class="list"></div>
+      </div>
+    </div>
+
+    <!-- Tasks panel: authoritative from KindTask envelopes -->
+    <div class="panel panel-tasks">
+      <div class="panel-hdr">
+        <span class="panel-title">TASKS</span>
+        <span id="tasksPill" class="pill">0</span>
+      </div>
+      <div class="panel-body">
+        <div id="taskList" class="list"></div>
+      </div>
+    </div>
+
+    <!-- Workers panel: authoritative from KindWorker envelopes -->
+    <div class="panel panel-workers">
+      <div class="panel-hdr">
+        <span class="panel-title">WORKER RUNS</span>
+        <span id="workersPill" class="pill">0</span>
+      </div>
+      <div class="panel-body">
+        <div id="workerList" class="list"></div>
       </div>
     </div>
 

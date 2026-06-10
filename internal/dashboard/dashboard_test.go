@@ -207,8 +207,15 @@ func TestSSEPresenceLifecycleContract(t *testing.T) {
 				scanErr <- fmt.Errorf("frame payload is not JSON: %v", err)
 				return
 			}
-			if f.Type != "event" && f.Type != "roster" && f.Type != "claims" && f.Type != "claimlog" {
-				scanErr <- fmt.Errorf("frame type %q, want \"event\", \"roster\", \"claims\" or \"claimlog\"", f.Type)
+			// Accept the full set of frame types: P0/P1/P2 types plus the P3
+			// lifecycle types added by issue #58. Any future type must be added
+			// here too — the explicit allow-list is the SSE contract.
+			switch f.Type {
+			case "event", "roster", "claims", "claimlog",
+				"jobs", "tasks", "workers", "triage", "fleet":
+				// known and accepted
+			default:
+				scanErr <- fmt.Errorf("frame type %q is not in the SSE frame allow-list", f.Type)
 				return
 			}
 			wantBlank = true

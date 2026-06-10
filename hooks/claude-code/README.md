@@ -1,85 +1,99 @@
 # Claude Code mesh hooks
 
-Two hooks for the first homogeneous Claude Code integration:
+Four hooks that close the coordination loop for Claude Code — a session
+joins the mesh, claims files it edits, answers asks between turns, and
+leaves (freeing its claims) when it ends, **with zero manual mesh commands**:
 
-- `mesh-claim-guard.sh`: a `PreToolUse` hook that takes a mesh CAS claim on
-  the target file before mutating tools.
-- `mesh-inbox-drain.sh`: a `Stop` hook that runs `mesh inbox --json` between
-  turns and prints pending accepted asks with the exact `mesh answer` command.
-
-The claim guard takes a mesh CAS claim on the target file before
-every mutating tool call (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`).
-If another agent already holds the path, the tool call is blocked (hook
-exit 2) and the model is told who owns it and since when — so agents
-coordinate instead of colliding on the same file.
+| Hook | Event | Does |
+| ---- | ----- | ---- |
+| `mesh-session-start.sh` | `SessionStart` | joins as a session-scoped agent (`cc-<sid8>`); announces startup; injects mesh identity + roster into the model's context |
+| `mesh-claim-guard.sh` | `PreToolUse` (Edit/Write/MultiEdit/NotebookEdit) | takes a CAS claim on the target file; blocks the edit (exit 2) naming the owner when another agent holds it |
+| `mesh-inbox-drain.sh` | `Stop` | when accepted asks are pending, feeds them to the model (`decision:block`) so it answers before finishing the turn |
+| `mesh-session-end.sh` | `SessionEnd` | `mesh leave` — the coordinator promptly releases every claim the session still holds |
 
 ## Install
 
-1. Put `mesh` on `PATH` and join the mesh in the session
-   (`mesh join --name me --role builder`).
-2. **Export `MESH_SOCKET` to this session's sidecar socket** in the same
-   shell, before launching the agent — e.g.
-   `export MESH_SOCKET="$MESH_DIR/agents/me.sock"` (default `MESH_DIR` is
-   `~/.mesh`). This is how the hook knows *which* agent it is. Without it the
-   hook is a silent no-op (see "Identity" below) — it will not guess.
-3. Merge `settings-snippet.json` into your project's `.claude/settings.json`
+1. Put `mesh` on `PATH` (e.g. `make build` then add `bin/` to PATH).
+2. Merge `settings-snippet.json` into your project's `.claude/settings.json`
    (or `~/.claude/settings.json`), replacing each `command` with the absolute
    path to the hook script in your clone.
-4. Verify locally with `./test-claim-guard.sh` (stubs `mesh`; needs only
-   bash + python3).
+3. Launch Claude Code. That's it — the session joins on startup and leaves on
+   exit. Verify locally with `./test-claim-guard.sh` and
+   `./test-session-lifecycle.sh` (both stub `mesh`; need only bash + python3).
 
-## Identity: `MESH_SOCKET` is required
+Optional environment knobs (set before launching the session):
 
-The hook claims as the agent behind `$MESH_SOCKET`. It is mandatory, not a
-convenience. If it were unset, `mesh` would fall back to "the one socket
-under `$MESH_DIR/agents`" and a Claude Code session that never joined would
-silently take claims under whatever agent happens to be the only one on the
-machine — a lock recorded for the wrong identity. So the hook no-ops when
-`MESH_SOCKET` is unset rather than guess. Each session that should
-participate exports its own socket.
+- `MESH_ROLE` — role joined under (default `builder`).
+- `MESH_REPO` — pins the repo id for the join and every claim.
+- `MESH_SOCKET` — explicit sidecar socket; overrides session-derived
+  identity in every hook (the pre-P3 manual flow keeps working).
 
-## Exit-code contract
+## Identity: session-scoped, derived per hook
 
-The hook runs `mesh claim "<path>" --json` and maps its exit code
+Claude Code runs each hook as a separate process, so an environment
+variable exported by one hook can never reach another. The one fact every
+hook shares is the `session_id` in its stdin JSON. So:
+
+- `SessionStart` joins as **`cc-` + the first 8 alphanumerics of the
+  session id**; the sidecar socket lands at the default path
+  `$MESH_DIR/agents/cc-<sid8>.sock` (default `MESH_DIR` is `~/.mesh`).
+- Every other hook re-derives that same socket path from its own stdin.
+  If the socket does not exist, this session never joined → the hook is a
+  perfect no-op.
+
+The "never guess" identity rule is preserved: the derived name is unique
+to the session, and no hook ever falls back to "whatever single socket is
+under `$MESH_DIR/agents`" — that could act as the wrong agent. An explicit
+`$MESH_SOCKET` always wins, so deliberately-named agents (`mesh join
+--name me …` + export) still work exactly as before.
+
+## Claim-guard exit-code contract
+
+The guard runs `mesh claim "<path>" --json` and maps its exit code
 (`internal/cli/cli.go`):
 
-| `mesh claim` exit | meaning                                | hook exit | effect in Claude Code |
-| ----------------- | -------------------------------------- | --------- | --------------------- |
-| 0                 | claimed — this agent holds the path    | 0         | edit proceeds |
-| 6                 | lost — another agent holds the path    | 2         | tool call blocked; stderr (`claimed by <owner> since <ts>`) is fed back to the model |
-| 5                 | not joined — no sidecar for this session | 0       | silent no-op |
-| anything else     | error / usage / bus down               | 0         | fail-open: the guard is advisory and must never brick editing |
+| `mesh claim` exit | meaning                                  | hook exit | effect in Claude Code |
+| ----------------- | ---------------------------------------- | --------- | --------------------- |
+| 0                 | claimed — this agent holds the path      | 0         | edit proceeds |
+| 6                 | lost — another agent holds the path      | 2         | tool call blocked; stderr (`claimed by <owner> since <ts>`) is fed back to the model |
+| 5                 | not joined — no sidecar for this session | 0         | silent no-op |
+| anything else     | error / usage / bus down                 | 0         | fail-open: the guard is advisory and must never brick editing |
 
-The hook also exits 0 without calling `mesh` for: `MESH_SOCKET` unset, tools
-that don't mutate files, unparseable hook JSON, and machines missing
-`python3` or `mesh`.
+The hook also exits 0 without calling `mesh` for: no resolvable identity
+(no `MESH_SOCKET` and no live session socket), tools that don't mutate
+files, unparseable hook JSON, and machines missing `python3` or `mesh`.
 
-## Repo override
+## Stop hook: how pending asks reach the model
 
-By default the sidecar derives the claim's repo from the agent card. Export
-`MESH_REPO=<repo-id>` in the session environment to pin it explicitly
-(forwarded as `mesh claim --repo "$MESH_REPO"`). `MESH_SOCKET` is required
-regardless (see "Identity" above).
+A Stop hook's plain stdout goes to the transcript, **not** to the model.
+To make the model actually answer pending asks, `mesh-inbox-drain.sh`
+emits the Stop-hook decision JSON:
 
-## P1 limitation: claims are taken, never auto-released by the hook
-
-The hook only acquires. Claims are freed by `mesh release <path>`,
-`mesh leave`, or coordinator reclaim when the holder's presence lease
-expires. Auto-release (e.g. on Stop) is deferred past P1.
-
-## Stop hook inbox drain
-
-`mesh-inbox-drain.sh` is read-only. It requires the same `MESH_SOCKET`
-identity guard as the claim hook, then runs `mesh inbox --json`. If pending
-asks exist, it prints a stable block like:
-
-```text
-mesh inbox: pending asks
-- <ticket> from <agent>: <question>
-  context: <context>
-Reply with: mesh answer <ticket> "<answer>"
+```json
+{"decision": "block", "reason": "mesh inbox: pending asks…\n- <ticket> from <agent>: <question>\nAnswer each with: mesh answer <ticket> \"<answer>\""}
 ```
 
-It exits 0 for not joined, empty inbox, missing `mesh`/`python3`, malformed
-JSON, or mesh transport errors. The hook never fabricates answers and never
-marks a ticket handled; the responder must explicitly run `mesh answer`.
+Claude Code feeds the `reason` to the model, which answers each ticket
+with `mesh answer` and then stops normally. Two guards prevent loops and
+noise: when `stop_hook_active` is true the hook only prints to the
+transcript (never blocks twice in a row), and an empty inbox produces no
+output at all. The hook never fabricates answers and never marks a ticket
+handled.
+
+## Lifecycle of a claim taken by the guard
+
+Claims are TTL leases renewed by the sidecar heartbeat, so a session holds
+the files it edited until it ends. They are freed by the first of:
+
+- `mesh-session-end.sh` → graceful `mesh leave` → coordinator releases all
+  of the agent's claims (the common case, prompt);
+- coordinator reclaim when the presence lease expires (crash / kill -9);
+- the claims-bucket TTL backstop (coordinator itself down);
+- an explicit `mesh release <path>` mid-session.
+
+## Fail-open, everywhere
+
+Every hook exits 0 — never blocking, never erroring — for: missing
+`python3` or `mesh`, unparseable stdin, a session that never joined, a
+down bus, or any mesh error. The mesh is a coordination aid; its absence
+must never break editing or session start/end.

@@ -31,6 +31,11 @@ import (
 // rehydration turn — it does not parse the primer, only detects and remembers it.
 const primerMarker = "Mesh expert memory"
 
+// reviewMarker is a stable substring of internal/runtime.BuildReviewPrompt, so
+// the fake recognizes a review turn without parsing the prompt — mirroring how
+// primerMarker recognizes a rehydration turn.
+const reviewMarker = "senior code reviewer"
+
 func main() {
 	session := os.Getenv("FAKECLAUDE_SESSION")
 	if session == "" {
@@ -102,10 +107,31 @@ func main() {
 			})
 			continue
 		}
+		// A review turn (#27): the expert's review capability sends a
+		// BuildReviewPrompt (recognized by the reviewer marker). Reply with a
+		// verdict object the test chose via FAKECLAUDE_VERDICT — modelling a
+		// reviewer judging a worker diff. The verdict comes back over the same
+		// held-open pipe, same session: proof a review reuses the resident child.
+		if strings.Contains(content, reviewMarker) {
+			verdict := os.Getenv("FAKECLAUDE_VERDICT")
+			if verdict == "" {
+				verdict = `{"verdict":"approve","notes":"looks fine"}`
+			}
+			emit(map[string]any{
+				"type": "result", "subtype": "success", "is_error": false,
+				"result":     "I reviewed the diff.\n" + verdict,
+				"session_id": session, "num_turns": turn, "duration_ms": 1,
+			})
+			continue
+		}
 		// A normal question: a warm expert answers from its rehydrated memory.
-		answer := "expert answer: " + content
+		// Every answer is tagged with the child's pid + session + turn so an
+		// e2e can prove two consecutive asks reused the SAME resident process
+		// (same pid/session) with a monotonic turn counter — no respawn.
+		answer := fmt.Sprintf("expert answer [pid=%d session=%s turn=%d]: %s",
+			os.Getpid(), session, turn, content)
 		if memory != "" {
-			answer = "expert answer (from memory): " + content + " :: " + memory
+			answer += " :: " + memory
 		}
 		emit(map[string]any{
 			"type": "result", "subtype": "success", "is_error": false,

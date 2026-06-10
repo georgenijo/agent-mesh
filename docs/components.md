@@ -91,7 +91,8 @@ See `concepts.md` for what each term means and `mockups/topology.html` for the p
 ## 6. Hooks (config/glue per agent CLI)
 
 - **[MVP]** **Claude Code first** — `PreToolUse`-on-Edit (claim check before edit) + `Stop` hook (drain inbox between turns).
-- **[v1+]** Per-CLI adapters: Codex, Cursor, Aider — **each its own integration**, parity not assumed (the #1 risk).
+- **[v1+]** **Codex CLI adapter** — `SessionStart` join/announce, `PreToolUse` on `apply_patch` targets, `Stop` inbox drain; prompt leave-on-exit via `codex-mesh.sh` launcher because Codex does not currently document `SessionEnd`.
+- **[v1+]** Remaining per-CLI adapters: Cursor, Aider — **each its own integration**, parity not assumed (the #1 risk).
 - **[v1+]** Struggle-detection nudge (test-fail loop / repeated edits → "ask the mesh?").
 - **[later]** Mid-turn answer injection (varies by CLI).
 

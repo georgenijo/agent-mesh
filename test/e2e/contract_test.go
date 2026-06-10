@@ -30,7 +30,8 @@ const goldenDir = "testdata/golden"
 
 // volatileKeys lists JSON object keys whose values are replaced with stable
 // placeholders during normalization. Any key anywhere in the tree matching
-// these names is replaced.
+// these names is replaced, EXCEPT "message" which is only replaced in error
+// objects (see replaceVolatile).
 var volatileKeys = map[string]string{
 	// UUIDs / IDs
 	"id":         "<id>",
@@ -41,7 +42,7 @@ var volatileKeys = map[string]string{
 	"pid":        "<pid>",
 	"sidecarPid": "<pid>",
 	"pidFilePid": "<pid>",
-	// Timestamps
+	// Timestamps — all keys that carry time.Time values in any verb output.
 	"registeredAt": "<ts>",
 	"lastSeen":     "<ts>",
 	"lastStatusAt": "<ts>",
@@ -50,6 +51,9 @@ var volatileKeys = map[string]string{
 	"expiresAt":    "<ts>",
 	"answeredAt":   "<ts>",
 	"at":           "<ts>",
+	"ts":           "<ts>",
+	"createdAt":    "<ts>",
+	"since":        "<ts>",
 	// Paths / host-specific
 	"meshDir":  "<meshDir>",
 	"socket":   "<socket>",
@@ -58,10 +62,12 @@ var volatileKeys = map[string]string{
 	"pidFile":  "<pidFile>",
 	"addrFile": "<addrFile>",
 	// Other volatile
-	"uptime":  "<uptime>",
-	"cmd":     "<cmd>",
-	"addr":    "<addr>",
-	"message": "<message>",
+	"uptime": "<uptime>",
+	"cmd":    "<cmd>",
+	"addr":   "<addr>",
+	// NOTE: "message" is intentionally omitted here; it is only normalized when
+	// it appears inside a typed error object (ok:false or alongside "code").
+	// See replaceVolatile for the scoped logic.
 }
 
 // normalizeJSON decodes raw JSON into map[string]any, recursively replaces
@@ -80,14 +86,32 @@ func normalizeJSON(raw string) (string, error) {
 	return string(b) + "\n", nil
 }
 
+// isErrorObject returns true when the map looks like a typed CLI error object,
+// i.e. it has "ok": false or contains both "code" and "message" keys.
+func isErrorObject(m map[string]any) bool {
+	if ok, exists := m["ok"]; exists {
+		if b, isBool := ok.(bool); isBool && !b {
+			return true
+		}
+	}
+	_, hasCode := m["code"]
+	_, hasMsg := m["message"]
+	return hasCode && hasMsg
+}
+
 func replaceVolatile(v any) any {
 	switch val := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(val))
+		errObj := isErrorObject(val)
 		for k, sub := range val {
 			if placeholder, ok := volatileKeys[k]; ok {
 				// Replace the value but keep the key so golden structure is visible.
 				out[k] = placeholder
+			} else if k == "message" && errObj {
+				// Scope "message" normalization to typed error objects only, so that
+				// non-error contract fields named "message" are not silently masked.
+				out[k] = "<message>"
 			} else {
 				out[k] = replaceVolatile(sub)
 			}
@@ -111,14 +135,24 @@ func sortByName(arr []any) {
 	sort.SliceStable(arr, func(i, j int) bool {
 		ni := nameOf(arr[i])
 		nj := nameOf(arr[j])
-		return ni < nj
+		if ni != nj {
+			return ni < nj
+		}
+		// Both lack a distinguishing name: fall back to marshaled JSON so the
+		// sort is still fully deterministic (avoids golden flakes on unnamed elements).
+		bi, _ := json.Marshal(arr[i])
+		bj, _ := json.Marshal(arr[j])
+		return string(bi) < string(bj)
 	})
 }
 
 func nameOf(v any) string {
 	m, ok := v.(map[string]any)
 	if !ok {
-		return ""
+		// Non-object elements: use marshaled JSON as the sort key so arrays of
+		// scalars are also ordered deterministically.
+		b, _ := json.Marshal(v)
+		return string(b)
 	}
 	// Try "name" directly (sidecar info).
 	if n, ok := m["name"].(string); ok {
@@ -273,13 +307,16 @@ func TestCLIContractErrorObjectShape(t *testing.T) {
 	code, stdout, stderr := m.run("ask", "--role", "no-such-role",
 		"working?", "--json", "--socket", m.agentSocket("err-agent"))
 
-	// The ask verb itself may succeed (ticket created) or fail depending on
-	// whether the coordinator requires a matching role. In either case:
-	// if code != 0, check that stdout has the JSON error object.
+	// ask with --role no-such-role must fail: the coordinator should reject the
+	// request with a typed error because no agent owns that role.
+	// We FAIL (not skip) if ask succeeds, so the golden cannot rot silently —
+	// a future change that makes ask succeed would need to update this test and
+	// the golden file explicitly.
 	if code == 0 {
-		// Ask succeeded (ticket created even without a responder); this is the
-		// expected P2 behavior. The error object shape is covered by the unit test.
-		t.Skip("ask succeeded (ticket enqueued); error object shape covered by TestErrorJSONShape in internal/cli")
+		t.Fatalf("ask with unknown role unexpectedly succeeded (exit 0); "+
+			"golden error_ask_no_role.json would silently stop being tested. "+
+			"If this behavior is now intentional, update this test and remove the golden. "+
+			"stdout=%q stderr=%q", stdout, stderr)
 	}
 	if !strings.Contains(stdout, `"ok"`) {
 		t.Fatalf("expected JSON error object on stdout, got stdout=%q stderr=%q", stdout, stderr)

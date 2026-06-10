@@ -207,6 +207,7 @@ body {
 .col-left   { width: 360px; flex-shrink: 0; }
 .col-center { flex: 1; min-width: 0; }
 .col-right  { width: 280px; flex-shrink: 0; }
+.col-p3     { width: 280px; flex-shrink: 0; }
 
 /* ══════════════════════════════════════════
    PANELS
@@ -226,6 +227,12 @@ body {
 .panel-events   { flex: 1; }
 .panel-claims   { flex: 1; }
 .panel-notes    { flex: 1; }
+
+/* P3 lifecycle panels */
+.panel-fleet    { height: 80px; flex-shrink: 0; }
+.panel-jobs     { flex: 2; }
+.panel-tasks    { flex: 2; }
+.panel-workers  { flex: 1; }
 
 .panel-hdr {
   display: flex;
@@ -694,6 +701,21 @@ body {
   border-color: rgba(255, 179, 31, 0.5);
   color: #ffb31f;
   background: rgba(255, 179, 31, 0.07);
+}
+.pill.green {
+  border-color: rgba(56, 255, 163, 0.5);
+  color: #38ffa3;
+  background: rgba(56, 255, 163, 0.07);
+}
+.pill.violet {
+  border-color: rgba(167, 139, 250, 0.5);
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.07);
+}
+.pill.blue {
+  border-color: rgba(125, 211, 252, 0.5);
+  color: #7dd3fc;
+  background: rgba(125, 211, 252, 0.07);
 }
 
 /* ══════════════════════════════════════════

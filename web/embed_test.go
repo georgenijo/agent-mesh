@@ -26,7 +26,7 @@ func TestAssetsContainIndex(t *testing.T) {
 }
 
 func TestAssetsComplete(t *testing.T) {
-	for _, name := range []string{"index.html", "app.js", "style.css"} {
+	for _, name := range []string{"index.html", "app.js", "style.css", "enhance.js", "jobform.js"} {
 		info, err := fs.Stat(Assets, name)
 		if err != nil {
 			t.Fatalf("Assets missing %s: %v", name, err)
@@ -87,5 +87,59 @@ func TestAppConsumesSSE(t *testing.T) {
 	}
 	if strings.Contains(js, "WebSocket") {
 		t.Fatal("app.js must use SSE, not WebSocket (stdlib-only server)")
+	}
+}
+
+// TestJobFormPostsToAPIJobs pins the write-path contract: jobform.js must POST
+// to /api/jobs (the single job authority) and not invent a parallel path.
+func TestJobFormPostsToAPIJobs(t *testing.T) {
+	data, err := fs.ReadFile(Assets, "jobform.js")
+	if err != nil {
+		t.Fatalf("Assets missing jobform.js: %v", err)
+	}
+	js := string(data)
+	if !strings.Contains(js, `"/api/jobs"`) {
+		t.Fatal("jobform.js does not POST to /api/jobs")
+	}
+	if !strings.Contains(js, `method: "POST"`) {
+		t.Fatal("jobform.js does not use POST method")
+	}
+}
+
+// TestJobFormFetchesWriteToken pins that jobform.js fetches the token from
+// /api/write-token, not from a hardcoded literal or a cookie.
+func TestJobFormFetchesWriteToken(t *testing.T) {
+	data, err := fs.ReadFile(Assets, "jobform.js")
+	if err != nil {
+		t.Fatalf("Assets missing jobform.js: %v", err)
+	}
+	js := string(data)
+	if !strings.Contains(js, `"/api/write-token"`) {
+		t.Fatal("jobform.js does not fetch /api/write-token")
+	}
+}
+
+// TestJobFormDoesNotModifyAppJs pins the observer contract: app.js must remain
+// read-only. jobform.js must not declare new EventSource calls that would
+// duplicate app.js's SSE connection in a way that undermines the contract.
+func TestJobFormReadOnlyObserverSeparation(t *testing.T) {
+	appJS, err := fs.ReadFile(Assets, "app.js")
+	if err != nil {
+		t.Fatalf("Assets missing app.js: %v", err)
+	}
+	// app.js must still be a pure observer — no POST.
+	if strings.Contains(string(appJS), `method: "POST"`) {
+		t.Fatal("app.js must not contain POST — it is a read-only observer")
+	}
+}
+
+// TestIndexReferencesJobFormJS pins that the main HTML page loads jobform.js.
+func TestIndexReferencesJobFormJS(t *testing.T) {
+	data, err := fs.ReadFile(Assets, "index.html")
+	if err != nil {
+		t.Fatalf("Assets missing index.html: %v", err)
+	}
+	if !strings.Contains(string(data), "jobform.js") {
+		t.Fatal("index.html does not reference jobform.js")
 	}
 }

@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-09: P4 dashboard write path — POST /api/jobs on the dashboard server, protected by a local bearer token
+
+**Decision:** The job-submit form (issue #47) is backed by a `POST /api/jobs` endpoint on the dashboard's own HTTP server, delegating to `job.Store.Create` (the one authority, same as `mesh submit`). A 32-byte random hex bearer token is generated on `Start`, written to `MESH_DIR/dashboard.token` (owner-only), and removed on `Stop`. The UI fetches it from `GET /api/write-token` (same loopback origin). Observer endpoints (`/`, `/events`, `/api/roster`, `/api/claims`, `/api/notes`, `GET /api/jobs`) remain unauthenticated.
+
+**Rationale:** The issue spec says the write path lives on the coordinator's control plane, but the coordinator has no HTTP server and adding one solely for this endpoint is heavier than mounting two routes on the existing dashboard server. The dashboard already holds a bus client used for reads; `job.Store` needs only that client, so no new connection is required. One authority per fact is preserved because the endpoint delegates entirely to `job.Store`, not a parallel path. The token keeps localhost-only semantics: it does not harden against a local attacker who can read files, but it prevents an accidental cross-origin fetch from a different tab from creating jobs.
+
+**Status:** active
+
+**References:** #47; internal/dashboard/dashboard.go, web/jobform.js, internal/config/config.go (DashboardTokenFile)
+
+---
+
 ## 2026-06-08: Autonomous work hierarchy = Job → Task → (ask)Ticket; new domain packages, ask-ticket stays frozen
 
 **Decision:** The autonomous product's work unit is a **Job** (top-level intake created by `mesh submit`, `internal/job`, `BucketJobs`, lifecycle `open→triaged→scheduled→running→done|failed|cancelled`, `KindJob`/`SubjectJob`/`StreamJobs`). Triage (#24) decomposes a Job into **Tasks** (DAG nodes, `internal/task`). The existing `internal/ticket` package stays the **P2 agent-to-agent async ask** — unchanged and frozen. Duplicate submissions are allowed, each creating a new job id (dedup is #29 policy).

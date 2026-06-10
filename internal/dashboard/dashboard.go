@@ -1,23 +1,33 @@
-// Package dashboard is the read-only observer: it taps mesh.> on the bus,
-// snapshots the registry, and bridges both to a browser.
+// Package dashboard is the live observer with a write path for job intake.
 //
-// P0 deviation from issue #10: the browser bridge is SSE (EventSource), not
-// WebSocket — same observer semantics, zero dependencies, native in every
-// browser. P4 (the production dashboard) can revisit.
+// P0/P1/P2 base: the dashboard taps mesh.> on the bus, snapshots the
+// registry, and bridges both to a browser via SSE. The dashboard bus client
+// is read-only for presence/claims/notes — it only subscribes and reads KV.
 //
-// The dashboard never publishes to the mesh: its bus client only subscribes
-// and reads KV. Disconnecting it affects nothing.
+// P4 addition (issue #47): a minimal coordinator write API on the dashboard
+// HTTP server. POST /api/jobs is the one write endpoint: it calls
+// job.Store.Create through the dashboard's own bus connection (same bus
+// client already used for reads), protected by a local bearer token written to
+// MESH_DIR/dashboard.token on start. Observer endpoints (GET /, /events,
+// /api/roster, /api/claims, /api/notes) remain unauthenticated. One
+// authority per fact: the POST delegates to job.Store — the same machinery
+// `mesh submit` uses — and never maintains parallel job state.
 package dashboard
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +36,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/job"
 	"github.com/georgenijo/agent-mesh/internal/observe"
 )
 
@@ -48,7 +59,7 @@ type claimLogEntry struct {
 	TS     time.Time `json:"ts"`
 }
 
-// Dashboard serves the live observer UI.
+// Dashboard serves the live observer UI with a write path for job intake.
 type Dashboard struct {
 	cfg  config.Config
 	addr string
@@ -58,6 +69,11 @@ type Dashboard struct {
 	// pushed. New sets the production default; white-box tests tighten it
 	// before Start so lifecycle transitions land between ticks.
 	rosterEvery time.Duration
+
+	// jobToken is the local bearer token that guards POST /api/jobs.
+	// Generated fresh on each Start, written to cfg.DashboardTokenFile(),
+	// removed on Stop. Observer endpoints remain unauthenticated.
+	jobToken string
 
 	bus     *bus.Client
 	httpSrv *http.Server
@@ -105,8 +121,22 @@ func New(cfg config.Config, addr string, log *slog.Logger) *Dashboard {
 
 // Start connects the tap and begins serving HTTP.
 func (d *Dashboard) Start() error {
+	// Generate a fresh local bearer token for the write API. The token is
+	// written to MESH_DIR/dashboard.token so scripts and `curl` can read it;
+	// the UI page receives it via GET /api/write-token (loopback-only, same
+	// trust boundary as the rest of the dashboard).
+	token, err := generateToken()
+	if err != nil {
+		return fmt.Errorf("dashboard: generate write token: %w", err)
+	}
+	d.jobToken = token
+	if err := os.WriteFile(d.cfg.DashboardTokenFile(), []byte(token+"\n"), 0o600); err != nil {
+		return fmt.Errorf("dashboard: write token file: %w", err)
+	}
+
 	cli, err := bus.Dial(d.cfg.BusSocket(), bus.ClientOptions{})
 	if err != nil {
+		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: connect bus: %w", err)
 	}
 	d.bus = cli
@@ -114,6 +144,7 @@ func (d *Dashboard) Start() error {
 	// Tap everything; forward each envelope to connected browsers.
 	if _, err := cli.Subscribe(envelope.PatternAll, d.onEvent); err != nil {
 		cli.Close()
+		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: subscribe: %w", err)
 	}
 
@@ -123,11 +154,15 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/roster", d.serveRoster)
 	mux.HandleFunc("GET /api/claims", d.serveClaims)
 	mux.HandleFunc("GET /api/notes", d.serveNotes)
+	mux.HandleFunc("GET /api/jobs", d.serveListJobs)
+	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
+	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
 	if err != nil {
 		cli.Close()
+		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: listen %s: %w", d.addr, err)
 	}
 	d.ln = ln
@@ -138,6 +173,7 @@ func (d *Dashboard) Start() error {
 	if err := observe.WriteRunFiles(d.cfg.DashboardPID(), d.cfg.DashboardAddrFile(), d.Addr()); err != nil {
 		ln.Close()
 		cli.Close()
+		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: %w", err)
 	}
 	d.httpSrv = &http.Server{Handler: mux}
@@ -179,6 +215,7 @@ func (d *Dashboard) Stop() {
 		d.bus.Close()
 	}
 	observe.RemoveRunFiles(d.cfg.DashboardPID(), d.cfg.DashboardAddrFile())
+	os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 }
 
 // onEvent forwards one tapped envelope to all SSE clients, and records claim
@@ -424,12 +461,12 @@ func (d *Dashboard) serveNotes(w http.ResponseWriter, r *http.Request) {
 		repo = envelope.DefaultRepo
 	}
 	if !envelope.ValidRepo(repo) {
-		http.Error(w, "invalid repo id", http.StatusBadRequest)
+		writeJSONError(w, `{"error":"bad_request","message":"invalid repo id"}`, http.StatusBadRequest)
 		return
 	}
 	entries, err := d.bus.StreamRead(envelope.StreamNotes(repo), 0)
 	if err != nil {
-		http.Error(w, "bus unavailable", http.StatusServiceUnavailable)
+		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 	notes := make([]envelope.Envelope, 0, len(entries))
@@ -443,6 +480,159 @@ func (d *Dashboard) serveNotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"repo": repo, "notes": notes}) //nolint:errcheck
 }
+
+// --- Write API (P4, issue #47) ---------------------------------------------------
+
+// maxJobTitleLen and maxJobBodyLen mirror meshapi.MaxJobTitleLen/MaxJobBodyLen.
+// Duplicated here to avoid a meshapi import cycle (meshapi imports job; we are
+// downstream of both).
+const (
+	maxJobTitleLen = 4096
+	maxJobBodyLen  = 1 << 19 // 512 KiB
+)
+
+// jobCreateRequest is the POST /api/jobs request body.
+type jobCreateRequest struct {
+	Repo  string `json:"repo"`
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+}
+
+// checkWriteAuth returns false and writes 401 if the request does not carry
+// the expected bearer token. Called only on mutating endpoints.
+func (d *Dashboard) checkWriteAuth(w http.ResponseWriter, r *http.Request) bool {
+	auth := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		writeJSONError(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return false
+	}
+	if strings.TrimPrefix(auth, prefix) != d.jobToken {
+		writeJSONError(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// serveCreateJob handles POST /api/jobs — the dashboard write path for job
+// intake. It delegates entirely to job.Store, which is the one authority for
+// jobs (same as `mesh submit`). No fake-success: any store or validation
+// failure returns a typed error JSON body.
+func (d *Dashboard) serveCreateJob(w http.ResponseWriter, r *http.Request) {
+	if !d.checkWriteAuth(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxJobBodyLen+maxJobTitleLen+4096)
+	var req jobCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeJSONError(w, `{"error":"bad_request","message":"body too large"}`, http.StatusBadRequest)
+		} else {
+			writeJSONError(w, `{"error":"bad_request","message":"invalid JSON body"}`, http.StatusBadRequest)
+		}
+		return
+	}
+	req.Repo = strings.TrimSpace(req.Repo)
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Repo == "" {
+		writeJSONError(w, `{"error":"bad_request","message":"repo is required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Title == "" {
+		writeJSONError(w, `{"error":"bad_request","message":"title is required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Title) > maxJobTitleLen {
+		writeJSONError(w, fmt.Sprintf(`{"error":"bad_request","message":"title exceeds %d bytes"}`, maxJobTitleLen), http.StatusBadRequest)
+		return
+	}
+	if len(req.Body) > maxJobBodyLen {
+		writeJSONError(w, fmt.Sprintf(`{"error":"bad_request","message":"body exceeds %d bytes"}`, maxJobBodyLen), http.StatusBadRequest)
+		return
+	}
+
+	store := job.NewStore(d.bus)
+	rec, err := store.Create(job.Record{
+		Repo:   req.Repo,
+		Source: job.SourceManual,
+		Title:  req.Title,
+		Body:   req.Body,
+	})
+	if err != nil {
+		d.log.Warn("dashboard: create job failed", "err", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{"error": "unavailable", "message": err.Error()}) //nolint:errcheck
+		return
+	}
+
+	// Publish a KindJob observability event so the SSE tap (and any other
+	// mesh.> subscriber) sees the intake exactly as `mesh submit` does.
+	env, err := envelope.New(envelope.KindJob, "dashboard", envelope.SubjectJob(rec.ID), &envelope.JobPayload{
+		ID: rec.ID, Repo: rec.Repo, Source: rec.Source, Title: rec.Title, State: rec.State,
+	})
+	if err == nil {
+		d.bus.Publish(env) //nolint:errcheck // best-effort: the KV write is the authority
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+		"job":   rec.ID,
+		"repo":  rec.Repo,
+		"state": string(rec.State),
+	})
+}
+
+// serveListJobs returns all jobs from the authoritative jobs KV, oldest first.
+// Unauthenticated read-only endpoint (same posture as /api/roster).
+func (d *Dashboard) serveListJobs(w http.ResponseWriter, _ *http.Request) {
+	store := job.NewStore(d.bus)
+	jobs, err := store.List()
+	if err != nil {
+		writeJSONError(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if jobs == nil {
+		jobs = []job.Record{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs}) //nolint:errcheck
+}
+
+// serveWriteToken returns the local write-API bearer token as JSON.
+// This endpoint is intentionally served over the same loopback-bound listener
+// as the rest of the dashboard — the same trust boundary that already gives
+// the browser access to every mesh.> event. It is not more privileged than
+// reading the token file directly. Observer endpoints have always been
+// unauthenticated on loopback; this adds a convenient UI path for the form.
+func (d *Dashboard) serveWriteToken(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": d.jobToken}) //nolint:errcheck
+}
+
+// writeJSONError writes a JSON error response with the correct Content-Type.
+// It keeps the JSON shapes identical to the inline literals previously passed
+// to http.Error, but corrects the Content-Type to application/json.
+func writeJSONError(w http.ResponseWriter, body string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write([]byte(body)) //nolint:errcheck
+}
+
+// generateToken creates a 32-byte random hex bearer token.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// WriteToken exposes the bearer token for tests and the write-token API
+// endpoint; production code should read the token file instead.
+func (d *Dashboard) WriteToken() string { return d.jobToken }
 
 func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)

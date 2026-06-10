@@ -1,0 +1,165 @@
+// Package task owns the Task record — the authoritative KV shape for one DAG
+// node in the autonomous work hierarchy (Job → Task → ask-Ticket). Triage
+// (#24) decomposes a Job (internal/job) into Tasks; the scheduler (#25) reads
+// the persisted DAG back from the tasks bucket and dispatches nodes whose
+// dependencies are done; the worker (#26) executes them.
+//
+// Record shapes live in their domain package as the single authority (the
+// same role job.Record plays for jobs and ticket.Record for the P2 async
+// ask). The envelope package owns the rest of the task vocabulary: KindTask,
+// TaskPayload, TaskState, the mesh.task.<id> subject, BucketTasks, and
+// StreamTasks.
+//
+// Like a Job — and unlike a claim or a ticket — a Task is NOT a lease: no
+// ExpiresAt, no TTL. It persists until its lifecycle reaches a terminal
+// state.
+package task
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/envelope"
+)
+
+var (
+	ErrBadRecord = errors.New("task: bad record")
+	ErrCASLost   = errors.New("task: cas lost")
+)
+
+// Record is the authoritative tasks-bucket entry, keyed by ID in
+// envelope.BucketTasks. Task ids are envelope.NewID() UUIDv7s, so they are
+// valid mesh.task.<id> subject tokens. DependsOn holds task IDs (not planner
+// node ids) — resolved at mint time by FromPlan — so the scheduler never
+// needs the node-id mapping. Node preserves the planner's node id for
+// traceability back to the plan.
+type Record struct {
+	ID          string             `json:"id"`
+	Job         string             `json:"job"`
+	Node        string             `json:"node"`
+	Title       string             `json:"title"`
+	Description string             `json:"description,omitempty"`
+	Role        string             `json:"role"`
+	DependsOn   []string           `json:"dependsOn,omitempty"`
+	Files       []string           `json:"files,omitempty"`
+	Acceptance  []string           `json:"acceptance,omitempty"`
+	State       envelope.TaskState `json:"state"`
+	CreatedAt   time.Time          `json:"createdAt"`
+}
+
+// Event records one task transition, appended to the task-events stream.
+// The tasks KV record stays the current-state authority; events let tests and
+// observers deterministically replay how a task reached that state. #24 only
+// emits To: TaskPending.
+type Event struct {
+	ID     string             `json:"id"`
+	Job    string             `json:"job"`
+	From   envelope.TaskState `json:"from,omitempty"`
+	To     envelope.TaskState `json:"to"`
+	By     string             `json:"by,omitempty"`
+	At     time.Time          `json:"at"`
+	Reason string             `json:"reason,omitempty"`
+}
+
+// Store writes the authoritative tasks KV bucket.
+type Store struct {
+	cli *bus.Client
+	now func() time.Time
+}
+
+func NewStore(cli *bus.Client) Store {
+	return Store{cli: cli, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s Store) withNow(now func() time.Time) Store {
+	s.now = now
+	return s
+}
+
+// CreateAll persists one job's freshly-minted tasks. Each record is written
+// create-only (CAS) — fresh UUIDv7 ids never collide — and a TaskPending
+// event is appended per task for replay. It fails on the first store error;
+// triage treats any failure as a typed internal triage error, so partial
+// writes for a job that never reaches triaged are inert (the scheduler only
+// reads tasks of triaged jobs).
+func (s Store) CreateAll(recs []Record) error {
+	for _, rec := range recs {
+		if err := validateNew(rec); err != nil {
+			return err
+		}
+		if _, err := s.cli.KVPut(envelope.BucketTasks, rec.ID, rec, bus.PutOptions{CAS: bus.CreateOnly()}); err != nil {
+			if errors.Is(err, bus.ErrCASLost) {
+				return ErrCASLost
+			}
+			return err
+		}
+		ev := Event{ID: rec.ID, Job: rec.Job, To: envelope.TaskPending, At: rec.CreatedAt}
+		if _, err := s.cli.StreamAppend(envelope.StreamTasks, ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Get reads a single task record by id.
+func (s Store) Get(id string) (Record, bool, error) {
+	kv, found, err := s.cli.KVGet(envelope.BucketTasks, id)
+	if err != nil || !found {
+		return Record{}, found, err
+	}
+	var rec Record
+	if err := json.Unmarshal(kv.Value, &rec); err != nil {
+		return Record{}, false, err
+	}
+	return rec, true, nil
+}
+
+// ListByJob returns every task of one job in stable plan order (creation
+// order; ties broken by id). This is the scheduler's read path for the
+// persisted DAG.
+func (s Store) ListByJob(job string) ([]Record, error) {
+	keys, err := s.cli.KVList(envelope.BucketTasks)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]Record, 0, len(keys))
+	for _, kv := range keys {
+		var rec Record
+		if err := json.Unmarshal(kv.Value, &rec); err != nil {
+			continue
+		}
+		if rec.Job == job {
+			records = append(records, rec)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if !records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].CreatedAt.Before(records[j].CreatedAt)
+		}
+		return records[i].ID < records[j].ID
+	})
+	return records, nil
+}
+
+func validateNew(rec Record) error {
+	for field, val := range map[string]string{
+		"id": rec.ID, "job": rec.Job, "node": rec.Node,
+		"title": rec.Title, "role": rec.Role,
+	} {
+		if strings.TrimSpace(val) == "" {
+			return fmt.Errorf("%w: missing %s", ErrBadRecord, field)
+		}
+	}
+	if rec.State != envelope.TaskPending {
+		return fmt.Errorf("%w: new task state must be pending", ErrBadRecord)
+	}
+	if rec.CreatedAt.IsZero() {
+		return fmt.Errorf("%w: missing createdAt", ErrBadRecord)
+	}
+	return nil
+}

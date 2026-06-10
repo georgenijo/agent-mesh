@@ -22,20 +22,22 @@ const (
 	EnvClaimTTL          = "MESH_CLAIM_TTL"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
 	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
-	EnvAgentSocket       = "MESH_SOCKET"         // CLI → sidecar socket override
-	EnvMeshdBin          = "MESH_MESHD"          // path to meshd for autostart
-	EnvExpertCLI         = "MESH_EXPERT_CLI"     // agent CLI an expert responder drives (default "claude")
-	EnvPlannerCLI        = "MESH_PLANNER_CLI"    // CLI the coordinator's triage planner drives; empty = triage disabled
-	EnvPlannerModel      = "MESH_PLANNER_MODEL"  // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
-	EnvTriageTimeout     = "MESH_TRIAGE_TIMEOUT" // wall-clock bound on one planner invocation
-	EnvWorkerCLI         = "MESH_WORKER_CLI"     // CLI the coordinator's scheduler drives per task; empty = scheduler disabled
-	EnvWorkerModel       = "MESH_WORKER_MODEL"   // --model passed to the worker CLI (default "sonnet"; empty = CLI default)
-	EnvWorkerTimeout     = "MESH_WORKER_TIMEOUT" // wall-clock bound on one worker invocation
-	EnvBudgetUSD         = "MESH_BUDGET_USD"     // fleet budget cap in USD; 0/unset = unlimited
-	EnvMaxWorkers        = "MESH_MAX_WORKERS"    // max concurrent workers (default 4)
-	EnvReposDir          = "MESH_REPOS_DIR"      // dir mapping job repo names to git checkouts; required by the #26 worker driver
-	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES" // worker worktree retention: on-failure (default) | always | never
-	EnvAuditFanout       = "MESH_AUDIT_FANOUT"   // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
+	EnvAgentSocket       = "MESH_SOCKET"              // CLI → sidecar socket override
+	EnvMeshdBin          = "MESH_MESHD"               // path to meshd for autostart
+	EnvExpertCLI         = "MESH_EXPERT_CLI"          // agent CLI an expert responder drives (default "claude")
+	EnvPlannerCLI        = "MESH_PLANNER_CLI"         // CLI the coordinator's triage planner drives; empty = triage disabled
+	EnvPlannerModel      = "MESH_PLANNER_MODEL"       // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
+	EnvTriageTimeout     = "MESH_TRIAGE_TIMEOUT"      // wall-clock bound on one planner invocation
+	EnvTriageMaxAttempts = "MESH_TRIAGE_MAX_ATTEMPTS" // max planner attempts per job before open→failed (transient codes only); default 4
+	EnvTriageBackoff     = "MESH_TRIAGE_BACKOFF"      // base delay for the exponential triage retry backoff; default 30s
+	EnvWorkerCLI         = "MESH_WORKER_CLI"          // CLI the coordinator's scheduler drives per task; empty = scheduler disabled
+	EnvWorkerModel       = "MESH_WORKER_MODEL"        // --model passed to the worker CLI (default "sonnet"; empty = CLI default)
+	EnvWorkerTimeout     = "MESH_WORKER_TIMEOUT"      // wall-clock bound on one worker invocation
+	EnvBudgetUSD         = "MESH_BUDGET_USD"          // fleet budget cap in USD; 0/unset = unlimited
+	EnvMaxWorkers        = "MESH_MAX_WORKERS"         // max concurrent workers (default 4)
+	EnvReposDir          = "MESH_REPOS_DIR"           // dir mapping job repo names to git checkouts; required by the #26 worker driver
+	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES"      // worker worktree retention: on-failure (default) | always | never
+	EnvAuditFanout       = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -66,6 +68,19 @@ const (
 	// DefaultTriageTimeout bounds one planner invocation. A planning turn is
 	// one LLM call (5–60s observed); minutes means a wedged child.
 	DefaultTriageTimeout = 2 * time.Minute
+
+	// DefaultTriageMaxAttempts caps how many planner invocations a single job
+	// gets before a transient failure becomes terminal (open→failed). Each
+	// attempt is one planner LLM turn = money, so the cap is the budget guard
+	// (locked hard-cap billing posture): a down planner must never be retried
+	// forever. 4 = the first try plus three backed-off retries. PERMANENT codes
+	// (bad_plan, invalid_dag) ignore this and fail on the first attempt.
+	DefaultTriageMaxAttempts = 4
+
+	// DefaultTriageBackoff is the base delay of the exponential triage retry
+	// schedule: attempt N waits base*2^(N-1), capped at maxTriageBackoff. 30s
+	// base gives 30s/60s/120s for attempts 1→2, 2→3, 3→4 under the default cap.
+	DefaultTriageBackoff = 30 * time.Second
 
 	// DefaultWorkerModel pins the worker's model (locked fleet decision:
 	// always pin --model; an un-pinned `claude -p` defaults to the most
@@ -109,6 +124,17 @@ type Config struct {
 	PlannerModel  string        // --model for the planner CLI; empty = CLI default
 	TriageTimeout time.Duration // wall-clock bound on one planner invocation
 
+	// TriageMaxAttempts and TriageBackoff configure the #64 retry/backoff
+	// policy for TRANSIENT planner failures (planner_unavailable / planner_failed
+	// / internal). A transient failure leaves the job open with persisted attempt
+	// metadata and schedules a backed-off retry; PERMANENT failures (bad_plan /
+	// invalid_dag — the planner produced garbage, a retry burns money for nothing)
+	// fail the job immediately regardless of these. The cap enforces the hard-cap
+	// billing posture: each attempt is a planner LLM turn, so transient failures
+	// are never retried infinitely.
+	TriageMaxAttempts int           // max planner attempts per job (transient codes); default 4
+	TriageBackoff     time.Duration // base delay of the exponential retry schedule; default 30s
+
 	// WorkerCLI is the agent CLI the coordinator's scheduler (#25) drives to
 	// execute one task. Deliberately NO default, exactly like PlannerCLI: an
 	// autostarted coordinator must never spawn worker LLM processes unless the
@@ -151,6 +177,8 @@ func Load() (Config, error) {
 		ExpertCLI:         DefaultExpertCLI,
 		PlannerModel:      DefaultPlannerModel,
 		TriageTimeout:     DefaultTriageTimeout,
+		TriageMaxAttempts: DefaultTriageMaxAttempts,
+		TriageBackoff:     DefaultTriageBackoff,
 		WorkerModel:       DefaultWorkerModel,
 		WorkerTimeout:     DefaultWorkerTimeout,
 		MaxWorkers:        DefaultMaxWorkers,
@@ -178,6 +206,7 @@ func Load() (Config, error) {
 		{EnvRegistrationGrace, &cfg.RegistrationGrace},
 		{EnvClaimTTL, &cfg.ClaimTTL},
 		{EnvTriageTimeout, &cfg.TriageTimeout},
+		{EnvTriageBackoff, &cfg.TriageBackoff},
 		{EnvWorkerTimeout, &cfg.WorkerTimeout},
 	} {
 		raw := os.Getenv(d.env)
@@ -224,6 +253,13 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvMaxWorkers, raw)
 		}
 		cfg.MaxWorkers = n
+	}
+	if raw := os.Getenv(EnvTriageMaxAttempts); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvTriageMaxAttempts, raw)
+		}
+		cfg.TriageMaxAttempts = n
 	}
 	if raw := os.Getenv(EnvAuditFanout); raw != "" {
 		switch raw {

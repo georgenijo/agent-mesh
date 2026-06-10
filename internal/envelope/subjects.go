@@ -84,12 +84,20 @@ const (
 // state; mesh.job.<id> events are derived observability.
 // The tasks bucket is the single source of truth for DAG-node state; the
 // scheduler (#25) reads the persisted DAG from it.
+// BucketTriageAttempts holds the #64 retry/backoff bookkeeping for triage:
+// per-job attempt count, last typed error code, and next-retry deadline. It is
+// NOT the job authority (that stays BucketJobs / job.Record, golden-pinned) —
+// only the policy state the triage loop reads to decide whether to retry now,
+// back off, or fail terminally. Persisted alongside jobs/tasks (#65) so a job
+// mid-backoff resumes its schedule across a coordinator restart instead of
+// restarting from attempt 0. A record is deleted once the job leaves open.
 const (
-	BucketRegistry = "registry"
-	BucketClaims   = "claims"
-	BucketTickets  = "tickets"
-	BucketJobs     = "jobs"
-	BucketTasks    = "tasks"
+	BucketRegistry       = "registry"
+	BucketClaims         = "claims"
+	BucketTickets        = "tickets"
+	BucketJobs           = "jobs"
+	BucketTasks          = "tasks"
+	BucketTriageAttempts = "triage-attempts"
 )
 
 // Streams (bounded).

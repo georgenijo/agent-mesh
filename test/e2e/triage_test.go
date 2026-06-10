@@ -142,6 +142,83 @@ func TestTriageMalformedPlannerFailsJobTyped(t *testing.T) {
 	})
 }
 
+// TestTriageRetriesTransientThenSucceeds exercises the #64 retry/backoff policy
+// across real processes: the fakeplanner CHILD exits non-zero on its first
+// invocation (a TRANSIENT planner_unavailable failure), so the job backs off and
+// stays open, then succeeds on the retry and reaches triaged. Assertions are
+// over typed JSON only.
+func TestTriageRetriesTransientThenSucceeds(t *testing.T) {
+	m := newMesh(t)
+	counter := filepath.Join(m.dir, "planner-counter")
+	m.env = append(m.env,
+		"MESH_PLANNER_CLI="+buildFakePlanner(t, m),
+		"FAKEPLANNER_MODE=transient-then-ok",
+		"FAKEPLANNER_FAILS=1",
+		"FAKEPLANNER_COUNTER="+counter,
+		// A short base backoff keeps the retry within the test's window; the
+		// sweep cadence (HeartbeatInterval/2 = 50ms) drives the re-attempt.
+		"MESH_TRIAGE_BACKOFF=200ms",
+		"MESH_TRIAGE_MAX_ATTEMPTS=4",
+	)
+	m.startCoordinator()
+	base := m.startDashboard()
+
+	if code, _, stderr := m.run("join", "--name", "intake", "--role", "builder", "--repo", "demo"); code != 0 {
+		t.Fatalf("join exit %d: %s", code, stderr)
+	}
+	jobEnvelopes := tapJobEnvelopes(t, base+"/events")
+	taps := tapTriageEnvelopes(t, base+"/events")
+
+	code, stdout, stderr := m.run("submit", "do X", "--repo", "demo", "--json", "--socket", m.agentSocket("intake"))
+	if code != 0 {
+		t.Fatalf("submit exit %d: stderr %s stdout %s", code, stderr, stdout)
+	}
+	var res struct {
+		Job string `json:"job"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil || res.Job == "" {
+		t.Fatalf("submit json: %v\n%s", err, stdout)
+	}
+
+	// The first attempt fails transiently: a typed planner_unavailable triage
+	// error event is observable on the tap. The job is NOT failed — it backs off.
+	m.eventually(10*time.Second, "typed planner_unavailable triage error on the tap", func() bool {
+		_, triages := taps()
+		for _, p := range triages {
+			if p.Job == res.Job && p.Result == "error" && p.Code == "planner_unavailable" {
+				return true
+			}
+		}
+		return false
+	})
+
+	// The retry succeeds: the job reaches triaged with the full DAG.
+	m.eventually(10*time.Second, "KindJob triaged envelope after a transient retry", func() bool {
+		for _, p := range jobEnvelopes() {
+			if p.ID == res.Job && p.State == "triaged" {
+				return true
+			}
+		}
+		return false
+	})
+	m.eventually(10*time.Second, "ok triage outcome with the node count after retry", func() bool {
+		_, triages := taps()
+		for _, p := range triages {
+			if p.Job == res.Job && p.Result == "ok" && p.Tasks == 2 {
+				return true
+			}
+		}
+		return false
+	})
+
+	// The job never transitioned to failed during the backoff.
+	for _, p := range jobEnvelopes() {
+		if p.ID == res.Job && p.State == "failed" {
+			t.Fatalf("job %s failed during a transient retry; it must back off and recover", res.Job)
+		}
+	}
+}
+
 // taskTapPayload is the slice of envelope.TaskPayload the tap needs.
 type taskTapPayload struct {
 	ID    string `json:"id"`

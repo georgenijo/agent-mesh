@@ -66,10 +66,19 @@ func TestLoadPlannerKnobs(t *testing.T) {
 	if cfg.TriageTimeout != DefaultTriageTimeout {
 		t.Fatalf("TriageTimeout default = %s, want %s", cfg.TriageTimeout, DefaultTriageTimeout)
 	}
+	// #64 retry/backoff defaults.
+	if cfg.TriageMaxAttempts != DefaultTriageMaxAttempts {
+		t.Fatalf("TriageMaxAttempts default = %d, want %d", cfg.TriageMaxAttempts, DefaultTriageMaxAttempts)
+	}
+	if cfg.TriageBackoff != DefaultTriageBackoff {
+		t.Fatalf("TriageBackoff default = %s, want %s", cfg.TriageBackoff, DefaultTriageBackoff)
+	}
 
 	t.Setenv(EnvPlannerCLI, "/usr/local/bin/claude")
 	t.Setenv(EnvPlannerModel, "") // explicit empty = CLI default model
 	t.Setenv(EnvTriageTimeout, "30s")
+	t.Setenv(EnvTriageMaxAttempts, "6")
+	t.Setenv(EnvTriageBackoff, "5s")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +92,25 @@ func TestLoadPlannerKnobs(t *testing.T) {
 	if cfg.TriageTimeout != 30*time.Second {
 		t.Fatalf("TriageTimeout = %s", cfg.TriageTimeout)
 	}
+	if cfg.TriageMaxAttempts != 6 {
+		t.Fatalf("TriageMaxAttempts = %d, want 6", cfg.TriageMaxAttempts)
+	}
+	if cfg.TriageBackoff != 5*time.Second {
+		t.Fatalf("TriageBackoff = %s, want 5s", cfg.TriageBackoff)
+	}
 
+	t.Setenv(EnvTriageTimeout, "30s") // restore valid value
+	t.Setenv(EnvTriageMaxAttempts, "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("want error for non-positive triage max attempts")
+	}
+	t.Setenv(EnvTriageMaxAttempts, "4") // restore valid value
+	t.Setenv(EnvTriageBackoff, "-5s")
+	if _, err := Load(); err == nil {
+		t.Fatal("want error for non-positive triage backoff")
+	}
+
+	t.Setenv(EnvTriageBackoff, "30s") // restore valid value
 	t.Setenv(EnvTriageTimeout, "-5s")
 	if _, err := Load(); err == nil {
 		t.Fatal("want error for non-positive triage timeout")

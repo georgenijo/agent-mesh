@@ -6,6 +6,13 @@
 // json` child, the same M0-verified contract the triage planner and the
 // provisional scheduler.CLIDriver speak.
 //
+// Per-CLI adapter abstraction (#30): the CLI invocation contract is
+// abstracted behind internal/cliexec.Adapter. The default is
+// cliexec.ClaudeAdapter, which implements the spike-verified claude contract
+// (docs/spikes/M0-feasibility.md). Codex, Cursor, and Aider are STUBBED in
+// cliexec with ErrNotImplemented until their output contracts are verified.
+// Inject a custom Adapter via NewDriverWithAdapter for tests or alternative CLIs.
+//
 // Lifecycle, behind the frozen #25 Driver seam (the scheduler is untouched —
 // swapping this in is coordinator wiring):
 //
@@ -48,6 +55,7 @@ import (
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/cliexec"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/job"
@@ -88,10 +96,11 @@ const maxWorktreeProbes = 32
 
 // Driver implements scheduler.Driver with worktree-per-worker isolation.
 type Driver struct {
-	cfg  config.Config
-	log  *slog.Logger
-	jobs job.Store
-	join JoinFunc
+	cfg     config.Config
+	log     *slog.Logger
+	jobs    job.Store
+	join    JoinFunc
+	adapter cliexec.Adapter // nil → ClaudeAdapter{Binary: cfg.WorkerCLI}
 
 	// gitMu serializes mutations of a repo's worktree metadata
 	// (.git/worktrees, refs): concurrent `git worktree add` calls on one
@@ -102,7 +111,16 @@ type Driver struct {
 // NewDriver validates the worker configuration and builds the driver.
 // MESH_REPOS_DIR is required: a worker must never guess which directory tree
 // it may rewrite, so an unset mapping is a startup error, not a per-task one.
+// The adapter defaults to cliexec.ClaudeAdapter{Binary: cfg.WorkerCLI}, which
+// implements the M0-verified `claude -p --output-format json` contract.
 func NewDriver(cli *bus.Client, cfg config.Config, join JoinFunc, log *slog.Logger) (*Driver, error) {
+	return NewDriverWithAdapter(cli, cfg, join, log, nil)
+}
+
+// NewDriverWithAdapter is like NewDriver but accepts an explicit per-CLI
+// adapter (#30). When adapter is nil the default ClaudeAdapter is used.
+// Inject a stub or fake adapter for tests or to target a non-Claude CLI.
+func NewDriverWithAdapter(cli *bus.Client, cfg config.Config, join JoinFunc, log *slog.Logger, adapter cliexec.Adapter) (*Driver, error) {
 	if cfg.WorkerCLI == "" {
 		return nil, errors.New("worker: WorkerCLI is required")
 	}
@@ -119,7 +137,16 @@ func NewDriver(cli *bus.Client, cfg config.Config, join JoinFunc, log *slog.Logg
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Driver{cfg: cfg, log: log, jobs: job.NewStore(cli), join: join}, nil
+	return &Driver{cfg: cfg, log: log, jobs: job.NewStore(cli), join: join, adapter: adapter}, nil
+}
+
+// effectiveAdapter returns the configured adapter, defaulting to
+// ClaudeAdapter{Binary: cfg.WorkerCLI} when none was injected.
+func (d *Driver) effectiveAdapter() cliexec.Adapter {
+	if d.adapter != nil {
+		return d.adapter
+	}
+	return cliexec.ClaudeAdapter{Binary: d.cfg.WorkerCLI}
 }
 
 // Spawn allocates the task's isolated execution context: repo lookup,
@@ -168,6 +195,7 @@ func (d *Driver) Spawn(ctx context.Context, rec task.Record) (scheduler.Worker, 
 		d: d, rec: rec, jrec: jrec,
 		repoPath: repoPath, dir: dir, branch: branch, baseSHA: baseSHA,
 		sc: sc, sockPath: d.cfg.AgentSocket(name),
+		adapter: d.effectiveAdapter(),
 	}, nil
 }
 
@@ -244,6 +272,7 @@ type worker struct {
 	baseSHA  string
 	sc       Session
 	sockPath string
+	adapter  cliexec.Adapter // resolved at spawn time; never nil
 
 	// succeeded is written by Run and read by Teardown. The scheduler runs
 	// both sequentially on the worker's goroutine, so no lock is needed.
@@ -251,8 +280,14 @@ type worker struct {
 }
 
 // Run drives the one-shot worker child and maps its stdout to a typed Result.
-// Result mapping is identical to the provisional CLIDriver's documented
-// contract (the locked fleet posture hangs off it):
+// The CLI invocation is delegated to w.adapter (internal/cliexec.Adapter),
+// defaulting to cliexec.ClaudeAdapter which implements the M0-verified
+// `claude -p --output-format json` contract. Alternate adapters (stubbed for
+// Codex / Cursor / Aider in internal/cliexec) can be injected via
+// NewDriverWithAdapter — they must emit a single JSON result envelope parseable
+// by internal/runtime.ParseEvent, or return ErrNotImplemented (#30).
+//
+// Result mapping (the locked fleet posture hangs off it):
 //
 //   - success discriminators pass → ok, with the run's total_cost_usd
 //   - api_error_status non-null   → rate_limited (back off and retry)
@@ -269,40 +304,22 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := []string{"-p", "--output-format", "json"}
-	if w.d.cfg.WorkerModel != "" {
-		args = append(args, "--model", w.d.cfg.WorkerModel)
-	}
-	args = append(args, w.buildPrompt())
-
-	cmd := exec.CommandContext(ctx, w.d.cfg.WorkerCLI, args...)
-	cmd.Dir = w.dir
-	// The child's `mesh` calls must land on THIS worker's sidecar. os/exec
-	// uses the last duplicate, so appending overrides any ambient values.
-	cmd.Env = append(os.Environ(),
+	// Build the mesh env: the child's `mesh` calls must land on THIS worker's
+	// sidecar. os/exec uses the last duplicate, so appending overrides any
+	// ambient MESH_DIR / MESH_SOCKET values.
+	env := append(os.Environ(),
 		config.EnvMeshDir+"="+w.d.cfg.MeshDir,
 		config.EnvAgentSocket+"="+w.sockPath,
 	)
-	var stdout, stderrBuf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderrBuf
-	// On kill, a grandchild holding the stdout pipe would keep Wait blocked
-	// indefinitely. WaitDelay bounds that wait (same hardening as the triage
-	// planner and CLIDriver execs).
-	cmd.WaitDelay = 3 * time.Second
 
-	if err := cmd.Start(); err != nil {
-		return scheduler.Result{}, fmt.Errorf("worker failed to start: %w", err)
-	}
-	w.sc.TrackChild(w.d.cfg.WorkerCLI, cmd.Process.Pid)
-	err := cmd.Wait()
-	w.sc.MarkChildExited(cmd.Process.Pid)
+	out, err := w.adapter.Invoke(ctx, w.buildPrompt(), cliexec.InvokeOptions{
+		Model:   w.d.cfg.WorkerModel,
+		WorkDir: w.dir,
+		Env:     env,
+	})
 	if err != nil {
-		if ctx.Err() != nil {
-			return scheduler.Result{}, fmt.Errorf("worker timed out or cancelled: %w", ctx.Err())
-		}
-		return scheduler.Result{}, fmt.Errorf("worker exited: %w: %s", err, truncate(stderrBuf.String(), 2048))
+		return scheduler.Result{}, fmt.Errorf("worker: %w", err)
 	}
-	out := stdout.Bytes()
 	if len(out) > scheduler.MaxWorkerResultBytes {
 		return scheduler.Result{}, fmt.Errorf("worker stdout %d bytes exceeds %d", len(out), scheduler.MaxWorkerResultBytes)
 	}

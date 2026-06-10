@@ -33,6 +33,22 @@ const (
 	EnvWorkerTimeout     = "MESH_WORKER_TIMEOUT" // wall-clock bound on one worker invocation
 	EnvBudgetUSD         = "MESH_BUDGET_USD"     // fleet budget cap in USD; 0/unset = unlimited
 	EnvMaxWorkers        = "MESH_MAX_WORKERS"    // max concurrent workers (default 4)
+	EnvReposDir          = "MESH_REPOS_DIR"      // dir mapping job repo names to git checkouts; required by the #26 worker driver
+	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES" // worker worktree retention: on-failure (default) | always | never
+)
+
+// Worker worktree retention policies (#26). The policy is deterministic:
+// teardown consults only the run's typed success and this knob.
+const (
+	// KeepWorktreesOnFailure (the default) removes a worker's worktree after a
+	// typed success — the work product survives as commits on the task branch —
+	// and preserves it after anything else, for inspection.
+	KeepWorktreesOnFailure = "on-failure"
+	// KeepWorktreesAlways never removes worker worktrees.
+	KeepWorktreesAlways = "always"
+	// KeepWorktreesNever removes the worktree regardless of outcome. The task
+	// branch (and any commits on it) is still never deleted.
+	KeepWorktreesNever = "never"
 )
 
 // Defaults.
@@ -101,6 +117,15 @@ type Config struct {
 	WorkerTimeout time.Duration // wall-clock bound on one worker invocation
 	BudgetUSD     float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
 	MaxWorkers    int           // max concurrent workers
+
+	// ReposDir maps a job's repo NAME to a git checkout at <ReposDir>/<name>.
+	// Deliberately NO default: the #26 worker driver refuses to start without
+	// it (a worker must never guess which directory tree it may rewrite).
+	// Only consulted when WorkerCLI is set.
+	ReposDir string
+	// KeepWorktrees is the worker worktree retention policy
+	// (KeepWorktreesOnFailure | KeepWorktreesAlways | KeepWorktreesNever).
+	KeepWorktrees string
 }
 
 // Load resolves config from the environment with defaults.
@@ -118,6 +143,7 @@ func Load() (Config, error) {
 		WorkerModel:       DefaultWorkerModel,
 		WorkerTimeout:     DefaultWorkerTimeout,
 		MaxWorkers:        DefaultMaxWorkers,
+		KeepWorktrees:     KeepWorktreesOnFailure,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -187,6 +213,16 @@ func Load() (Config, error) {
 		}
 		cfg.MaxWorkers = n
 	}
+	cfg.ReposDir = os.Getenv(EnvReposDir) // empty = worker driver refuses to construct
+	if raw := os.Getenv(EnvKeepWorktrees); raw != "" {
+		switch raw {
+		case KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever:
+			cfg.KeepWorktrees = raw
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want %s|%s|%s", EnvKeepWorktrees, raw,
+				KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever)
+		}
+	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {
 		return Config{}, fmt.Errorf("config: away-after (%s) must be >= heartbeat interval (%s)",
@@ -241,6 +277,11 @@ func (c Config) StreamsDir() string { return filepath.Join(c.MeshDir, "streams")
 // bus server only. The lease buckets (registry, claims) are NOT persisted here:
 // they self-heal by re-registration / re-establishment.
 func (c Config) BucketsDir() string { return filepath.Join(c.MeshDir, "buckets") }
+
+// WorkersDir holds the per-task worker worktrees the #26 driver creates
+// (one isolated git worktree per dispatched task). Owned by the
+// coordinator-embedded worker driver only.
+func (c Config) WorkersDir() string { return filepath.Join(c.MeshDir, "workers") }
 
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }

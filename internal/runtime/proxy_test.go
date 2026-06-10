@@ -23,7 +23,12 @@ const (
 	helperArgsFileEnv = "GO_RUNTIME_HELPER_ARGS_FILE" // append argv (after "--") as a JSON line per spawn
 	helperNoiseEnv    = "GO_RUNTIME_HELPER_NOISE"     // "1": emit junk/unknown lines before each result
 	helperStallEnv    = "GO_RUNTIME_HELPER_STALL"     // "1": emit init, then stay alive without ever reading stdin
+	helperVerdictEnv  = "GO_RUNTIME_HELPER_VERDICT"   // verdict text to reply with when a review prompt arrives
 )
+
+// reviewPromptMarker is a stable substring BuildReviewPrompt always emits, so
+// the fake child can recognize a review turn without parsing the prompt.
+const reviewPromptMarker = "senior code reviewer"
 
 // TestHelperProcess is not a real test: it is the fake child. It only runs
 // when re-exec'd with helperEnv set.
@@ -114,6 +119,25 @@ func helperMain() {
 		}
 		if strings.HasPrefix(content, "SLOW") {
 			time.Sleep(300 * time.Millisecond)
+		}
+
+		// Review turns: when the proxy sends a BuildReviewPrompt (recognized by
+		// the reviewer header), reply with a verdict object the test chose via
+		// helperVerdictEnv. This proves Review drives the SAME resident child as
+		// Ask — the verdict comes back over the held-open pipe, same session.
+		if strings.Contains(content, reviewPromptMarker) {
+			reply := os.Getenv(helperVerdictEnv)
+			if reply == "" {
+				reply = `{"verdict":"approve","notes":"looks fine"}`
+			}
+			// Mimic a model that narrates before its final verdict line.
+			result := "I reviewed the diff carefully.\n" + reply
+			emit(map[string]any{
+				"type": "result", "subtype": "success", "is_error": false,
+				"result":     result,
+				"session_id": session, "num_turns": turn, "duration_ms": 5,
+			})
+			continue
 		}
 
 		if os.Getenv(helperNoiseEnv) == "1" {

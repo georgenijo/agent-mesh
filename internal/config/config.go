@@ -185,6 +185,12 @@ func (c Config) CoordinatorLock() string { return filepath.Join(c.MeshDir, "coor
 // stream). Owned by the coordinator-embedded bus server only.
 func (c Config) StreamsDir() string { return filepath.Join(c.MeshDir, "streams") }
 
+// BucketsDir holds the bus server's durable KV op logs (one bucket-<name>.jsonl
+// per persisted bucket: jobs, tasks — #65). Owned by the coordinator-embedded
+// bus server only. The lease buckets (registry, claims) are NOT persisted here:
+// they self-heal by re-registration / re-establishment.
+func (c Config) BucketsDir() string { return filepath.Join(c.MeshDir, "buckets") }
+
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }
 

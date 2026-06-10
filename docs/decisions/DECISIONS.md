@@ -6,6 +6,18 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-06-09: Triage = coordinator-embedded sweep loop, opt-in via MESH_PLANNER_CLI; one attempt per job; tasks-first commit
+
+**Decision:** #24 triage runs inside the coordinator as a sweep loop (cadence HeartbeatInterval/2, same as the presence janitor), gated on `MESH_PLANNER_CLI` being set — **no default planner binary**: unset means triage is off. The planner is one one-shot `<cli> -p --output-format json` child per job (model pinned via `MESH_PLANNER_MODEL`, default `sonnet`; wall-clock bound `MESH_TRIAGE_TIMEOUT`, default 2m, with a WaitDelay so a grandchild holding the stdout pipe cannot wedge the loop); stdout is parsed with internal/runtime's never-fake-success result discriminators. Plan-document shape + DAG validation (cycles via Kahn, duplicate/missing node ids, unknown deps, role exact-token match) live in `internal/task` beside the golden-pinned Task record (`BucketTasks`, deps stored as resolved task ids); prompt/model/invocation/orchestration live in `internal/triage`. Each job is attempted **once per coordinator lifetime**; any typed failure (`planner_unavailable | planner_failed | bad_plan | invalid_dag | internal`) transitions the job open→failed — retry/backoff is deferred policy. Commit order is tasks-first, then CAS job open→triaged, so a job that never reaches triaged can never expose a partial DAG to the #25 scheduler (which only reads tasks of triaged jobs).
+
+**Rationale:** Every `mesh join` autostarts a coordinator, so a loop that spawns LLM processes must be explicitly enabled (CI/e2e point it at a fake binary; production opts in with `claude`) — defaulting it on would make `mesh submit` silently burn subscription turns on any dev machine. A KV sweep self-heals missed events and keeps the planner's seconds-to-minutes turn off the reducer's single delivery goroutine. One-attempt-per-lifetime keeps a failing planner from being hammered every tick while keeping the board truthful (failed, with a typed code, not silently stuck open).
+
+**Status:** active
+
+**References:** #24, internal/triage, internal/task, internal/job (Transition), internal/coordinator, internal/config (MESH_PLANNER_CLI/MESH_PLANNER_MODEL/MESH_TRIAGE_TIMEOUT), test/e2e/fakeplanner; extends 2026-06-08 "Autonomous work hierarchy = Job → Task → (ask)Ticket"
+
+---
+
 ## 2026-06-09: Expert memory = a compacted blackboard primer injected into the warm child; no separate checkpoint store
 
 **Decision:** An expert's long-term memory is the durable per-repo blackboard, not a new artifact (#28). On (re)start the responder loop builds a **memory primer** — a byte-bounded, compacted projection of `mesh.note.<repo>` (decisions/summaries kept ahead of context/other when the budget bites, elision disclosed honestly) — and injects it into the warm runtime child as one context-setting turn before answering. It re-primes on two signals: a new note landing on the blackboard (high-water seq advance — the in-mesh "worker recorded a decision after landing a diff" signal) and after a `--resume` restart (whose on-disk session may be cold/stale vs the durable record), the latter via a concurrency-safe `ResyncSignal` the runtime closure raises. The blackboard is never mutated by priming. Authority split is now documented (ARCHITECTURE.md §7e): the note stream is authoritative for durable facts, the child's RAM is a volatile non-authoritative cache. `internal/sidecar/memory.go` + `ServeExpertWithMemory`; the pre-#28 `ServeExpert` stays as the no-memory loop.

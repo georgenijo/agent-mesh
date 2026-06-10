@@ -25,10 +25,32 @@ import (
 )
 
 var (
-	ErrBadRecord = errors.New("job: bad record")
-	ErrNoSuchJob = errors.New("job: no such job")
-	ErrCASLost   = errors.New("job: cas lost")
+	ErrBadRecord     = errors.New("job: bad record")
+	ErrNoSuchJob     = errors.New("job: no such job")
+	ErrCASLost       = errors.New("job: cas lost")
+	ErrBadTransition = errors.New("job: illegal transition")
 )
+
+// transitions is the legal-successor table for the job lifecycle
+// (open→triaged→scheduled→running→done|failed|cancelled). Triage (#24) uses
+// open→triaged and open→failed; the scheduler/worker (#25/#26) drive the
+// rest. Terminal states have no successors.
+var transitions = map[envelope.JobState][]envelope.JobState{
+	envelope.JobOpen:      {envelope.JobTriaged, envelope.JobFailed, envelope.JobCancelled},
+	envelope.JobTriaged:   {envelope.JobScheduled, envelope.JobFailed, envelope.JobCancelled},
+	envelope.JobScheduled: {envelope.JobRunning, envelope.JobFailed, envelope.JobCancelled},
+	envelope.JobRunning:   {envelope.JobDone, envelope.JobFailed, envelope.JobCancelled},
+}
+
+// CanTransition reports whether from→to is a legal job transition.
+func CanTransition(from, to envelope.JobState) bool {
+	for _, s := range transitions[from] {
+		if s == to {
+			return true
+		}
+	}
+	return false
+}
 
 // SourceManual and SourceGitHub are the two recognized job sources.
 const (
@@ -138,6 +160,41 @@ func (s Store) List() ([]Record, error) {
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].CreatedAt.Before(records[j].CreatedAt) })
 	return records, nil
+}
+
+// Transition moves a job from one state to the next under revision CAS: the
+// record is re-read, the from-state and table legality are checked, and the
+// write is guarded by the read revision — a concurrent writer loses exactly
+// one of the two races (ErrCASLost), never both-win. An Event is appended for
+// replay. The KV record stays the one authority; publishing the derived
+// KindJob envelope is the caller's concern.
+func (s Store) Transition(id string, from, to envelope.JobState, by, reason string) (Record, error) {
+	if !CanTransition(from, to) {
+		return Record{}, fmt.Errorf("%w: %s -> %s", ErrBadTransition, from, to)
+	}
+	kv, found, err := s.cli.KVGet(envelope.BucketJobs, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if !found {
+		return Record{}, fmt.Errorf("%w: %s", ErrNoSuchJob, id)
+	}
+	var rec Record
+	if err := json.Unmarshal(kv.Value, &rec); err != nil {
+		return Record{}, fmt.Errorf("%w: %s: %v", ErrBadRecord, id, err)
+	}
+	if rec.State != from {
+		return Record{}, fmt.Errorf("%w: job %s is %s, not %s", ErrBadTransition, id, rec.State, from)
+	}
+	rec.State = to
+	if _, err := s.cli.KVPut(envelope.BucketJobs, id, rec, bus.PutOptions{CAS: bus.Rev(kv.Rev)}); err != nil {
+		if errors.Is(err, bus.ErrCASLost) {
+			return Record{}, ErrCASLost
+		}
+		return Record{}, err
+	}
+	_ = s.append(Event{ID: id, From: from, To: to, By: by, Reason: reason})
+	return rec, nil
 }
 
 func (s Store) append(ev Event) error {

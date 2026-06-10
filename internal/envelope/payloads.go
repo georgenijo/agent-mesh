@@ -194,6 +194,60 @@ func (p JobPayload) validate() error {
 	return nil
 }
 
+// TaskPayload is the DAG-node observability event (#24, KindTask). An
+// observability tap only: the tasks KV record (internal/task) is the
+// authority for task state. It carries just enough to render a task row;
+// dependencies and acceptance live in the KV record.
+type TaskPayload struct {
+	ID    string    `json:"id"`
+	Job   string    `json:"job"`
+	Role  string    `json:"role"`
+	Title string    `json:"title"`
+	State TaskState `json:"state"`
+}
+
+func (p TaskPayload) validate() error {
+	for field, val := range map[string]string{
+		"id": p.ID, "job": p.Job, "role": p.Role, "title": p.Title,
+	} {
+		if err := requireField(field, val); err != nil {
+			return err
+		}
+	}
+	if !ValidTaskState(p.State) {
+		return fmt.Errorf("unknown task state %q", p.State)
+	}
+	return nil
+}
+
+// TriagePayload is the planner-outcome event (#24, KindTriage): one per
+// triage attempt. Result is typed ok|error; on error, Code classifies the
+// failure and Reason carries human-readable detail. Tasks is the number of
+// DAG nodes persisted (0 on error).
+type TriagePayload struct {
+	Job    string          `json:"job"`
+	Result TriageResult    `json:"result"`
+	Tasks  int             `json:"tasks,omitempty"`
+	Code   TriageErrorCode `json:"code,omitempty"`
+	Reason string          `json:"reason,omitempty"`
+}
+
+func (p TriagePayload) validate() error {
+	if err := requireField("job", p.Job); err != nil {
+		return err
+	}
+	if !ValidTriageResult(p.Result) {
+		return fmt.Errorf("unknown triage result %q", p.Result)
+	}
+	if p.Result == TriageError && !ValidTriageErrorCode(p.Code) {
+		return fmt.Errorf("triage error without a valid code (got %q)", p.Code)
+	}
+	if p.Result == TriageOK && p.Code != "" {
+		return fmt.Errorf("triage ok must not carry an error code (got %q)", p.Code)
+	}
+	return nil
+}
+
 // payloadKinds maps each kind to its expected payload validator, so DecodeInto
 // can reject a payload that does not match the envelope's kind.
 type validator interface{ validate() error }
@@ -222,6 +276,10 @@ func payloadFor(kind Kind) validator {
 		return &TicketPayload{}
 	case KindJob:
 		return &JobPayload{}
+	case KindTask:
+		return &TaskPayload{}
+	case KindTriage:
+		return &TriagePayload{}
 	default:
 		return nil
 	}

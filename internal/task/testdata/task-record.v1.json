@@ -1,0 +1,21 @@
+{
+  "id": "01976f00-0000-7000-8000-0000000000a1",
+  "job": "01976f00-0000-7000-8000-00000000007e",
+  "node": "impl",
+  "title": "Implement RRULE builder",
+  "description": "Add the recurrence-rule builder behind the events API.",
+  "role": "builder",
+  "dependsOn": [
+    "01976f00-0000-7000-8000-0000000000a0"
+  ],
+  "files": [
+    "src/api.go",
+    "src/rrule.go"
+  ],
+  "acceptance": [
+    "unit tests pass",
+    "API returns TZID-qualified times"
+  ],
+  "state": "pending",
+  "createdAt": "2026-06-09T00:00:00Z"
+}

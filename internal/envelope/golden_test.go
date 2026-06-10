@@ -70,6 +70,12 @@ func goldenCases() []goldenCase {
 		{KindJob, "", SubjectJob(goldenTicket),
 			&JobPayload{ID: goldenTicket, Repo: "demo", Source: "manual",
 				Title: "add RRULE builder", State: JobOpen}, &JobPayload{}},
+		{KindTask, "", SubjectTask("01976f00-0000-7000-8000-0000000000a1"),
+			&TaskPayload{ID: "01976f00-0000-7000-8000-0000000000a1", Job: goldenTicket,
+				Role: "builder", Title: "implement RRULE builder", State: TaskPending}, &TaskPayload{}},
+		{KindTriage, "", SubjectTriage(goldenTicket),
+			&TriagePayload{Job: goldenTicket, Result: TriageError, Tasks: 0,
+				Code: TriageInvalidDAG, Reason: "cycle: t1 -> t2 -> t1"}, &TriagePayload{}},
 	}
 }
 
@@ -192,6 +198,8 @@ func TestContractStrings(t *testing.T) {
 		{"SubjectAnswer", SubjectAnswer("T1"), "mesh.answer.T1"},
 		{"SubjectTicket", SubjectTicket("T1"), "mesh.ticket.T1"},
 		{"SubjectJob", SubjectJob("J1"), "mesh.job.J1"},
+		{"SubjectTask", SubjectTask("T1"), "mesh.task.T1"},
+		{"SubjectTriage", SubjectTriage("J1"), "mesh.triage.J1"},
 		// Patterns.
 		{"PatternAll", PatternAll, "mesh.>"},
 		{"PatternHeartbeats", PatternHeartbeats, "mesh.heartbeat.>"},
@@ -202,14 +210,18 @@ func TestContractStrings(t *testing.T) {
 		{"PatternAnswers", PatternAnswers, "mesh.answer.>"},
 		{"PatternTickets", PatternTickets, "mesh.ticket.>"},
 		{"PatternJobs", PatternJobs, "mesh.job.>"},
+		{"PatternTasks", PatternTasks, "mesh.task.>"},
+		{"PatternTriage", PatternTriage, "mesh.triage.>"},
 		// Buckets and streams.
 		{"BucketRegistry", BucketRegistry, "registry"},
 		{"BucketClaims", BucketClaims, "claims"},
 		{"BucketTickets", BucketTickets, "tickets"},
 		{"BucketJobs", BucketJobs, "jobs"},
+		{"BucketTasks", BucketTasks, "tasks"},
 		{"StreamAudit", StreamAudit, "audit"},
 		{"StreamTickets", StreamTickets, "ticket-events"},
 		{"StreamJobs", StreamJobs, "job-events"},
+		{"StreamTasks", StreamTasks, "task-events"},
 		{"StreamNotes", StreamNotes("demo"), "notes-demo"},
 		// Repo identity.
 		{"DefaultRepo", DefaultRepo, "default"},
@@ -241,6 +253,20 @@ func TestContractStrings(t *testing.T) {
 		{"JobDone", string(JobDone), "done"},
 		{"JobFailed", string(JobFailed), "failed"},
 		{"JobCancelled", string(JobCancelled), "cancelled"},
+		// Task states.
+		{"TaskPending", string(TaskPending), "pending"},
+		{"TaskRunning", string(TaskRunning), "running"},
+		{"TaskDone", string(TaskDone), "done"},
+		{"TaskFailed", string(TaskFailed), "failed"},
+		{"TaskCancelled", string(TaskCancelled), "cancelled"},
+		// Triage results and error codes.
+		{"TriageOK", string(TriageOK), "ok"},
+		{"TriageError", string(TriageError), "error"},
+		{"TriagePlannerUnavailable", string(TriagePlannerUnavailable), "planner_unavailable"},
+		{"TriagePlannerFailed", string(TriagePlannerFailed), "planner_failed"},
+		{"TriageBadPlan", string(TriageBadPlan), "bad_plan"},
+		{"TriageInvalidDAG", string(TriageInvalidDAG), "invalid_dag"},
+		{"TriageInternal", string(TriageInternal), "internal"},
 		// Kinds.
 		{"KindRegister", string(KindRegister), "register"},
 		{"KindLeave", string(KindLeave), "leave"},
@@ -253,6 +279,8 @@ func TestContractStrings(t *testing.T) {
 		{"KindNote", string(KindNote), "note"},
 		{"KindTicket", string(KindTicket), "ticket"},
 		{"KindJob", string(KindJob), "job"},
+		{"KindTask", string(KindTask), "task"},
+		{"KindTriage", string(KindTriage), "triage"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

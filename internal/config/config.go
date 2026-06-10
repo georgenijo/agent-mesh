@@ -21,9 +21,12 @@ const (
 	EnvClaimTTL          = "MESH_CLAIM_TTL"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
 	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
-	EnvAgentSocket       = "MESH_SOCKET"     // CLI → sidecar socket override
-	EnvMeshdBin          = "MESH_MESHD"      // path to meshd for autostart
-	EnvExpertCLI         = "MESH_EXPERT_CLI" // agent CLI an expert responder drives (default "claude")
+	EnvAgentSocket       = "MESH_SOCKET"         // CLI → sidecar socket override
+	EnvMeshdBin          = "MESH_MESHD"          // path to meshd for autostart
+	EnvExpertCLI         = "MESH_EXPERT_CLI"     // agent CLI an expert responder drives (default "claude")
+	EnvPlannerCLI        = "MESH_PLANNER_CLI"    // CLI the coordinator's triage planner drives; empty = triage disabled
+	EnvPlannerModel      = "MESH_PLANNER_MODEL"  // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
+	EnvTriageTimeout     = "MESH_TRIAGE_TIMEOUT" // wall-clock bound on one planner invocation
 )
 
 // Defaults.
@@ -32,6 +35,14 @@ const (
 	// MESH_EXPERT_CLI is unset. A literal (not internal/runtime.DefaultBinary)
 	// so config carries no dependency on the runtime package.
 	DefaultExpertCLI = "claude"
+
+	// DefaultPlannerModel pins the triage planner's model (M0 spike: the CLI
+	// default model is the expensive one; planning does not need it).
+	DefaultPlannerModel = "sonnet"
+
+	// DefaultTriageTimeout bounds one planner invocation. A planning turn is
+	// one LLM call (5–60s observed); minutes means a wedged child.
+	DefaultTriageTimeout = 2 * time.Minute
 
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
@@ -52,6 +63,15 @@ type Config struct {
 	DashboardAddr     string
 	ObserveAddr       string
 	ExpertCLI         string // agent CLI an expert responder drives (meshd --mode expert)
+
+	// PlannerCLI is the agent CLI the coordinator's triage loop drives for
+	// one-shot planning (#24). Deliberately NO default: an autostarted
+	// coordinator must never spawn LLM processes unless the operator opted in
+	// (MESH_PLANNER_CLI=claude in production, a fake binary in tests). Empty
+	// disables triage entirely.
+	PlannerCLI    string
+	PlannerModel  string        // --model for the planner CLI; empty = CLI default
+	TriageTimeout time.Duration // wall-clock bound on one planner invocation
 }
 
 // Load resolves config from the environment with defaults.
@@ -64,6 +84,8 @@ func Load() (Config, error) {
 		DashboardAddr:     DefaultDashboardAddr,
 		ObserveAddr:       DefaultObserveAddr,
 		ExpertCLI:         DefaultExpertCLI,
+		PlannerModel:      DefaultPlannerModel,
+		TriageTimeout:     DefaultTriageTimeout,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -85,6 +107,7 @@ func Load() (Config, error) {
 		{EnvEvictAfter, &cfg.EvictAfter},
 		{EnvRegistrationGrace, &cfg.RegistrationGrace},
 		{EnvClaimTTL, &cfg.ClaimTTL},
+		{EnvTriageTimeout, &cfg.TriageTimeout},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -108,6 +131,10 @@ func Load() (Config, error) {
 	}
 	if cli := os.Getenv(EnvExpertCLI); cli != "" {
 		cfg.ExpertCLI = cli
+	}
+	cfg.PlannerCLI = os.Getenv(EnvPlannerCLI) // empty = triage disabled
+	if model, ok := os.LookupEnv(EnvPlannerModel); ok {
+		cfg.PlannerModel = model // explicit empty = use the CLI's default model
 	}
 
 	if cfg.AwayAfter < cfg.HeartbeatInterval {

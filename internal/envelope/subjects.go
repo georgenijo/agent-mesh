@@ -49,6 +49,16 @@ func SubjectTicket(ticket string) string { return "mesh.ticket." + ticket }
 // mesh.> tap.
 func SubjectJob(id string) string { return "mesh.job." + id }
 
+// SubjectTask names the task observability event (KindTask, #24). The tasks
+// KV record is the authority for task state; this event only lets taps watch
+// DAG nodes appear and progress without polling the KV.
+func SubjectTask(id string) string { return "mesh.task." + id }
+
+// SubjectTriage names the planner-outcome event (KindTriage, #24), one per
+// triage attempt on a job. Derived observability only: the jobs/tasks KV
+// records stay the authorities for state.
+func SubjectTriage(job string) string { return "mesh.triage." + job }
+
 // Subscription patterns.
 const (
 	PatternAll        = "mesh.>"
@@ -60,6 +70,8 @@ const (
 	PatternAnswers    = "mesh.answer.>"
 	PatternTickets    = "mesh.ticket.>"
 	PatternJobs       = "mesh.job.>"
+	PatternTasks      = "mesh.task.>"
+	PatternTriage     = "mesh.triage.>"
 )
 
 // KV buckets. One authority per fact: the registry bucket is the single
@@ -70,11 +82,14 @@ const (
 // mesh.ticket.<ticket> events are derived observability.
 // The jobs bucket is the single source of truth for autonomous work-unit
 // state; mesh.job.<id> events are derived observability.
+// The tasks bucket is the single source of truth for DAG-node state; the
+// scheduler (#25) reads the persisted DAG from it.
 const (
 	BucketRegistry = "registry"
 	BucketClaims   = "claims"
 	BucketTickets  = "tickets"
 	BucketJobs     = "jobs"
+	BucketTasks    = "tasks"
 )
 
 // Streams (bounded).
@@ -82,6 +97,7 @@ const (
 	StreamAudit   = "audit"
 	StreamTickets = "ticket-events"
 	StreamJobs    = "job-events"
+	StreamTasks   = "task-events"
 )
 
 // StreamNotes is the per-repo durable blackboard stream name.

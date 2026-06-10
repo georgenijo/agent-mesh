@@ -98,3 +98,77 @@ var jobStates = map[JobState]bool{
 
 // ValidJobState reports whether s is a recognized job state.
 func ValidJobState(s JobState) bool { return jobStates[s] }
+
+// TaskState is the lifecycle vocabulary of a Task — one DAG node minted by
+// triage (#24). The vocabulary is wire contract, frozen here; the tasks KV
+// record (internal/task) is the one authority for a task's current state.
+// #24 only mints TaskPending; the scheduler (#25) and worker (#26) drive the
+// later transitions. Readiness is not a stored state: a task is runnable when
+// it is pending and every DependsOn task is done — derived, never persisted.
+type TaskState string
+
+const (
+	TaskPending   TaskState = "pending"   // created by triage, not yet dispatched
+	TaskRunning   TaskState = "running"   // a worker is executing it
+	TaskDone      TaskState = "done"      // completed successfully
+	TaskFailed    TaskState = "failed"    // terminal failure
+	TaskCancelled TaskState = "cancelled" // withdrawn (e.g. job cancelled)
+)
+
+var taskStates = map[TaskState]bool{
+	TaskPending:   true,
+	TaskRunning:   true,
+	TaskDone:      true,
+	TaskFailed:    true,
+	TaskCancelled: true,
+}
+
+// ValidTaskState reports whether s is a recognized task state.
+func ValidTaskState(s TaskState) bool { return taskStates[s] }
+
+// TriageResult is the outcome of one planner triage attempt (#24). Typed,
+// never fake-success: only a validated, persisted DAG maps to ok.
+type TriageResult string
+
+const (
+	TriageOK    TriageResult = "ok"    // DAG validated and persisted; job triaged
+	TriageError TriageResult = "error" // typed failure; Code says why
+)
+
+// ValidTriageResult reports whether r is a recognized triage result.
+func ValidTriageResult(r TriageResult) bool { return r == TriageOK || r == TriageError }
+
+// TriageErrorCode classifies why a triage attempt failed. Wire contract:
+// it travels in TriagePayload so dashboards and audit consumers can
+// discriminate failure classes without parsing prose.
+type TriageErrorCode string
+
+const (
+	// TriagePlannerUnavailable: the planner CLI could not run to completion
+	// (missing binary, spawn failure, timeout, crash).
+	TriagePlannerUnavailable TriageErrorCode = "planner_unavailable"
+	// TriagePlannerFailed: the planner ran but its result envelope was not a
+	// success (is_error, non-success subtype, api_error_status, or stdout that
+	// is not the documented JSON result shape).
+	TriagePlannerFailed TriageErrorCode = "planner_failed"
+	// TriageBadPlan: the planner answered successfully but the result text is
+	// not a parseable plan document (strict JSON validation; never scraped).
+	TriageBadPlan TriageErrorCode = "bad_plan"
+	// TriageInvalidDAG: the plan parsed but failed DAG validation (cycle,
+	// duplicate/missing node id, unknown dependency, unknown role, bounds).
+	TriageInvalidDAG TriageErrorCode = "invalid_dag"
+	// TriageInternal: persisting tasks or transitioning the job failed
+	// (store/bus error, lost CAS).
+	TriageInternal TriageErrorCode = "internal"
+)
+
+var triageErrorCodes = map[TriageErrorCode]bool{
+	TriagePlannerUnavailable: true,
+	TriagePlannerFailed:      true,
+	TriageBadPlan:            true,
+	TriageInvalidDAG:         true,
+	TriageInternal:           true,
+}
+
+// ValidTriageErrorCode reports whether c is a recognized triage error code.
+func ValidTriageErrorCode(c TriageErrorCode) bool { return triageErrorCodes[c] }

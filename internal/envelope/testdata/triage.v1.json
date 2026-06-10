@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "triage",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.triage.01976f00-0000-7000-8000-00000000007e",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "job": "01976f00-0000-7000-8000-00000000007e",
+    "result": "error",
+    "code": "invalid_dag",
+    "reason": "cycle: t1 -\u003e t2 -\u003e t1"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "kind": "task",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.task.01976f00-0000-7000-8000-0000000000a1",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "id": "01976f00-0000-7000-8000-0000000000a1",
+    "job": "01976f00-0000-7000-8000-00000000007e",
+    "role": "builder",
+    "title": "implement RRULE builder",
+    "state": "pending"
+  }
+}

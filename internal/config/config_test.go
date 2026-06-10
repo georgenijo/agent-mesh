@@ -46,6 +46,50 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestLoadPlannerKnobs pins the triage planner contract: no planner by
+// default (an autostarted coordinator must never spawn LLM processes
+// unasked), model defaults to the cheap pin but an explicit empty restores
+// the CLI default, and the timeout parses like every other duration knob.
+func TestLoadPlannerKnobs(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PlannerCLI != "" {
+		t.Fatalf("PlannerCLI default = %q, want empty (triage disabled)", cfg.PlannerCLI)
+	}
+	if cfg.PlannerModel != DefaultPlannerModel {
+		t.Fatalf("PlannerModel default = %q, want %q", cfg.PlannerModel, DefaultPlannerModel)
+	}
+	if cfg.TriageTimeout != DefaultTriageTimeout {
+		t.Fatalf("TriageTimeout default = %s, want %s", cfg.TriageTimeout, DefaultTriageTimeout)
+	}
+
+	t.Setenv(EnvPlannerCLI, "/usr/local/bin/claude")
+	t.Setenv(EnvPlannerModel, "") // explicit empty = CLI default model
+	t.Setenv(EnvTriageTimeout, "30s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PlannerCLI != "/usr/local/bin/claude" {
+		t.Fatalf("PlannerCLI = %q", cfg.PlannerCLI)
+	}
+	if cfg.PlannerModel != "" {
+		t.Fatalf("PlannerModel = %q, want empty after explicit unset", cfg.PlannerModel)
+	}
+	if cfg.TriageTimeout != 30*time.Second {
+		t.Fatalf("TriageTimeout = %s", cfg.TriageTimeout)
+	}
+
+	t.Setenv(EnvTriageTimeout, "-5s")
+	if _, err := Load(); err == nil {
+		t.Fatal("want error for non-positive triage timeout")
+	}
+}
+
 func TestLoadRejectsBadDurations(t *testing.T) {
 	t.Setenv(EnvMeshDir, t.TempDir())
 

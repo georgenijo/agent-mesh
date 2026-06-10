@@ -22,6 +22,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/triage"
 )
 
 // coordinatorID is the From id the coordinator uses on the bus.
@@ -46,6 +47,11 @@ type Coordinator struct {
 
 	srv *bus.Server
 	cli *bus.Client
+
+	// triager is the #24 triage loop — nil unless cfg.PlannerCLI is set
+	// (an autostarted coordinator must never spawn LLM processes unless the
+	// operator opted in).
+	triager *triage.Triager
 
 	// mu serializes every registry read-modify-write: events arrive on
 	// independent subscription goroutines, and the KV store has no
@@ -96,6 +102,29 @@ func (c *Coordinator) Start() error {
 
 	c.wg.Add(1)
 	go c.janitor()
+
+	// Triage loop (#24): opt-in via MESH_PLANNER_CLI. It runs on its own
+	// goroutine with its own sweep — a planner turn takes seconds-to-minutes
+	// and must never sit on the reducer or janitor path. A triage failure is
+	// a typed event on the job, never a coordinator crash.
+	if c.cfg.PlannerCLI != "" {
+		tri, err := triage.New(cli, triage.Options{
+			PlannerCLI: c.cfg.PlannerCLI,
+			Model:      c.cfg.PlannerModel,
+			Timeout:    c.cfg.TriageTimeout,
+			Interval:   sweepInterval(c.cfg.HeartbeatInterval),
+			WorkDir:    c.cfg.MeshDir, // clean cwd: no CLAUDE.md context tax (M0 spike)
+			Log:        c.log,
+		})
+		if err != nil {
+			c.Stop()
+			return fmt.Errorf("coordinator: triage: %w", err)
+		}
+		c.triager = tri
+		c.triager.Start()
+		c.log.Info("triage enabled", "planner", c.cfg.PlannerCLI)
+	}
+
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
 		c.Stop()
 		return fmt.Errorf("coordinator: write pid file: %w", err)
@@ -113,6 +142,9 @@ func (c *Coordinator) Stop() {
 		close(c.stop)
 	}
 	c.wg.Wait()
+	if c.triager != nil {
+		c.triager.Stop()
+	}
 	if c.cli != nil {
 		c.cli.Close()
 	}
@@ -274,13 +306,19 @@ func (c *Coordinator) handleStatus(env envelope.Envelope) {
 
 // --- two-tier presence janitor --------------------------------------------------
 
-func (c *Coordinator) janitor() {
-	defer c.wg.Done()
-	interval := c.cfg.HeartbeatInterval / 2
+// sweepInterval derives a loop cadence from the heartbeat interval with a
+// floor, shared by the presence janitor and the triage loop.
+func sweepInterval(heartbeat time.Duration) time.Duration {
+	interval := heartbeat / 2
 	if interval < 10*time.Millisecond {
 		interval = 10 * time.Millisecond
 	}
-	ticker := time.NewTicker(interval)
+	return interval
+}
+
+func (c *Coordinator) janitor() {
+	defer c.wg.Done()
+	ticker := time.NewTicker(sweepInterval(c.cfg.HeartbeatInterval))
 	defer ticker.Stop()
 	for {
 		select {

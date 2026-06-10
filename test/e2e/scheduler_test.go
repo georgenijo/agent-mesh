@@ -49,6 +49,8 @@ func TestSchedulerRunsTriagedDAGAcrossProcesses(t *testing.T) {
 	m.env = append(m.env,
 		"MESH_PLANNER_CLI="+buildFakePlanner(t, m),
 		"MESH_WORKER_CLI="+buildFakeWorker(t, m),
+		// The #26 worktree driver needs the repo-name → checkout mapping.
+		"MESH_REPOS_DIR="+makeWorkerRepoFixture(t, m),
 	)
 	m.startCoordinator()
 	base := m.startDashboard()
@@ -89,6 +91,7 @@ func TestSchedulerFailedWorkerFailsJobAndSkipsDependent(t *testing.T) {
 	m.env = append(m.env,
 		"MESH_PLANNER_CLI="+buildFakePlanner(t, m),
 		"MESH_WORKER_CLI="+buildFakeWorker(t, m),
+		"MESH_REPOS_DIR="+makeWorkerRepoFixture(t, m),
 		"FAKEWORKER_MODE=fail",
 	)
 	m.startCoordinator()

@@ -16,12 +16,12 @@ import (
 // CLIDriver is the PROVISIONAL exec-based worker driver: one one-shot
 // `<cli> -p --output-format json` child per task — the same M0-verified
 // contract the triage planner uses — parsed with internal/runtime's
-// never-fake-success result discriminators. It exists so the scheduler spine
-// is real end-to-end (e2e drives it with test/e2e/fakeworker) before #26
-// lands. #26 (worker runtime) supplies the real driver behind the same
-// Driver seam: worktree-per-worker isolation, diff collection, claim-guard
-// integration, richer prompts. Swapping it is coordinator wiring, not a
-// scheduler change.
+// never-fake-success result discriminators. It existed so the scheduler spine
+// was real end-to-end before #26 landed. The coordinator now wires
+// internal/worker.Driver (worktree-per-worker isolation, embedded per-worker
+// sidecar, diff collection) behind the same Driver seam; CLIDriver remains as
+// the minimal reference implementation of the one-shot exec contract and the
+// scheduler package's own contract-test subject.
 //
 // Result mapping (the locked fleet posture hangs off these):
 //   - success discriminators pass        → ok, with the run's total_cost_usd

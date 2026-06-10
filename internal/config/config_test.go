@@ -169,3 +169,45 @@ func TestLoadRejectsBadDurations(t *testing.T) {
 		t.Fatal("want error for evict <= away")
 	}
 }
+
+func TestLoadWorkerWorktreeKnobs(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(EnvMeshDir, dir)
+	t.Setenv(EnvReposDir, "/srv/repos")
+	t.Setenv(EnvKeepWorktrees, KeepWorktreesAlways)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReposDir != "/srv/repos" {
+		t.Fatalf("ReposDir = %q", cfg.ReposDir)
+	}
+	if cfg.KeepWorktrees != KeepWorktreesAlways {
+		t.Fatalf("KeepWorktrees = %q", cfg.KeepWorktrees)
+	}
+	if got, want := cfg.WorkersDir(), filepath.Join(dir, "workers"); got != want {
+		t.Fatalf("WorkersDir = %q, want %q", got, want)
+	}
+}
+
+func TestLoadWorkerWorktreeDefaults(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReposDir != "" {
+		t.Fatalf("ReposDir default = %q, want empty (driver refuses without explicit mapping)", cfg.ReposDir)
+	}
+	if cfg.KeepWorktrees != KeepWorktreesOnFailure {
+		t.Fatalf("KeepWorktrees default = %q, want %q", cfg.KeepWorktrees, KeepWorktreesOnFailure)
+	}
+}
+
+func TestLoadRejectsBadKeepWorktrees(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+	t.Setenv(EnvKeepWorktrees, "sometimes")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted MESH_KEEP_WORKTREES=sometimes")
+	}
+}

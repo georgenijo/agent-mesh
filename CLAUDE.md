@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Ops plane:** `mesh ops` + `meshd --mode observe`.
 - **P2 (async ask/answer, #17–#22):** `mesh ask/poll/inbox/answer` across real processes — role-routed asks CAS-accept exactly one responder; the asker never blocks (ticket returned immediately, answer collected via `poll`). Tickets KV is the one authority.
 - **Expert responder loop (first non-manual slice of #27):** `mesh expert serve --name N --role R` (a foreground `meshd --mode expert`) joins as a role-owning expert and auto-answers its accepted asks through a resident `internal/runtime` stream-json child (`MESH_EXPERT_CLI`, default `claude`) — no human runs `inbox`/`answer`. Same single answer path; no fake-success.
+- **Worker runtime (#26, the last spine piece):** `internal/worker` is the production `scheduler.Driver` — one isolated git worktree per task (`$MESH_DIR/workers/<task>`, branch `mesh/worker/<task>`, repo resolved at `MESH_REPOS_DIR/<job.repo>` — required) plus an embedded per-worker sidecar so the `MESH_WORKER_CLI` child has real `mesh claim/context/note/ask --wait` access (`MESH_SOCKET` env). Success auto-commits the diff onto the task branch (typed Result carries cost/session/changed-files); `MESH_KEEP_WORKTREES` = `on-failure` (default) | `always` | `never`, branches never deleted. Wired via `Coordinator.WorkerJoin` from `cmd/meshd` (sidecar seam, like ExpertFunc).
 
 GitHub: `georgenijo/agent-mesh`.
 

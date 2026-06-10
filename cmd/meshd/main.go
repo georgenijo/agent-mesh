@@ -25,6 +25,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/observe"
 	agentruntime "github.com/georgenijo/agent-mesh/internal/runtime"
 	"github.com/georgenijo/agent-mesh/internal/sidecar"
+	"github.com/georgenijo/agent-mesh/internal/worker"
 )
 
 var version = "0.1.0-dev"
@@ -276,6 +277,11 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 
 func runCoordinator(cfg config.Config, log *slog.Logger) int {
 	c := coordinator.New(cfg, log)
+	// The #26 worker driver's mesh membership: each spawned worker gets an
+	// embedded internal/sidecar joined here. Wired at this composition site —
+	// not inside the coordinator — because the sidecar package's tests import
+	// the coordinator (same seam pattern as the expert loop's ExpertFunc).
+	c.WorkerJoin = workerJoin(cfg, log)
 	if err := c.Start(); err != nil {
 		log.Error("coordinator start", "err", err)
 		return 1
@@ -283,6 +289,32 @@ func runCoordinator(cfg config.Config, log *slog.Logger) int {
 	waitSignal()
 	c.Stop()
 	return 0
+}
+
+// workerJoin builds the production worker.JoinFunc: a real per-worker sidecar.
+func workerJoin(cfg config.Config, log *slog.Logger) worker.JoinFunc {
+	return func(card agentcard.Card) (worker.Session, error) {
+		sc, err := sidecar.New(cfg, card, log)
+		if err != nil {
+			return nil, err
+		}
+		if err := sc.Start(); err != nil {
+			return nil, err
+		}
+		return workerSession{sc}, nil
+	}
+}
+
+// workerSession adapts *sidecar.Sidecar to worker.Session (the primer method
+// returns the rendered text; Leave/TrackChild/MarkChildExited promote as-is).
+type workerSession struct{ *sidecar.Sidecar }
+
+func (s workerSession) BuildPrimer(repo string, budget int) (string, error) {
+	p, err := s.Sidecar.BuildMemoryPrimer(repo, budget)
+	if err != nil {
+		return "", err
+	}
+	return p.Text, nil
 }
 
 func runDashboard(cfg config.Config, log *slog.Logger, addr string) int {

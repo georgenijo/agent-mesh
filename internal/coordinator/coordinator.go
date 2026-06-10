@@ -24,6 +24,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/scheduler"
 	"github.com/georgenijo/agent-mesh/internal/triage"
+	"github.com/georgenijo/agent-mesh/internal/worker"
 )
 
 // coordinatorID is the From id the coordinator uses on the bus.
@@ -45,6 +46,14 @@ type AuditEntry struct {
 type Coordinator struct {
 	cfg config.Config
 	log *slog.Logger
+
+	// WorkerJoin joins one #26 worker agent to the mesh (an embedded
+	// per-worker sidecar). It is INJECTED — by cmd/meshd in production, by
+	// tests directly — because this package must not import internal/sidecar:
+	// the sidecar package's own tests import the coordinator, and Go forbids
+	// the cycle (the same seam pattern as the expert loop's ExpertFunc).
+	// Required before Start when cfg.WorkerCLI is set; ignored otherwise.
+	WorkerJoin worker.JoinFunc
 
 	srv *bus.Server
 	cli *bus.Client
@@ -146,16 +155,19 @@ func (c *Coordinator) Start() error {
 
 	// Scheduler (#25): opt-in via MESH_WORKER_CLI, same rule as triage — a
 	// bare `mesh join` coordinator must never start spawning workers. The
-	// provisional CLIDriver is the injection point #26's real worker runtime
-	// replaces; the scheduler itself only knows the Driver seam.
+	// driver is the #26 worker runtime: worktree-per-worker isolation with an
+	// embedded per-worker sidecar (mesh CLI access inside the run). It
+	// requires MESH_REPOS_DIR — refusing to start beats letting workers guess
+	// which directory tree they may rewrite. The scheduler itself only knows
+	// the Driver seam.
 	if c.cfg.WorkerCLI != "" {
+		drv, err := worker.NewDriver(cli, c.cfg, c.WorkerJoin, c.log)
+		if err != nil {
+			c.Stop()
+			return fmt.Errorf("coordinator: worker driver: %w", err)
+		}
 		sch, err := scheduler.New(cli, scheduler.Options{
-			Driver: scheduler.CLIDriver{
-				CLI:     c.cfg.WorkerCLI,
-				Model:   c.cfg.WorkerModel,
-				Timeout: c.cfg.WorkerTimeout,
-				WorkDir: c.cfg.MeshDir, // clean cwd, like the planner; real isolation is #26
-			},
+			Driver:      drv,
 			BudgetUSD:   c.cfg.BudgetUSD,
 			MaxParallel: c.cfg.MaxWorkers,
 			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
@@ -168,7 +180,7 @@ func (c *Coordinator) Start() error {
 		c.scheduler = sch
 		c.scheduler.Start()
 		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
-			"budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
+			"reposDir", c.cfg.ReposDir, "budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
 	}
 
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {

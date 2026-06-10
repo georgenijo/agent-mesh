@@ -3,86 +3,181 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Mesh — Live Bus</title>
+<title>Agent Mesh · Observer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 2L2 6.5V13.5L10 18L18 13.5V6.5L10 2Z' fill='none' stroke='%2322d3ee' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='10' cy='10' r='2.5' fill='%2322d3ee'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+<!-- ══════ TOP APP BAR ══════ -->
 <header class="topbar">
-  <div class="brand">
-    <h1>AGENT&nbsp;MESH</h1>
-    <p>LIVE&nbsp;mesh.&gt;&nbsp;TAP&nbsp;·&nbsp;READ-ONLY&nbsp;OBSERVER</p>
+  <div class="topbar-brand">
+    <svg class="brand-icon" viewBox="0 0 20 20" fill="none" width="16" height="16">
+      <path d="M10 2L2 6.5V13.5L10 18L18 13.5V6.5L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
+    </svg>
+    <span class="brand-name">AGENT&nbsp;MESH</span>
+    <span class="brand-sep"></span>
+    <span class="brand-mode">LIVE OBSERVER DASHBOARD</span>
   </div>
-  <div class="metrics">
-    <div class="metric"><span>Live</span><strong id="liveMetric">0</strong></div>
-    <div class="metric"><span>Away</span><strong id="awayMetric">0</strong></div>
-    <div class="metric"><span>Claims</span><strong id="claimMetric">0</strong></div>
-    <div class="metric"><span>Notes</span><strong id="noteMetric">0</strong></div>
-    <div class="metric"><span>Observed</span><strong id="eventMetric">0</strong></div>
+
+  <div class="topbar-metrics">
+    <div class="tm">
+      <span class="tm-label">Live</span>
+      <span class="tm-val tm-green" id="liveMetric">0</span>
+    </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Away</span>
+      <span class="tm-val tm-dim" id="awayMetric">0</span>
+    </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Claims</span>
+      <span class="tm-val tm-amber" id="claimMetric">0</span>
+    </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Notes</span>
+      <span class="tm-val tm-cyan" id="noteMetric">0</span>
+    </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Events</span>
+      <span class="tm-val tm-violet" id="eventMetric">0</span>
+    </div>
   </div>
-  <div class="conn"><span id="connDot" class="dot"></span><span id="connText">connecting</span></div>
+
+  <div class="topbar-right">
+    <span id="presencePill" class="pill">0 agents</span>
+    <div class="conn-badge">
+      <span id="connDot" class="dot"></span>
+      <span id="connText" class="conn-text">connecting</span>
+    </div>
+  </div>
 </header>
 
-<section class="stagewrap" id="stagewrap" aria-label="Bus topology">
-  <div class="stage" id="stage">
-    <div class="legend" id="legend"></div>
-    <div class="bus"></div>
-    <div class="bus-label">◂&nbsp;◂&nbsp;◂&nbsp;&nbsp;&nbsp;M&nbsp;E&nbsp;S&nbsp;H&nbsp;.&nbsp;&gt;&nbsp;&nbsp;&nbsp;▸&nbsp;▸&nbsp;▸</div>
-    <svg class="routes" id="routes" viewBox="0 0 1280 720">
-      <defs>
-        <filter id="pktglow" x="-200%" y="-200%" width="500%" height="500%">
-          <feGaussianBlur stdDeviation="3.5" result="b"></feGaussianBlur>
-          <feMerge><feMergeNode in="b"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
-        </filter>
-      </defs>
-      <g id="staticRoutes"></g>
-      <g id="packetLayer"></g>
-    </svg>
-    <div id="nodeLayer"></div>
-    <div class="overflow-chip" id="overflowChip" hidden></div>
-  </div>
-</section>
+<!-- ══════ THREE-COLUMN WORKSPACE ══════ -->
+<div class="workspace">
 
-<main class="panels">
-  <section class="panel">
-    <div class="panel-header"><h2>Agents</h2><span id="presencePill" class="pill">empty</span></div>
-    <div class="panel-body"><div id="agentList" class="list"></div></div>
-  </section>
+  <!-- LEFT: Topology + Agent Roster -->
+  <div class="col col-left">
 
-  <section class="panel">
-    <div class="panel-header"><h2>Claims</h2><span id="claimsPill" class="pill">0 held</span></div>
-    <div class="panel-body">
-      <div id="claimList" class="list"></div>
+    <!-- Mesh Topology -->
+    <div class="panel panel-topology">
+      <div class="panel-hdr">
+        <span class="panel-title">MESH TOPOLOGY</span>
+      </div>
+      <div class="panel-body topo-body">
+        <section class="stagewrap" id="stagewrap" aria-label="Bus topology">
+          <div class="stage" id="stage">
+            <div class="legend" id="legend"></div>
+            <div class="bus"></div>
+            <div class="bus-label">◂◂◂&nbsp;&nbsp;MESH.&gt;&nbsp;&nbsp;▸▸▸</div>
+            <svg class="routes" id="routes" viewBox="0 0 1280 720">
+              <defs>
+                <filter id="pktglow" x="-200%" y="-200%" width="500%" height="500%">
+                  <feGaussianBlur stdDeviation="3.5" result="b"></feGaussianBlur>
+                  <feMerge><feMergeNode in="b"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+                </filter>
+              </defs>
+              <g id="staticRoutes"></g>
+              <g id="packetLayer"></g>
+            </svg>
+            <div id="nodeLayer"></div>
+            <div class="overflow-chip" id="overflowChip" hidden></div>
+          </div>
+        </section>
+      </div>
     </div>
-  </section>
 
-  <section class="panel">
-    <div class="panel-header"><h2>Blackboard</h2><span id="notesPill" class="pill">0 notes</span></div>
-    <div class="panel-body"><div id="noteList" class="list"></div></div>
-  </section>
+    <!-- Agent Roster -->
+    <div class="panel panel-agents">
+      <div class="panel-hdr">
+        <span class="panel-title">AGENTS</span>
+      </div>
+      <div class="panel-body">
+        <div id="agentList" class="list"></div>
+      </div>
+    </div>
 
-  <section class="panel wide">
-    <div class="panel-header"><h2>Event Stream</h2><span id="streamPill" class="pill">idle</span></div>
-    <div class="panel-body">
+  </div>
+
+  <!-- CENTER: Event Stream -->
+  <div class="col col-center">
+    <div class="panel panel-events">
+      <div class="panel-hdr">
+        <span class="panel-title">SHARED AGENT DIALOGUE &amp; EVENTS</span>
+        <span id="streamPill" class="pill pill-live">live</span>
+      </div>
       <div class="filters">
         <div class="kind-chips" id="kindChips"></div>
-        <input id="subjectFilter" type="text" placeholder="filter subject… e.g. mesh.status" autocomplete="off" spellcheck="false">
-        <label class="hb-toggle"><input type="checkbox" id="hbToggle"> heartbeats</label>
+        <input id="subjectFilter" type="text" aria-label="Filter events by subject" placeholder="filter subject… e.g. mesh.status" autocomplete="off" spellcheck="false">
+        <label class="hb-toggle"><input type="checkbox" id="hbToggle"> HB</label>
       </div>
-      <div id="eventList" class="list events"></div>
+      <div class="panel-body events-body">
+        <div id="eventList" class="list events"></div>
+      </div>
     </div>
-  </section>
+  </div>
 
-  <section class="panel">
-    <div class="panel-header"><h2>Tickets</h2><span id="ticketsPill" class="pill">P2</span></div>
-    <div class="panel-body"><div id="ticketList" class="list"></div></div>
-  </section>
+  <!-- RIGHT: File Locks + Ask/Answer + Claim History + Blackboard -->
+  <div class="col col-right">
 
-  <section class="panel">
-    <div class="panel-header"><h2>Experts &amp; Workers</h2><span id="expertsPill" class="pill">P3</span></div>
-    <div class="panel-body"><div id="expertList" class="list"></div></div>
-  </section>
-</main>
+    <div class="panel panel-claims">
+      <div class="panel-hdr">
+        <span class="panel-title">FILE LOCKS</span>
+        <span id="claimsPill" class="pill">0</span>
+      </div>
+      <div class="panel-body">
+        <div id="claimList" class="list"></div>
+      </div>
+    </div>
+
+    <div class="panel panel-tickets">
+      <div class="panel-hdr">
+        <span class="panel-title">ASK / ANSWER</span>
+        <span id="ticketsPill" class="pill">0</span>
+      </div>
+      <div class="panel-body" id="ptab-tickets">
+        <div id="ticketList" class="list"></div>
+      </div>
+    </div>
+
+    <div class="panel panel-claim-history">
+      <div class="panel-hdr">
+        <span class="panel-title">CLAIM HISTORY</span>
+        <span id="claimHistoryPill" class="pill"></span>
+      </div>
+      <div class="panel-body">
+        <div id="claimHistoryList" class="list"></div>
+      </div>
+    </div>
+
+    <div class="panel panel-notes">
+      <div class="panel-hdr">
+        <span class="panel-title">SHARED BLACKBOARD</span>
+        <span id="notesPill" class="pill">0</span>
+      </div>
+      <div class="panel-body">
+        <div id="noteList" class="list"></div>
+      </div>
+    </div>
+
+  </div>
+
+</div><!-- /workspace -->
+
+<!-- OFFSCREEN: P2/P3 elements required by app.js -->
+<div class="offscreen" aria-hidden="true">
+  <div id="ptab-experts"><div id="expertList" class="list"></div></div>
+  <span id="expertsPill" class="pill"></span>
+</div>
 
 <script src="app.js"></script>
+<script src="enhance.js?v=3"></script>
 </body>
 </html>

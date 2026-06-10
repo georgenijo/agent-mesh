@@ -158,8 +158,8 @@ func TestSSEStreamsLiveStatusEvent(t *testing.T) {
 // two-tier lifecycle (live → away → evicted) asserted over the HTTP stream a
 // browser actually consumes, not via KV reads. The stream uses data-only SSE
 // frames — the discriminator is the JSON `type` field ("event" | "roster" |
-// "claims", the last added by P1's claims snapshot), never an SSE `event:`
-// name.
+// "claims" | "claimlog", the last two added by P1's claims snapshot and the
+// claim-history ring), never an SSE `event:` name.
 func TestSSEPresenceLifecycleContract(t *testing.T) {
 	cfg, cli, d := startStackEvery(t, 25*time.Millisecond)
 	const id = "lifer"
@@ -207,8 +207,8 @@ func TestSSEPresenceLifecycleContract(t *testing.T) {
 				scanErr <- fmt.Errorf("frame payload is not JSON: %v", err)
 				return
 			}
-			if f.Type != "event" && f.Type != "roster" && f.Type != "claims" {
-				scanErr <- fmt.Errorf("frame type %q, want \"event\", \"roster\" or \"claims\"", f.Type)
+			if f.Type != "event" && f.Type != "roster" && f.Type != "claims" && f.Type != "claimlog" {
+				scanErr <- fmt.Errorf("frame type %q, want \"event\", \"roster\", \"claims\" or \"claimlog\"", f.Type)
 				return
 			}
 			wantBlank = true
@@ -341,5 +341,75 @@ func TestDashboardDisconnectDoesNotAffectRegistry(t *testing.T) {
 	}
 	if len(keys) != 1 {
 		t.Fatalf("registry has %d entries after dashboard stop, want 1", len(keys))
+	}
+}
+
+// TestSSEClaimLogRecordsTakesAndConflicts locks the claim-history contract: a
+// claim take and a conflicting (lost) take are both recorded into the ring and
+// pushed as a "claimlog" frame, carrying the real result so the UI can render
+// conflicts. Derived observability — it never writes the claims KV.
+func TestSSEClaimLogRecordsTakesAndConflicts(t *testing.T) {
+	_, cli, d := startStack(t)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/events", d.Addr()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	type frame struct {
+		Type    string          `json:"type"`
+		Entries []claimLogEntry `json:"entries"`
+	}
+	got := make(chan []claimLogEntry, 64)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			data, ok := strings.CutPrefix(scanner.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var f frame
+			if err := json.Unmarshal([]byte(data), &f); err != nil || f.Type != "claimlog" {
+				continue
+			}
+			got <- f.Entries
+		}
+	}()
+
+	publishClaim := func(agent, path string, result envelope.ClaimResult) {
+		env, err := envelope.New(envelope.KindClaim, agent, envelope.SubjectClaim(envelope.DefaultRepo),
+			&envelope.ClaimPayload{ID: agent, Path: path, Repo: envelope.DefaultRepo, Result: result})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cli.Publish(env); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	publishClaim("alpha", "src/auth.ts", envelope.ClaimClaimed)
+	publishClaim("beta", "src/auth.ts", envelope.ClaimLost)
+
+	// Wait for a frame that holds both events with their real results.
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("claimlog frame with both take and conflict never arrived")
+		case entries := <-got:
+			var claimed, lost bool
+			for _, e := range entries {
+				if e.From == "alpha" && e.Path == "src/auth.ts" && e.Result == "claimed" {
+					claimed = true
+				}
+				if e.From == "beta" && e.Path == "src/auth.ts" && e.Result == "lost" {
+					lost = true
+				}
+			}
+			if claimed && lost {
+				return
+			}
+		}
 	}
 }

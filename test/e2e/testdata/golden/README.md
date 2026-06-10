@@ -43,25 +43,16 @@ Running `-update` twice on an unchanged tree leaves `git status` clean.
 
 ## Known asymmetries (frozen as-is)
 
-1. **`join_fresh` and `join_rejoined` are structurally identical** — both show
-   `"rejoined": true`. This is because `autostart.SpawnSidecar` boots the
-   sidecar which auto-registers the agent; by the time the CLI sends its `join`
-   verb to the sidecar, the sidecar already has the registration, so it always
-   reports `rejoined: true`. The "fresh vs rejoined" distinction would require
-   a client that calls join before the sidecar's own boot-time registration
-   completes — a race the current autostart design does not expose. Changing
-   this is a separate decision.
-
-2. **Pre-socket failures bypass `emit()`** — when `resolveSocket` returns
+1. **Pre-socket failures bypass `emit()`** — when `resolveSocket` returns
    not-joined (no socket file exists at all), the CLI prints to stderr even
    with `--json`. Only errors that reach `doVerb` and return a typed socket
    response go through `emit()` and produce a JSON object on stdout. This
    asymmetry is frozen as-is in the current CLI design.
 
-3. **`runOps` does not use `emit()`** — it marshals `observe.Snapshot` directly
+2. **`runOps` does not use `emit()`** — it marshals `observe.Snapshot` directly
    and never produces the `{"ok":false,...}` error object; errors from `ops`
    go to stderr in both human and `--json` mode.
 
-4. **The socket frame's `"v":1` is stripped** — `emit()` prints raw `resp.Data`
+3. **The socket frame's `"v":1` is stripped** — `emit()` prints raw `resp.Data`
    (the verb payload), not the full socket response frame, so CLI JSON is
    currently unversioned. These goldens are the de-facto v1 contract.

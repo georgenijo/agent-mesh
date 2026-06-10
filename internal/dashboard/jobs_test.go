@@ -222,6 +222,13 @@ func TestTokenFileWrittenAndRemovedOnStop(t *testing.T) {
 	if strings.TrimSpace(string(raw)) != d.WriteToken() {
 		t.Fatalf("token file content %q != WriteToken()", strings.TrimSpace(string(raw)))
 	}
+	info, err := os.Stat(tokenPath)
+	if err != nil {
+		t.Fatalf("stat token file: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("token file mode %04o, want 0600", mode)
+	}
 
 	d.Stop()
 	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {

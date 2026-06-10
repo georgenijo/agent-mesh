@@ -460,12 +460,12 @@ func (d *Dashboard) serveNotes(w http.ResponseWriter, r *http.Request) {
 		repo = envelope.DefaultRepo
 	}
 	if !envelope.ValidRepo(repo) {
-		http.Error(w, "invalid repo id", http.StatusBadRequest)
+		writeJSONError(w, `{"error":"bad_request","message":"invalid repo id"}`, http.StatusBadRequest)
 		return
 	}
 	entries, err := d.bus.StreamRead(envelope.StreamNotes(repo), 0)
 	if err != nil {
-		http.Error(w, "bus unavailable", http.StatusServiceUnavailable)
+		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 	notes := make([]envelope.Envelope, 0, len(entries))
@@ -503,11 +503,11 @@ func (d *Dashboard) checkWriteAuth(w http.ResponseWriter, r *http.Request) bool 
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if !strings.HasPrefix(auth, prefix) {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		writeJSONError(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return false
 	}
 	if strings.TrimPrefix(auth, prefix) != d.jobToken {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		writeJSONError(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return false
 	}
 	return true
@@ -523,25 +523,25 @@ func (d *Dashboard) serveCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	var req jobCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"bad_request","message":"invalid JSON body"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"error":"bad_request","message":"invalid JSON body"}`, http.StatusBadRequest)
 		return
 	}
 	req.Repo = strings.TrimSpace(req.Repo)
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Repo == "" {
-		http.Error(w, `{"error":"bad_request","message":"repo is required"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"error":"bad_request","message":"repo is required"}`, http.StatusBadRequest)
 		return
 	}
 	if req.Title == "" {
-		http.Error(w, `{"error":"bad_request","message":"title is required"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"error":"bad_request","message":"title is required"}`, http.StatusBadRequest)
 		return
 	}
 	if len(req.Title) > maxJobTitleLen {
-		http.Error(w, fmt.Sprintf(`{"error":"bad_request","message":"title exceeds %d bytes"}`, maxJobTitleLen), http.StatusBadRequest)
+		writeJSONError(w, fmt.Sprintf(`{"error":"bad_request","message":"title exceeds %d bytes"}`, maxJobTitleLen), http.StatusBadRequest)
 		return
 	}
 	if len(req.Body) > maxJobBodyLen {
-		http.Error(w, fmt.Sprintf(`{"error":"bad_request","message":"body exceeds %d bytes"}`, maxJobBodyLen), http.StatusBadRequest)
+		writeJSONError(w, fmt.Sprintf(`{"error":"bad_request","message":"body exceeds %d bytes"}`, maxJobBodyLen), http.StatusBadRequest)
 		return
 	}
 
@@ -584,7 +584,7 @@ func (d *Dashboard) serveListJobs(w http.ResponseWriter, _ *http.Request) {
 	store := job.NewStore(d.bus)
 	jobs, err := store.List()
 	if err != nil {
-		http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 	if jobs == nil {
@@ -603,6 +603,15 @@ func (d *Dashboard) serveListJobs(w http.ResponseWriter, _ *http.Request) {
 func (d *Dashboard) serveWriteToken(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": d.jobToken}) //nolint:errcheck
+}
+
+// writeJSONError writes a JSON error response with the correct Content-Type.
+// It keeps the JSON shapes identical to the inline literals previously passed
+// to http.Error, but corrects the Content-Type to application/json.
+func writeJSONError(w http.ResponseWriter, body string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write([]byte(body)) //nolint:errcheck
 }
 
 // generateToken creates a 32-byte random hex bearer token.

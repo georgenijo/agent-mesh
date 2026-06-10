@@ -67,6 +67,9 @@ func goldenCases() []goldenCase {
 		{KindTicket, "", SubjectTicket(goldenTicket),
 			&TicketPayload{Ticket: goldenTicket, State: TicketAnswered, By: "claude-2",
 				Reason: "answered within TTL"}, &TicketPayload{}},
+		{KindJob, "", SubjectJob(goldenTicket),
+			&JobPayload{ID: goldenTicket, Repo: "demo", Source: "manual",
+				Title: "add RRULE builder", State: JobOpen}, &JobPayload{}},
 	}
 }
 
@@ -188,6 +191,7 @@ func TestContractStrings(t *testing.T) {
 		{"SubjectInbox", SubjectInbox("codex-7"), "mesh.inbox.codex-7"},
 		{"SubjectAnswer", SubjectAnswer("T1"), "mesh.answer.T1"},
 		{"SubjectTicket", SubjectTicket("T1"), "mesh.ticket.T1"},
+		{"SubjectJob", SubjectJob("J1"), "mesh.job.J1"},
 		// Patterns.
 		{"PatternAll", PatternAll, "mesh.>"},
 		{"PatternHeartbeats", PatternHeartbeats, "mesh.heartbeat.>"},
@@ -197,12 +201,15 @@ func TestContractStrings(t *testing.T) {
 		{"PatternAsks", PatternAsks, "mesh.ask.>"},
 		{"PatternAnswers", PatternAnswers, "mesh.answer.>"},
 		{"PatternTickets", PatternTickets, "mesh.ticket.>"},
+		{"PatternJobs", PatternJobs, "mesh.job.>"},
 		// Buckets and streams.
 		{"BucketRegistry", BucketRegistry, "registry"},
 		{"BucketClaims", BucketClaims, "claims"},
 		{"BucketTickets", BucketTickets, "tickets"},
+		{"BucketJobs", BucketJobs, "jobs"},
 		{"StreamAudit", StreamAudit, "audit"},
 		{"StreamTickets", StreamTickets, "ticket-events"},
+		{"StreamJobs", StreamJobs, "job-events"},
 		{"StreamNotes", StreamNotes("demo"), "notes-demo"},
 		// Repo identity.
 		{"DefaultRepo", DefaultRepo, "default"},
@@ -226,6 +233,14 @@ func TestContractStrings(t *testing.T) {
 		{"TicketClosed", string(TicketClosed), "closed"},
 		{"TicketExpired", string(TicketExpired), "expired"},
 		{"TicketCancelled", string(TicketCancelled), "cancelled"},
+		// Job states.
+		{"JobOpen", string(JobOpen), "open"},
+		{"JobTriaged", string(JobTriaged), "triaged"},
+		{"JobScheduled", string(JobScheduled), "scheduled"},
+		{"JobRunning", string(JobRunning), "running"},
+		{"JobDone", string(JobDone), "done"},
+		{"JobFailed", string(JobFailed), "failed"},
+		{"JobCancelled", string(JobCancelled), "cancelled"},
 		// Kinds.
 		{"KindRegister", string(KindRegister), "register"},
 		{"KindLeave", string(KindLeave), "leave"},
@@ -237,6 +252,7 @@ func TestContractStrings(t *testing.T) {
 		{"KindAnswer", string(KindAnswer), "answer"},
 		{"KindNote", string(KindNote), "note"},
 		{"KindTicket", string(KindTicket), "ticket"},
+		{"KindJob", string(KindJob), "job"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

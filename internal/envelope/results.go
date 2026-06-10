@@ -68,3 +68,33 @@ var ticketStates = map[TicketState]bool{
 
 // ValidTicketState reports whether s is a recognized ticket state.
 func ValidTicketState(s TicketState) bool { return ticketStates[s] }
+
+// JobState is the lifecycle vocabulary of an autonomous Job — the top-level
+// work unit created by `mesh submit` (#23). The vocabulary is wire contract,
+// frozen here; the jobs KV record (internal/job) is the one authority for a
+// job's current state. #23 only mints JobOpen at creation; triage (#24) and
+// the scheduler/worker (#25/#26) drive the later transitions.
+type JobState string
+
+const (
+	JobOpen      JobState = "open"      // created, not yet triaged
+	JobTriaged   JobState = "triaged"   // decomposed into tasks
+	JobScheduled JobState = "scheduled" // tasks dispatched
+	JobRunning   JobState = "running"   // a worker is executing it
+	JobDone      JobState = "done"      // completed successfully
+	JobFailed    JobState = "failed"    // terminal failure
+	JobCancelled JobState = "cancelled" // withdrawn
+)
+
+var jobStates = map[JobState]bool{
+	JobOpen:      true,
+	JobTriaged:   true,
+	JobScheduled: true,
+	JobRunning:   true,
+	JobDone:      true,
+	JobFailed:    true,
+	JobCancelled: true,
+}
+
+// ValidJobState reports whether s is a recognized job state.
+func ValidJobState(s JobState) bool { return jobStates[s] }

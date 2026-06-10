@@ -43,6 +43,12 @@ func SubjectAnswer(ticket string) string { return "mesh.answer." + ticket }
 // taps (dashboard, e2e) watch the lifecycle without polling the KV.
 func SubjectTicket(ticket string) string { return "mesh.ticket." + ticket }
 
+// SubjectJob names the job observability event (KindJob, #23). The jobs KV
+// record is the authority for job state; this event only lets taps (dashboard,
+// e2e) watch intake/lifecycle without polling the KV. mesh.job.* matches the
+// mesh.> tap.
+func SubjectJob(id string) string { return "mesh.job." + id }
+
 // Subscription patterns.
 const (
 	PatternAll        = "mesh.>"
@@ -53,6 +59,7 @@ const (
 	PatternAsks       = "mesh.ask.>"
 	PatternAnswers    = "mesh.answer.>"
 	PatternTickets    = "mesh.ticket.>"
+	PatternJobs       = "mesh.job.>"
 )
 
 // KV buckets. One authority per fact: the registry bucket is the single
@@ -61,16 +68,20 @@ const (
 // "who holds which path" — the CAS record is the lock, announce is advisory.
 // The tickets bucket is the single source of truth for ticket state —
 // mesh.ticket.<ticket> events are derived observability.
+// The jobs bucket is the single source of truth for autonomous work-unit
+// state; mesh.job.<id> events are derived observability.
 const (
 	BucketRegistry = "registry"
 	BucketClaims   = "claims"
 	BucketTickets  = "tickets"
+	BucketJobs     = "jobs"
 )
 
 // Streams (bounded).
 const (
 	StreamAudit   = "audit"
 	StreamTickets = "ticket-events"
+	StreamJobs    = "job-events"
 )
 
 // StreamNotes is the per-repo durable blackboard stream name.

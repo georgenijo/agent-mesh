@@ -1,0 +1,10 @@
+{
+  "id": "01976f00-0000-7000-8000-00000000007e",
+  "repo": "owner/repo",
+  "source": "github",
+  "sourceRef": "owner/repo#123",
+  "title": "Calendar export drops timezone",
+  "body": "ICS export writes naive local times; should be UTC with TZID.",
+  "state": "open",
+  "createdAt": "2026-06-08T00:00:00Z"
+}

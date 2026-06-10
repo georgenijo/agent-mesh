@@ -168,6 +168,32 @@ func (p TicketPayload) validate() error {
 	return nil
 }
 
+// JobPayload is the autonomous work-unit observability event (#23, KindJob).
+// An observability tap only: the jobs KV record (internal/job) is the
+// authority for job state; this event lets the dashboard and e2e watch intake
+// without polling the KV. It carries just enough to render a job row.
+type JobPayload struct {
+	ID     string   `json:"id"`
+	Repo   string   `json:"repo"`
+	Source string   `json:"source"` // manual | github
+	Title  string   `json:"title"`
+	State  JobState `json:"state"`
+}
+
+func (p JobPayload) validate() error {
+	for field, val := range map[string]string{
+		"id": p.ID, "repo": p.Repo, "source": p.Source, "title": p.Title,
+	} {
+		if err := requireField(field, val); err != nil {
+			return err
+		}
+	}
+	if !ValidJobState(p.State) {
+		return fmt.Errorf("unknown job state %q", p.State)
+	}
+	return nil
+}
+
 // payloadKinds maps each kind to its expected payload validator, so DecodeInto
 // can reject a payload that does not match the envelope's kind.
 type validator interface{ validate() error }
@@ -194,6 +220,8 @@ func payloadFor(kind Kind) validator {
 		return &NotePayload{}
 	case KindTicket:
 		return &TicketPayload{}
+	case KindJob:
+		return &JobPayload{}
 	default:
 		return nil
 	}

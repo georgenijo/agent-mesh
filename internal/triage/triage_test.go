@@ -81,7 +81,17 @@ func newFixture(t *testing.T) fixture {
 
 func newTriager(t *testing.T, cli *bus.Client, invoke func(context.Context, string) ([]byte, error)) *Triager {
 	t.Helper()
-	tr, err := New(cli, Options{PlannerCLI: "stub"})
+	return newTriagerOpts(t, cli, Options{PlannerCLI: "stub"}, invoke)
+}
+
+// newTriagerOpts builds a triager with explicit retry/clock options, for the
+// #64 backoff tests. PlannerCLI defaults to "stub" if unset.
+func newTriagerOpts(t *testing.T, cli *bus.Client, opts Options, invoke func(context.Context, string) ([]byte, error)) *Triager {
+	t.Helper()
+	if opts.PlannerCLI == "" {
+		opts.PlannerCLI = "stub"
+	}
+	tr, err := New(cli, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,27 +206,36 @@ func TestTriageHappyPathPersistsDAGAndTransitionsJob(t *testing.T) {
 	}
 }
 
-// TestTriageTypedFailures pins the typed code each malformed-planner shape
-// maps to, and that every one fails the job without touching the process.
+// TestTriageTypedFailures pins the typed code each malformed-planner shape maps
+// to, the #64 transient/permanent classification, and that every one degrades
+// without touching the process. PERMANENT codes (bad_plan/invalid_dag) fail the
+// job on the first sweep; TRANSIENT codes (planner_unavailable/planner_failed)
+// keep the job open for a backed-off retry. Either way a typed KindTriage error
+// event carries the code.
 func TestTriageTypedFailures(t *testing.T) {
 	cases := []struct {
-		name   string
-		stdout string
-		err    error
-		code   envelope.TriageErrorCode
+		name      string
+		stdout    string
+		err       error
+		code      envelope.TriageErrorCode
+		permanent bool
 	}{
-		{"planner cannot run", "", errors.New("exec: no such file"), envelope.TriagePlannerUnavailable},
-		{"stdout not JSON", "I had a thought about your repo...", nil, envelope.TriagePlannerFailed},
-		{"stdout not a result", `{"type":"system","subtype":"init"}`, nil, envelope.TriagePlannerFailed},
-		{"result is_error", `{"type":"result","subtype":"success","is_error":true,"result":"x"}`, nil, envelope.TriagePlannerFailed},
-		{"result error subtype", `{"type":"result","subtype":"error_during_execution","is_error":false,"result":""}`, nil, envelope.TriagePlannerFailed},
-		{"result text is prose", successEnvelope("Here is your plan: 1) do it"), nil, envelope.TriageBadPlan},
-		{"plan wrong version", successEnvelope(`{"version":9,"nodes":[{"id":"a","title":"t","role":"builder"}]}`), nil, envelope.TriageInvalidDAG},
-		{"plan unknown role", successEnvelope(`{"version":1,"nodes":[{"id":"a","title":"t","role":"wizard"}]}`), nil, envelope.TriageInvalidDAG},
+		// planner_unavailable is always transient (the CLI may recover).
+		{"planner cannot run", "", errors.New("exec: no such file"), envelope.TriagePlannerUnavailable, false},
+		// planner_failed WITHOUT an api_error_status is deterministic → permanent.
+		{"stdout not JSON", "I had a thought about your repo...", nil, envelope.TriagePlannerFailed, true},
+		{"stdout not a result", `{"type":"system","subtype":"init"}`, nil, envelope.TriagePlannerFailed, true},
+		{"result is_error", `{"type":"result","subtype":"success","is_error":true,"result":"x"}`, nil, envelope.TriagePlannerFailed, true},
+		{"result error subtype", `{"type":"result","subtype":"error_during_execution","is_error":false,"result":""}`, nil, envelope.TriagePlannerFailed, true},
+		// planner_failed WITH an api_error_status is a transient API blip → retry.
+		{"result api_error_status", `{"type":"result","subtype":"success","is_error":false,"result":"x","api_error_status":429}`, nil, envelope.TriagePlannerFailed, false},
+		{"result text is prose", successEnvelope("Here is your plan: 1) do it"), nil, envelope.TriageBadPlan, true},
+		{"plan wrong version", successEnvelope(`{"version":9,"nodes":[{"id":"a","title":"t","role":"builder"}]}`), nil, envelope.TriageInvalidDAG, true},
+		{"plan unknown role", successEnvelope(`{"version":1,"nodes":[{"id":"a","title":"t","role":"wizard"}]}`), nil, envelope.TriageInvalidDAG, true},
 		{"plan cycle", successEnvelope(`{"version":1,"nodes":[` +
 			`{"id":"a","title":"t","role":"builder","dependsOn":["b"]},` +
-			`{"id":"b","title":"t","role":"builder","dependsOn":["a"]}]}`), nil, envelope.TriageInvalidDAG},
-		{"plan missing node id", successEnvelope(`{"version":1,"nodes":[{"title":"t","role":"builder"}]}`), nil, envelope.TriageInvalidDAG},
+			`{"id":"b","title":"t","role":"builder","dependsOn":["a"]}]}`), nil, envelope.TriageInvalidDAG, true},
+		{"plan missing node id", successEnvelope(`{"version":1,"nodes":[{"title":"t","role":"builder"}]}`), nil, envelope.TriageInvalidDAG, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,8 +250,12 @@ func TestTriageTypedFailures(t *testing.T) {
 			if err != nil || !found {
 				t.Fatalf("get job: found=%v err=%v", found, err)
 			}
-			if got.State != envelope.JobFailed {
-				t.Fatalf("job state = %s, want failed", got.State)
+			wantState := envelope.JobOpen // transient: stays open, backing off
+			if tc.permanent {
+				wantState = envelope.JobFailed // permanent: fails fast
+			}
+			if got.State != wantState {
+				t.Fatalf("job state = %s, want %s (permanent=%v)", got.State, wantState, tc.permanent)
 			}
 			tasks, err := f.tasks.ListByJob(rec.ID)
 			if err != nil {
@@ -259,19 +282,219 @@ func TestTriageTypedFailures(t *testing.T) {
 	}
 }
 
-func TestTriageAttemptsEachJobOnce(t *testing.T) {
-	f := newFixture(t)
-	f.openJob(t)
+// fakeClock is a settable monotonic-ish clock for the #64 backoff tests.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
 
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// TestTriageTransientRetriesWithBackoff: a transient failure keeps the job open,
+// is NOT re-attempted while backing off, and IS re-attempted once the backoff
+// window elapses — eventually succeeding.
+func TestTriageTransientRetriesWithBackoff(t *testing.T) {
+	f := newFixture(t)
+	rec := f.openJob(t)
+
+	clk := &fakeClock{now: time.Now().UTC()}
 	calls := 0
-	tr := newTriager(t, f.cli, func(context.Context, string) ([]byte, error) {
+	tr := newTriagerOpts(t, f.cli, Options{
+		MaxAttempts: 5,
+		Backoff:     30 * time.Second,
+		now:         clk.Now,
+	}, func(context.Context, string) ([]byte, error) {
 		calls++
-		return nil, errors.New("planner down")
+		if calls < 3 {
+			return nil, errors.New("planner down") // transient: planner_unavailable
+		}
+		return []byte(successEnvelope(validPlanJSON)), nil // recovers
 	})
-	tr.sweepOnce()
+
+	// Attempt 1 (transient): job stays open, schedule a 30s backoff.
 	tr.sweepOnce()
 	if calls != 1 {
-		t.Fatalf("planner invoked %d times across sweeps, want 1", calls)
+		t.Fatalf("after first sweep calls=%d, want 1", calls)
+	}
+	if got, _, _ := f.jobs.Get(rec.ID); got.State != envelope.JobOpen {
+		t.Fatalf("after transient failure job is %s, want open", got.State)
+	}
+
+	// Still backing off: a sweep before the deadline must NOT re-invoke.
+	clk.advance(10 * time.Second)
+	tr.sweepOnce()
+	if calls != 1 {
+		t.Fatalf("planner re-invoked during backoff window (calls=%d)", calls)
+	}
+
+	// Backoff elapsed: attempt 2 (still transient), 30s window again.
+	clk.advance(25 * time.Second)
+	tr.sweepOnce()
+	if calls != 2 {
+		t.Fatalf("after backoff calls=%d, want 2", calls)
+	}
+	if got, _, _ := f.jobs.Get(rec.ID); got.State != envelope.JobOpen {
+		t.Fatalf("after second transient failure job is %s, want open", got.State)
+	}
+
+	// Second backoff is 60s (exponential): a 30s advance is not yet due.
+	clk.advance(30 * time.Second)
+	tr.sweepOnce()
+	if calls != 2 {
+		t.Fatalf("planner re-invoked before exponential backoff elapsed (calls=%d)", calls)
+	}
+
+	// Past the 60s window: attempt 3 succeeds, job triaged.
+	clk.advance(35 * time.Second)
+	tr.sweepOnce()
+	if calls != 3 {
+		t.Fatalf("after exponential backoff calls=%d, want 3", calls)
+	}
+	if got, _, _ := f.jobs.Get(rec.ID); got.State != envelope.JobTriaged {
+		t.Fatalf("after recovery job is %s, want triaged", got.State)
+	}
+	// The attempt record is cleared once the job leaves open.
+	if _, found, _ := tr.attempts.get(rec.ID); found {
+		t.Fatal("attempt record survived a successful triage")
+	}
+}
+
+// TestTriagePermanentFailsFast: a permanent failure (bad_plan/invalid_dag) fails
+// the job on the first attempt with no retry — retrying garbage burns money.
+func TestTriagePermanentFailsFast(t *testing.T) {
+	f := newFixture(t)
+	rec := f.openJob(t)
+
+	calls := 0
+	tr := newTriagerOpts(t, f.cli, Options{MaxAttempts: 5}, func(context.Context, string) ([]byte, error) {
+		calls++
+		return []byte(successEnvelope(`{"version":1,"nodes":[{"id":"a","title":"t","role":"wizard"}]}`)), nil
+	})
+	tr.sweepOnce()
+	tr.sweepOnce() // a failed job is terminal; no further attempts
+	if calls != 1 {
+		t.Fatalf("permanent failure was retried (calls=%d, want 1)", calls)
+	}
+	got, _, _ := f.jobs.Get(rec.ID)
+	if got.State != envelope.JobFailed {
+		t.Fatalf("permanent failure left job %s, want failed", got.State)
+	}
+	if _, found, _ := tr.attempts.get(rec.ID); found {
+		t.Fatal("attempt record survived a terminal failure")
+	}
+}
+
+// TestTriageMaxAttemptsThenFail: a transient failure that never recovers is
+// retried up to the cap, then fails terminally with the typed code.
+func TestTriageMaxAttemptsThenFail(t *testing.T) {
+	f := newFixture(t)
+	rec := f.openJob(t)
+
+	clk := &fakeClock{now: time.Now().UTC()}
+	calls := 0
+	tr := newTriagerOpts(t, f.cli, Options{
+		MaxAttempts: 3,
+		Backoff:     1 * time.Second,
+		now:         clk.Now,
+	}, func(context.Context, string) ([]byte, error) {
+		calls++
+		return nil, errors.New("planner permanently down")
+	})
+
+	// Drive enough due sweeps to exhaust the cap. Generous advance each time
+	// so the (exponential) backoff window is always elapsed.
+	for i := 0; i < 10; i++ {
+		tr.sweepOnce()
+		clk.advance(10 * time.Minute)
+	}
+	if calls != 3 {
+		t.Fatalf("planner invoked %d times, want exactly MaxAttempts=3", calls)
+	}
+	got, _, _ := f.jobs.Get(rec.ID)
+	if got.State != envelope.JobFailed {
+		t.Fatalf("after exhausting attempts job is %s, want failed", got.State)
+	}
+	f.waitKinds(t, map[envelope.Kind]int{envelope.KindTriage: 1})
+	sawTerminal := false
+	for _, env := range f.events() {
+		if env.Kind != envelope.KindJob {
+			continue
+		}
+		var p envelope.JobPayload
+		if err := envelope.DecodeInto(env, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.ID == rec.ID && p.State == envelope.JobFailed {
+			sawTerminal = true
+		}
+	}
+	if !sawTerminal {
+		t.Fatal("no terminal KindJob failed event after exhausting attempts")
+	}
+	if _, found, _ := tr.attempts.get(rec.ID); found {
+		t.Fatal("attempt record survived terminal failure")
+	}
+}
+
+// TestTriageBackoffSurvivesRestart: the durable attempt state means a NEW
+// triager (a fresh coordinator lifetime) over the SAME bus resumes the job's
+// schedule — it does not restart from attempt 0 and does not re-hammer a job
+// that is still mid-backoff.
+func TestTriageBackoffSurvivesRestart(t *testing.T) {
+	f := newFixture(t)
+	rec := f.openJob(t)
+
+	clk := &fakeClock{now: time.Now().UTC()}
+	calls := 0
+	invoke := func(context.Context, string) ([]byte, error) {
+		calls++
+		return nil, errors.New("planner down")
+	}
+
+	// Lifetime 1: one transient attempt, then a 30s backoff scheduled durably.
+	tr1 := newTriagerOpts(t, f.cli, Options{MaxAttempts: 3, Backoff: 30 * time.Second, now: clk.Now}, invoke)
+	tr1.sweepOnce()
+	if calls != 1 {
+		t.Fatalf("lifetime-1 calls=%d, want 1", calls)
+	}
+
+	// Lifetime 2 (fresh triager, same durable bucket): mid-backoff, so it must
+	// NOT re-attempt — proving attempt state survived and was not reset to 0.
+	tr2 := newTriagerOpts(t, f.cli, Options{MaxAttempts: 3, Backoff: 30 * time.Second, now: clk.Now}, invoke)
+	clk.advance(10 * time.Second) // still inside the 30s window
+	tr2.sweepOnce()
+	if calls != 1 {
+		t.Fatalf("restart re-hammered a job mid-backoff (calls=%d, want 1)", calls)
+	}
+
+	// Confirm the persisted record carried the attempt count across lifetimes.
+	att, found, err := tr2.attempts.get(rec.ID)
+	if err != nil || !found {
+		t.Fatalf("attempt record not durable: found=%v err=%v", found, err)
+	}
+	if att.Attempts != 1 {
+		t.Fatalf("persisted attempts=%d, want 1 (restart reset the counter)", att.Attempts)
+	}
+
+	// Once the window elapses, lifetime 2 resumes from attempt 2 (not 1).
+	clk.advance(25 * time.Second)
+	tr2.sweepOnce()
+	if calls != 2 {
+		t.Fatalf("after backoff lifetime-2 calls=%d, want 2", calls)
+	}
+	att, _, _ = tr2.attempts.get(rec.ID)
+	if att.Attempts != 2 {
+		t.Fatalf("after resumed attempt persisted attempts=%d, want 2", att.Attempts)
 	}
 }
 
@@ -347,8 +570,10 @@ func TestExecPlannerTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != envelope.JobFailed {
-		t.Fatalf("job state = %s, want failed", got.State)
+	// A timeout is planner_unavailable — TRANSIENT (#64): the job stays open
+	// with a scheduled backoff rather than failing on the first try.
+	if got.State != envelope.JobOpen {
+		t.Fatalf("job state = %s, want open (transient backoff)", got.State)
 	}
 	f.waitKinds(t, map[envelope.Kind]int{envelope.KindTriage: 1})
 	for _, env := range f.events() {

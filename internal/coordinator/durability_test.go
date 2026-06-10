@@ -150,10 +150,12 @@ func TestRegistryDoesNotSurviveRestart(t *testing.T) {
 	}
 }
 
-// TestTriageReSweepsStillOpenJobAfterRestart confirms the self-healing sweep:
-// the in-memory one-attempt set resets on restart, so a job left open (e.g. the
-// first coordinator died before triaging it) is durable AND re-attempted by the
-// new coordinator's sweep. This is the intended interaction, not a bug.
+// TestTriageReSweepsStillOpenJobAfterRestart confirms the self-healing sweep: a
+// job left open by the first lifetime (e.g. the coordinator died before triaging
+// it — here, triage was simply off) is durable AND triaged by the new
+// coordinator's sweep. The first lifetime made no attempt, so there is no #64
+// attempt record to resume; the fresh sweep triages from a clean slate. (The
+// resume-mid-backoff case is unit-tested in internal/triage.)
 func TestTriageReSweepsStillOpenJobAfterRestart(t *testing.T) {
 	cfg := fastConfig(t)
 	cfg.TriageTimeout = 10 * time.Second
@@ -176,7 +178,7 @@ func TestTriageReSweepsStillOpenJobAfterRestart(t *testing.T) {
 	c1.Stop()
 
 	// Second lifetime: planner ON. The durable still-open job must be swept and
-	// driven to triaged by the fresh coordinator — the one-attempt set reset.
+	// driven to triaged by the fresh coordinator.
 	cfg.PlannerCLI = plannerScript(t, coordPlanJSON)
 	c2 := New(cfg, nil)
 	if err := c2.Start(); err != nil {

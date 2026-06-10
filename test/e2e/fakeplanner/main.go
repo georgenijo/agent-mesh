@@ -8,17 +8,23 @@
 // It ignores all argv (the triager passes claude's -p/--output-format/--model
 // flags plus the prompt). FAKEPLANNER_MODE selects the behavior:
 //
-//	""         emit a success result whose text is a small valid plan DAG
-//	"garbage"  emit prose that is not JSON at all (malformed-planner path)
-//	"parallel" emit a plan of two INDEPENDENT builder nodes (#26: two workers
-//	           must run in parallel on the same repo without sharing a tree)
-//	"single"   emit a plan with exactly one builder node
+//	""                  emit a success result whose text is a small valid plan DAG
+//	"garbage"           emit prose that is not JSON at all (malformed-planner path)
+//	"parallel"          emit a plan of two INDEPENDENT builder nodes (#26: two workers
+//	                    must run in parallel on the same repo without sharing a tree)
+//	"single"            emit a plan with exactly one builder node
+//	"transient-then-ok" exit non-zero (a TRANSIENT planner_unavailable failure) for
+//	                    the first FAKEPLANNER_FAILS invocations, then emit the valid
+//	                    plan — the #64 retry/backoff path. Invocations are counted
+//	                    durably in the file at FAKEPLANNER_COUNTER (the planner is a
+//	                    fresh process per attempt, so the count cannot live in memory).
 package main
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 )
 
 const planJSON = `{"version":1,"nodes":[` +
@@ -43,6 +49,14 @@ func main() {
 		plan = parallelPlanJSON
 	case "single":
 		plan = singlePlanJSON
+	case "transient-then-ok":
+		if transientFailNow() {
+			// Exit non-zero with no result envelope: the triager classifies a
+			// planner that could not run to completion as planner_unavailable
+			// (TRANSIENT), so the job backs off and retries (#64).
+			fmt.Fprintln(os.Stderr, "fakeplanner: simulated transient outage")
+			os.Exit(1)
+		}
 	}
 	out, err := json.Marshal(map[string]any{
 		"type": "result", "subtype": "success", "is_error": false,
@@ -54,4 +68,29 @@ func main() {
 		os.Exit(2)
 	}
 	os.Stdout.Write(append(out, '\n')) //nolint:errcheck
+}
+
+// transientFailNow bumps the durable invocation counter at FAKEPLANNER_COUNTER
+// and reports whether this invocation should fail. The first FAKEPLANNER_FAILS
+// invocations (default 1) fail; the rest succeed. Counting on disk is required
+// because each planner attempt is a fresh process.
+func transientFailNow() bool {
+	fails := 1
+	if raw := os.Getenv("FAKEPLANNER_FAILS"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			fails = n
+		}
+	}
+	counter := os.Getenv("FAKEPLANNER_COUNTER")
+	if counter == "" {
+		// No counter file: fail every time (degenerate; tests always set one).
+		return true
+	}
+	n := 0
+	if b, err := os.ReadFile(counter); err == nil {
+		n, _ = strconv.Atoi(string(b)) //nolint:errcheck
+	}
+	n++
+	_ = os.WriteFile(counter, []byte(strconv.Itoa(n)), 0o600) //nolint:errcheck
+	return n <= fails
 }

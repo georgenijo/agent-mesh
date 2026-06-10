@@ -123,10 +123,15 @@ func (c *Coordinator) Start() error {
 	// so they are whole before the triage loop / #25 scheduler (started below,
 	// only after the bus is up) can sweep them. Registry/claims stay in-memory
 	// by omission — explicit non-goal (DECISIONS.md: lease + re-establishment).
+	//
+	// BucketTriageAttempts (#64) is persisted for the same reason: it holds the
+	// triage retry attempt count + next-retry deadline, so a job mid-backoff
+	// resumes its schedule across a restart instead of restarting from attempt 0
+	// (and so a still-open job is not re-hammered on the next lifetime's sweep).
 	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{
 		StreamDir:      c.cfg.StreamsDir(),
 		PersistDir:     c.cfg.BucketsDir(),
-		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks},
+		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts},
 		Logger:         c.log,
 	})
 	if err := c.srv.Start(); err != nil {
@@ -158,12 +163,14 @@ func (c *Coordinator) Start() error {
 	// a typed event on the job, never a coordinator crash.
 	if c.cfg.PlannerCLI != "" {
 		tri, err := triage.New(cli, triage.Options{
-			PlannerCLI: c.cfg.PlannerCLI,
-			Model:      c.cfg.PlannerModel,
-			Timeout:    c.cfg.TriageTimeout,
-			Interval:   sweepInterval(c.cfg.HeartbeatInterval),
-			WorkDir:    c.cfg.MeshDir, // clean cwd: no CLAUDE.md context tax (M0 spike)
-			Log:        c.log,
+			PlannerCLI:  c.cfg.PlannerCLI,
+			Model:       c.cfg.PlannerModel,
+			Timeout:     c.cfg.TriageTimeout,
+			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
+			WorkDir:     c.cfg.MeshDir,           // clean cwd: no CLAUDE.md context tax (M0 spike)
+			MaxAttempts: c.cfg.TriageMaxAttempts, // #64 retry/backoff policy
+			Backoff:     c.cfg.TriageBackoff,
+			Log:         c.log,
 		})
 		if err != nil {
 			c.Stop()

@@ -52,6 +52,7 @@
   </div>
 
   <div class="topbar-right">
+    <button type="button" class="jf-fab" id="submitJobBtn" aria-haspopup="dialog">+ Submit Job</button>
     <span id="presencePill" class="pill">0 agents</span>
     <div class="conn-badge">
       <span id="connDot" class="dot"></span>
@@ -177,7 +178,30 @@
   <span id="expertsPill" class="pill"></span>
 </div>
 
+<!-- ══════ P4: Job Submit Form + Jobs Panel ══════ -->
+<div id="jobFormOverlay" class="jf-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="jfTitle">
+  <div class="jf-sheet">
+    <div class="jf-hdr">
+      <span id="jfTitle" class="jf-title">SUBMIT JOB</span>
+      <button type="button" class="jf-close" id="jfClose" aria-label="Close">&#x2715;</button>
+    </div>
+    <form id="jobForm" class="jf-body" autocomplete="off" novalidate>
+      <label class="jf-label" for="jfRepo">Repo <span class="jf-req">*</span></label>
+      <input class="jf-input" id="jfRepo" name="repo" type="text" placeholder="e.g. myproject" required spellcheck="false" autocomplete="off">
+      <label class="jf-label" for="jfTitle2">Title <span class="jf-req">*</span></label>
+      <input class="jf-input" id="jfTitle2" name="title" type="text" placeholder="One-line description of the job" required spellcheck="false" autocomplete="off">
+      <label class="jf-label" for="jfBody">Body <span class="jf-opt">(optional)</span></label>
+      <textarea class="jf-input jf-textarea" id="jfBody" name="body" rows="5" placeholder="Detailed description, context, acceptance criteria…" spellcheck="false"></textarea>
+      <div class="jf-actions">
+        <button type="submit" class="jf-submit" id="jfSubmit">Submit Job</button>
+        <span class="jf-status" id="jfStatus" aria-live="polite"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script src="app.js"></script>
 <script src="enhance.js?v=3"></script>
+<script src="jobform.js?v=1"></script>
 </body>
 </html>

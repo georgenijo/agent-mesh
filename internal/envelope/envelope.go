@@ -46,6 +46,14 @@ const (
 	// KV record is the authority for job state; mesh.job.<id> envelopes are
 	// derived taps, mirroring how KindTicket relates to the tickets bucket.
 	KindJob Kind = "job"
+	// KindTask is the DAG-node observability event (#24). The tasks KV record
+	// (internal/task) is the authority for task state; mesh.task.<id>
+	// envelopes are derived taps, mirroring KindJob.
+	KindTask Kind = "task"
+	// KindTriage is the planner-outcome observability event (#24): one per
+	// triage attempt, carrying the typed ok|error result so the dashboard and
+	// audit taps see why a job became triaged or failed without polling KV.
+	KindTriage Kind = "triage"
 )
 
 var knownKinds = map[Kind]bool{
@@ -60,6 +68,8 @@ var knownKinds = map[Kind]bool{
 	KindNote:      true,
 	KindTicket:    true,
 	KindJob:       true,
+	KindTask:      true,
+	KindTriage:    true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

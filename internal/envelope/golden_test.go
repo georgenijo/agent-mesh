@@ -88,7 +88,17 @@ func goldenCases() []goldenCase {
 				Branch:  "mesh/worker/01976f00-0000-7000-8000-0000000000a1",
 				HeadSHA: "deadbeefcafef00ddeadbeefcafef00ddeadbeef", Verdict: ReviewRequestChanges,
 				Notes: "missing error handling on the RLS path", SessionID: "sess-auth-expert",
-				NumTurns: 3}, &ReviewPayload{}},
+				NumTurns: 3, CostUSD: 0.0042}, &ReviewPayload{}},
+		{KindReviewRequest, "", SubjectReviewRequest("auth"),
+			&ReviewRequestPayload{Task: "01976f00-0000-7000-8000-0000000000a1", Job: goldenTicket,
+				Role: "auth", Repo: "demo",
+				Branch:       "mesh/worker/01976f00-0000-7000-8000-0000000000a1",
+				BaseSHA:      "cafef00dcafef00dcafef00dcafef00dcafef00d",
+				HeadSHA:      "deadbeefcafef00ddeadbeefcafef00ddeadbeef",
+				ChangedFiles: []string{"src/EventForm.tsx", "src/api.ts"},
+				Instruction:  "implement RRULE builder",
+				Diff:         "--- a/src/api.ts\n+++ b/src/api.ts\n@@ -1 +1 @@\n-old\n+new\n"},
+			&ReviewRequestPayload{}},
 	}
 }
 
@@ -309,6 +319,7 @@ func TestContractStrings(t *testing.T) {
 		{"AuditTriage", string(AuditTriage), "triage"},
 		{"AuditWorker", string(AuditWorker), "worker"},
 		{"AuditFleet", string(AuditFleet), "fleet"},
+		{"AuditReview", string(AuditReview), "review"},
 		// Review verdicts and error codes.
 		{"ReviewApprove", string(ReviewApprove), "approve"},
 		{"ReviewRequestChanges", string(ReviewRequestChanges), "request_changes"},
@@ -336,6 +347,7 @@ func TestContractStrings(t *testing.T) {
 		{"KindWorker", string(KindWorker), "worker"},
 		{"KindFleet", string(KindFleet), "fleet"},
 		{"KindReview", string(KindReview), "review"},
+		{"KindReviewRequest", string(KindReviewRequest), "review_request"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

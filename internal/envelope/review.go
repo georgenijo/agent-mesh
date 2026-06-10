@@ -21,6 +21,23 @@ func SubjectReview(task string) string { return "mesh.review." + task }
 // PatternReviews matches every expert-review event.
 const PatternReviews = "mesh.review.>"
 
+// SubjectReviewRequest names the role-addressed review-request subject (#80):
+// the scheduler publishes one KindReviewRequest here per successful worker
+// diff it gates, and the expert serving that role answers with a KindReview
+// event on mesh.review.<task>. The token is "review-req" — deliberately NOT a
+// child of mesh.review.> — so taps subscribed to PatternReviews (verdicts)
+// never receive requests.
+func SubjectReviewRequest(role string) string { return "mesh.review-req." + role }
+
+// PatternReviewRequests matches every review-request envelope.
+const PatternReviewRequests = "mesh.review-req.>"
+
+// MaxReviewRequestDiffBytes caps the diff text one review request carries on
+// the wire. It mirrors the runtime layer's own per-prompt diff cap, and keeps
+// the payload comfortably under MaxPayloadBytes; the publisher truncates with
+// a marker rather than failing the request.
+const MaxReviewRequestDiffBytes = 256 * 1024
+
 // ReviewVerdict is the typed outcome of one expert review over a worker diff
 // (#27). It mirrors the claim/turn enum discipline (a closed, exact-token set,
 // never substring-matched) so a gate can branch on it without scraping prose.
@@ -126,6 +143,11 @@ type ReviewPayload struct {
 	Notes     string          `json:"notes,omitempty"`
 	SessionID string          `json:"sessionID,omitempty"`
 	NumTurns  int             `json:"numTurns,omitempty"`
+	// CostUSD is the review turn's reported total_cost_usd (0 when the runtime
+	// did not report one). Additive (#80): a review is an expert LLM turn and
+	// must count against the same fleet budget meter as a worker run, so the
+	// verdict event carries its cost exactly as WorkerPayload does.
+	CostUSD float64 `json:"costUSD,omitempty"`
 }
 
 func (p ReviewPayload) validate() error {
@@ -142,4 +164,34 @@ func (p ReviewPayload) validate() error {
 		return fmt.Errorf("decided review must not carry an error code (got %q)", p.Code)
 	}
 	return nil
+}
+
+// ReviewRequestPayload is the scheduler→expert review request (#80,
+// KindReviewRequest, published on mesh.review-req.<role>): one successful
+// worker diff handed to the reviewing role's expert. Task keys the verdict
+// event the expert answers with (mesh.review.<task>); Role is the reviewing
+// role addressed. Branch/BaseSHA/HeadSHA/ChangedFiles are the commit metadata
+// #26 recorded for the diff; Diff is the unified diff text (bounded by
+// MaxReviewRequestDiffBytes at the publish site); Instruction is the task's
+// own acceptance context so the expert judges the diff against intent. The
+// request carries no authority over any record — the typed KindReview verdict
+// is the gate's input, and the tasks KV stays the one authority.
+type ReviewRequestPayload struct {
+	Task         string   `json:"task"`
+	Job          string   `json:"job,omitempty"`
+	Role         string   `json:"role"`
+	Repo         string   `json:"repo,omitempty"`
+	Branch       string   `json:"branch,omitempty"`
+	BaseSHA      string   `json:"baseSHA,omitempty"`
+	HeadSHA      string   `json:"headSHA,omitempty"`
+	ChangedFiles []string `json:"changedFiles,omitempty"`
+	Instruction  string   `json:"instruction,omitempty"`
+	Diff         string   `json:"diff,omitempty"`
+}
+
+func (p ReviewRequestPayload) validate() error {
+	if err := requireField("task", p.Task); err != nil {
+		return err
+	}
+	return requireField("role", p.Role)
 }

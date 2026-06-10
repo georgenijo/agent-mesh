@@ -68,27 +68,35 @@ const (
 	// an expert produces over a task's worker diff, carrying the typed verdict
 	// (approve|request_changes|reject|error). Like KindWorker it holds no
 	// authority over a KV record; it records how a diff was judged so the
-	// dashboard and a future review-gating scheduler can see the verdict.
+	// dashboard and the review-gating scheduler (#80) can see the verdict.
 	KindReview Kind = "review"
+	// KindReviewRequest is the scheduler→expert review request (#80): the
+	// role-addressed envelope that hands a successful worker diff to the
+	// reviewing role's expert. The expert answers with a KindReview event on
+	// mesh.review.<task>; the request itself carries no authority — the tasks
+	// KV record stays the one authority for task state, and the verdict event
+	// is the gate's input, not a second authority.
+	KindReviewRequest Kind = "review_request"
 )
 
 var knownKinds = map[Kind]bool{
-	KindRegister:  true,
-	KindLeave:     true,
-	KindHeartbeat: true,
-	KindStatus:    true,
-	KindAnnounce:  true,
-	KindClaim:     true,
-	KindAsk:       true,
-	KindAnswer:    true,
-	KindNote:      true,
-	KindTicket:    true,
-	KindJob:       true,
-	KindTask:      true,
-	KindTriage:    true,
-	KindWorker:    true,
-	KindFleet:     true,
-	KindReview:    true,
+	KindRegister:      true,
+	KindLeave:         true,
+	KindHeartbeat:     true,
+	KindStatus:        true,
+	KindAnnounce:      true,
+	KindClaim:         true,
+	KindAsk:           true,
+	KindAnswer:        true,
+	KindNote:          true,
+	KindTicket:        true,
+	KindJob:           true,
+	KindTask:          true,
+	KindTriage:        true,
+	KindWorker:        true,
+	KindFleet:         true,
+	KindReview:        true,
+	KindReviewRequest: true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

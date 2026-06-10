@@ -286,6 +286,8 @@ func payloadFor(kind Kind) validator {
 		return &FleetPayload{}
 	case KindReview:
 		return &ReviewPayload{}
+	case KindReviewRequest:
+		return &ReviewRequestPayload{}
 	default:
 		return nil
 	}

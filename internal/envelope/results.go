@@ -195,6 +195,7 @@ const (
 	AuditTriage   AuditCategory = "triage"   // a planner triage attempt resolved
 	AuditWorker   AuditCategory = "worker"   // a worker run on a task resolved
 	AuditFleet    AuditCategory = "fleet"    // scheduler fleet pause/resume
+	AuditReview   AuditCategory = "review"   // an expert review verdict over a worker diff (#80)
 )
 
 var auditCategories = map[AuditCategory]bool{
@@ -208,6 +209,7 @@ var auditCategories = map[AuditCategory]bool{
 	AuditTriage:   true,
 	AuditWorker:   true,
 	AuditFleet:    true,
+	AuditReview:   true,
 }
 
 // ValidAuditCategory reports whether c is a recognized audit category.

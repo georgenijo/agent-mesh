@@ -175,6 +175,101 @@ func (f *fixture) gitInRepo(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// gitInDir runs git in an arbitrary directory (e.g. a worker worktree).
+func gitInDir(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// commitFile writes name=content inside dir and commits it there.
+func commitFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInDir(t, dir, "add", "-A")
+	gitInDir(t, dir, "-c", "user.name=test", "-c", "user.email=test@localhost",
+		"commit", "-q", "--no-gpg-sign", "-m", "test: "+name)
+}
+
+// TestRespawnAfterSuccessfulRunAllocatesFreshBranch locks the #85 worker-core
+// fix. After a successful first run the retention policy removes the worktree
+// but the task branch survives (branches are never deleted), so a re-dispatch
+// of the same task — review retry, or an orphan re-run after a restart — used
+// to die on `git worktree add -b <existing branch>` as a typed spawn failure.
+// The allocator must treat a name as taken when its DIR or its BRANCH exists.
+func TestRespawnAfterSuccessfulRunAllocatesFreshBranch(t *testing.T) {
+	f := newFixture(t, "fakecli")
+	d := f.driver(t)
+	ctx := context.Background()
+	rec := f.task("builder")
+
+	w1, err := d.Spawn(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := w1.(*worker)
+	commitFile(t, first.dir, "work.txt", "attempt 1\n")
+	first.succeeded = true // success: retention removes the worktree, never the branch
+	if err := w1.Teardown(); err != nil {
+		t.Fatal(err)
+	}
+
+	w2, err := d.Spawn(ctx, rec)
+	if err != nil {
+		t.Fatalf("re-spawn after a successful run must allocate, got: %v", err)
+	}
+	second := w2.(*worker)
+	defer w2.Teardown() //nolint:errcheck
+	if second.branch == first.branch {
+		t.Fatalf("re-spawn reused branch %s; want a fresh branch per attempt", first.branch)
+	}
+}
+
+// TestRespawnMergesPriorOutputBranch: a re-dispatched task whose record
+// carries the prior attempt's output branch (the scheduler records it on
+// success) starts from a worktree that already contains that committed work —
+// review feedback must apply to code the retry can actually see. The merge is
+// captured into baseSHA, so the retry's own reported diff excludes the
+// inherited changes (same posture as dependency inheritance).
+func TestRespawnMergesPriorOutputBranch(t *testing.T) {
+	f := newFixture(t, "fakecli")
+	d := f.driver(t)
+	ctx := context.Background()
+	rec := f.task("builder")
+
+	w1, err := d.Spawn(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := w1.(*worker)
+	commitFile(t, first.dir, "work.txt", "attempt 1\n")
+	first.succeeded = true
+	if err := w1.Teardown(); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Branch = first.branch // what scheduler.SetBranch recorded on success
+	w2, err := d.Spawn(ctx, rec)
+	if err != nil {
+		t.Fatalf("re-spawn with recorded output branch: %v", err)
+	}
+	second := w2.(*worker)
+	defer w2.Teardown() //nolint:errcheck
+	if _, err := os.Stat(filepath.Join(second.dir, "work.txt")); err != nil {
+		t.Fatalf("prior attempt's committed work not inherited into the retry worktree: %v", err)
+	}
+	if head := gitInDir(t, second.dir, "rev-parse", "HEAD"); second.baseSHA != head {
+		t.Fatalf("baseSHA %s != post-merge HEAD %s; inherited work would pollute the retry's reported diff",
+			second.baseSHA, head)
+	}
+}
+
 func TestNewDriverValidation(t *testing.T) {
 	f := newFixture(t, workerScript(t, "", successResult))
 

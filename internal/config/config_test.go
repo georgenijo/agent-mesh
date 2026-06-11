@@ -176,6 +176,40 @@ func TestLoadWorkerKnobs(t *testing.T) {
 	}
 }
 
+// MESH_REVIEW_RETRIES (#85) bounds feedback-driven re-dispatch on a
+// request_changes verdict. Default 1; 0 is legal (retries off); negative or
+// non-integer is a config error.
+func TestLoadReviewRetries(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReviewRetries != DefaultReviewRetries {
+		t.Fatalf("ReviewRetries default = %d, want %d", cfg.ReviewRetries, DefaultReviewRetries)
+	}
+
+	t.Setenv(EnvReviewRetries, "0")
+	if cfg, err = Load(); err != nil || cfg.ReviewRetries != 0 {
+		t.Fatalf("ReviewRetries=0 → (%d, %v), want (0, nil): zero must mean retries off", cfg.ReviewRetries, err)
+	}
+
+	t.Setenv(EnvReviewRetries, "3")
+	if cfg, err = Load(); err != nil || cfg.ReviewRetries != 3 {
+		t.Fatalf("ReviewRetries=3 → (%d, %v)", cfg.ReviewRetries, err)
+	}
+
+	t.Setenv(EnvReviewRetries, "-1")
+	if _, err := Load(); err == nil {
+		t.Fatal("want error for negative review retries")
+	}
+	t.Setenv(EnvReviewRetries, "many")
+	if _, err := Load(); err == nil {
+		t.Fatal("want error for non-integer review retries")
+	}
+}
+
 func TestLoadRejectsBadDurations(t *testing.T) {
 	t.Setenv(EnvMeshDir, t.TempDir())
 

@@ -179,6 +179,12 @@ func (d *Driver) Spawn(ctx context.Context, rec task.Record) (scheduler.Worker, 
 		d.removeWorktree(repoPath, dir)
 		return nil, err
 	}
+	// A re-dispatched task additionally inherits its own prior attempt's
+	// committed output (#85) — see mergePrior.
+	if err := d.mergePrior(ctx, dir, rec); err != nil {
+		d.removeWorktree(repoPath, dir)
+		return nil, err
+	}
 	baseSHA, err := gitOut(ctx, dir, "rev-parse", "HEAD")
 	if err != nil {
 		d.removeWorktree(repoPath, dir)
@@ -224,10 +230,12 @@ func (d *Driver) resolveRepo(ctx context.Context, repo string) (string, error) {
 	return path, nil
 }
 
-// addWorktree creates one fresh worktree + branch for the task. When earlier
-// attempts of the same task preserved their worktrees (failure policy,
-// coordinator restart), a numbered suffix keeps every attempt distinct
-// instead of clobbering evidence.
+// addWorktree creates one fresh worktree + branch for the task. A name is
+// taken when its DIR exists (a previous attempt's preserved worktree) OR its
+// BRANCH exists (#85: branches are never deleted, so after a successful run —
+// review retry, orphan re-run after a restart — the dir is gone but the
+// branch survives; `-b` on it was a typed spawn failure). A numbered suffix
+// keeps every attempt distinct instead of clobbering evidence.
 func (d *Driver) addWorktree(ctx context.Context, repoPath, taskID string) (string, string, error) {
 	base := d.cfg.WorkersDir()
 	if err := os.MkdirAll(base, 0o700); err != nil {
@@ -245,6 +253,9 @@ func (d *Driver) addWorktree(ctx context.Context, repoPath, taskID string) (stri
 			continue // a previous attempt's preserved worktree
 		}
 		branch := "mesh/worker/" + name
+		if _, err := gitOut(ctx, repoPath, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+			continue // a previous attempt's surviving branch
+		}
 		if _, err := gitOut(ctx, repoPath, "worktree", "add", "-b", branch, dir); err != nil {
 			return "", "", fmt.Errorf("worker: git worktree add: %w", err)
 		}
@@ -270,17 +281,42 @@ func (d *Driver) mergeDeps(ctx context.Context, dir string, rec task.Record) err
 		if !found || dep.Branch == "" {
 			continue // nothing committed by this dep to inherit
 		}
-		if _, err := gitOut(ctx, dir,
-			"-c", "user.name=mesh-worker", "-c", "user.email=mesh-worker@localhost",
-			"merge", "--no-edit", "--no-gpg-sign",
-			"-m", fmt.Sprintf("mesh worker: merge dependency %s (%s)", dep.Node, depID),
-			dep.Branch); err != nil {
-			// Leave no half-merged tree behind for the worker to trip over.
-			if _, abortErr := gitOut(ctx, dir, "merge", "--abort"); abortErr != nil {
-				d.log.Warn("worker: merge --abort failed after conflict", "task", rec.ID, "dep", depID, "err", abortErr)
-			}
+		if err := d.mergeBranch(ctx, dir, dep.Branch,
+			fmt.Sprintf("mesh worker: merge dependency %s (%s)", dep.Node, depID)); err != nil {
 			return fmt.Errorf("worker: merge dependency %s (branch %s) into task %s: %w", depID, dep.Branch, rec.ID, err)
 		}
+	}
+	return nil
+}
+
+// mergePrior carries a re-dispatched task's own prior committed output into
+// its fresh worktree (#85): the scheduler records the output branch on the
+// task after a typed success, so a review-retry (or an orphan re-run after a
+// restart) builds on — and its feedback applies to — work that actually
+// exists in its tree, instead of regenerating it from base. Runs after
+// mergeDeps and before baseSHA capture, so the retry's own reported diff
+// excludes the inherited changes, exactly like dependency inheritance.
+func (d *Driver) mergePrior(ctx context.Context, dir string, rec task.Record) error {
+	if rec.Branch == "" {
+		return nil // first attempt, or a pre-feature record: nothing to inherit
+	}
+	if err := d.mergeBranch(ctx, dir, rec.Branch,
+		fmt.Sprintf("mesh worker: merge prior attempt output (%s)", rec.Branch)); err != nil {
+		return fmt.Errorf("worker: merge prior output branch %s into task %s: %w", rec.Branch, rec.ID, err)
+	}
+	return nil
+}
+
+// mergeBranch merges one branch into the worktree at dir, aborting on
+// conflict so no half-merged tree is left for the worker to trip over.
+func (d *Driver) mergeBranch(ctx context.Context, dir, branch, msg string) error {
+	if _, err := gitOut(ctx, dir,
+		"-c", "user.name=mesh-worker", "-c", "user.email=mesh-worker@localhost",
+		"merge", "--no-edit", "--no-gpg-sign", "-m", msg, branch); err != nil {
+		if _, abortErr := gitOut(ctx, dir, "merge", "--abort"); abortErr != nil {
+			d.log.Warn("worker: merge --abort failed after conflict", "dir", dir, "branch", branch, "err", abortErr)
+		}
+		return err
 	}
 	return nil
 }

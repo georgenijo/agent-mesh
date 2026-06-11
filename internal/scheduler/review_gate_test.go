@@ -7,6 +7,7 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -164,6 +165,153 @@ func TestNoReviewerConfiguredSuccessIsDone(t *testing.T) {
 	f.waitJob(t, j.ID, envelope.JobDone)
 	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskDone {
 		t.Fatalf("task A = %s, want done", got)
+	}
+}
+
+// seqReviewer resolves reviews in sequence: call N gets decs[N] (the last
+// decision repeats once the script is exhausted).
+type seqReviewer struct {
+	mu      sync.Mutex
+	decs    []ReviewDecision
+	targets []ReviewTarget
+}
+
+func (r *seqReviewer) Review(_ context.Context, target ReviewTarget) (ReviewDecision, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.targets = append(r.targets, target)
+	i := len(r.targets) - 1
+	if i >= len(r.decs) {
+		i = len(r.decs) - 1
+	}
+	return r.decs[i], nil
+}
+
+func (r *seqReviewer) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.targets)
+}
+
+// feedbackNotes replays the repo blackboard and returns the coordinator's
+// durable feedback notes (sender-bound, so the worker primer will carry them).
+func (f fixture) feedbackNotes(t *testing.T, repo string) []string {
+	t.Helper()
+	entries, err := f.cli.StreamRead(envelope.StreamNotes(repo), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		env, err := envelope.Decode(e.Data)
+		if err != nil || env.Kind != envelope.KindNote {
+			continue
+		}
+		var p envelope.NotePayload
+		if envelope.DecodeInto(env, &p) != nil {
+			continue
+		}
+		if env.From != schedulerID || p.ID != schedulerID {
+			continue // sender binding: a note the primer would drop is no feedback channel
+		}
+		out = append(out, p.Decision)
+	}
+	return out
+}
+
+// request_changes with retries left (#85): the task stays running, is
+// re-dispatched with the reviewer's notes recorded on the durable blackboard
+// (the worker primer's source), and the new diff is re-reviewed — approve on
+// the retry reaches done.
+func TestReviewRequestChangesRetriesWithFeedback(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	rev := &seqReviewer{decs: []ReviewDecision{
+		{Verdict: envelope.ReviewRequestChanges, Notes: "missing tests"},
+		{Verdict: envelope.ReviewApprove, Notes: "fixed"},
+	}}
+	d := newFakeDriver()
+	startScheduler(t, f.cli, d, func(o *Options) { o.Reviewer = rev; o.ReviewRetries = 1 })
+
+	f.waitJob(t, j.ID, envelope.JobDone)
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskDone {
+		t.Fatalf("task A = %s, want done after the retried diff is approved", got)
+	}
+	if got := d.attemptCount("A"); got != 2 {
+		t.Fatalf("worker ran %d times, want 2 (original + one feedback retry)", got)
+	}
+	if got := rev.calls(); got != 2 {
+		t.Fatalf("reviewer called %d times, want 2 (the retried diff is re-reviewed)", got)
+	}
+	notes := f.feedbackNotes(t, "demo")
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, byNode["A"].ID) && strings.Contains(n, "missing tests") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no durable feedback note carrying the task id and verdict notes; got %q", notes)
+	}
+}
+
+// Retries are bounded: once exhausted, request_changes fails the task exactly
+// as the pre-#85 policy did.
+func TestReviewRequestChangesExhaustsRetriesAndFails(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	rev := &seqReviewer{decs: []ReviewDecision{
+		{Verdict: envelope.ReviewRequestChanges, Notes: "still missing tests"},
+	}}
+	d := newFakeDriver()
+	startScheduler(t, f.cli, d, func(o *Options) { o.Reviewer = rev; o.ReviewRetries = 1 })
+
+	f.waitJob(t, j.ID, envelope.JobFailed)
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskFailed {
+		t.Fatalf("task A = %s, want failed after retries exhausted", got)
+	}
+	if got := d.attemptCount("A"); got != 2 {
+		t.Fatalf("worker ran %d times, want 2 (original + one bounded retry)", got)
+	}
+}
+
+// reject conserves budget: it fails immediately, never a retry — feedback
+// cannot fix a fundamentally wrong approach.
+func TestReviewRejectNeverRetries(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	rev := &fakeReviewer{dec: ReviewDecision{Verdict: envelope.ReviewReject, Notes: "wrong approach"}}
+	d := newFakeDriver()
+	startScheduler(t, f.cli, d, func(o *Options) { o.Reviewer = rev; o.ReviewRetries = 3 })
+
+	f.waitJob(t, j.ID, envelope.JobFailed)
+	if got := d.attemptCount("A"); got != 1 {
+		t.Fatalf("worker ran %d times after reject, want 1 (never retried)", got)
+	}
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskFailed {
+		t.Fatalf("task A = %s, want failed", got)
+	}
+}
+
+// Review errors never retry either: the verdict was never produced, so there
+// is no feedback to act on — the typed failure stands.
+func TestReviewErrorNeverRetries(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	rev := &fakeReviewer{dec: ReviewDecision{Verdict: envelope.ReviewError, Code: envelope.ReviewRuntimeLost}}
+	d := newFakeDriver()
+	startScheduler(t, f.cli, d, func(o *Options) { o.Reviewer = rev; o.ReviewRetries = 3 })
+
+	f.waitJob(t, j.ID, envelope.JobFailed)
+	if got := d.attemptCount("A"); got != 1 {
+		t.Fatalf("worker ran %d times after a review error, want 1", got)
+	}
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskFailed {
+		t.Fatalf("task A = %s, want failed", got)
 	}
 }
 

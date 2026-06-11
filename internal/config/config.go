@@ -40,6 +40,7 @@ const (
 	EnvAuditFanout       = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
 	EnvReviewRole        = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout     = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
+	EnvReviewRetries     = "MESH_REVIEW_RETRIES"      // feedback re-dispatches per task on request_changes (#85); default 1, 0 = off
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -103,6 +104,13 @@ const (
 	// past it the gate treats the review as lost — never as an approval.
 	DefaultReviewTimeout = 5 * time.Minute
 
+	// DefaultReviewRetries bounds feedback-driven re-dispatch on a
+	// request_changes verdict (#85). One retry recovers the common case
+	// (actionable reviewer notes) while capping the worst case at one extra
+	// worker turn + one extra review turn per task — each retry is LLM spend
+	// on the locked hard-cap budget.
+	DefaultReviewRetries = 1
+
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
 	DefaultEvictAfter        = 60 * time.Second
@@ -162,6 +170,10 @@ type Config struct {
 	ReviewRole string
 	// ReviewTimeout bounds one review round trip (request → verdict event).
 	ReviewTimeout time.Duration
+	// ReviewRetries bounds feedback-driven re-dispatch per task on a
+	// request_changes verdict (#85). 0 = retries off (the pre-#85 policy:
+	// request_changes fails the task immediately).
+	ReviewRetries int
 
 	// ReposDir maps a job's repo NAME to a git checkout at <ReposDir>/<name>.
 	// Deliberately NO default: the #26 worker driver refuses to start without
@@ -201,6 +213,7 @@ func Load() (Config, error) {
 		WorkerTimeout:     DefaultWorkerTimeout,
 		MaxWorkers:        DefaultMaxWorkers,
 		ReviewTimeout:     DefaultReviewTimeout,
+		ReviewRetries:     DefaultReviewRetries,
 		KeepWorktrees:     KeepWorktreesOnFailure,
 		AuditFanout:       true,
 	}
@@ -280,6 +293,13 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvTriageMaxAttempts, raw)
 		}
 		cfg.TriageMaxAttempts = n
+	}
+	if raw := os.Getenv(EnvReviewRetries); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a non-negative integer (0 = retries off)", EnvReviewRetries, raw)
+		}
+		cfg.ReviewRetries = n
 	}
 	if raw := os.Getenv(EnvAuditFanout); raw != "" {
 		switch raw {

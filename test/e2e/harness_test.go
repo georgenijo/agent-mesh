@@ -166,6 +166,21 @@ func (m *mesh) startExpert(name, role string) {
 		logf.Close()
 	})
 	m.waitDialable(m.agentSocket(name), 10*time.Second)
+
+	// The sidecar socket appears before the runtime child is up: runExpert
+	// registers the agent live, THEN blocks in proxy.Start until the child
+	// reports init. Under full-suite parallel load (every package spawning
+	// freshly built binaries; on Windows, process creation + AV scanning of
+	// new .exes) that gap can exceed the tests' eventually windows, which
+	// must measure loop behavior, not spawn latency. Wait for the "expert
+	// serving" line meshd logs only after proxy.Start + TrackChild succeed.
+	// Generous deadline: the proxy's own StartTimeout (30s) fires first on a
+	// genuinely broken spawn, and the logged error surfaces via the dump.
+	logPath := filepath.Join(m.dir, "expert-"+name+".log")
+	m.eventually(45*time.Second, "expert runtime child is serving", func() bool {
+		data, err := os.ReadFile(logPath)
+		return err == nil && strings.Contains(string(data), "expert serving")
+	})
 }
 
 // startDashboard boots the dashboard process and returns its base URL.

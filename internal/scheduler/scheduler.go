@@ -20,6 +20,7 @@
 package scheduler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -55,10 +56,21 @@ type Options struct {
 	// before. Set (the coordinator wires a BusReviewer when MESH_REVIEW_ROLE
 	// is configured), every typed worker success is routed for review and the
 	// task's terminal state follows the gate policy (review.go): only approve
-	// — or a success with no diff to review — reaches done; request_changes,
-	// reject, and every review error fail the task, never silently pass it.
-	// Review cost accrues against the same budget meter as worker runs.
+	// — or a success with no diff to review — reaches done; reject and every
+	// review error fail the task, never silently pass it; request_changes
+	// retries under ReviewRetries before failing. Review cost accrues against
+	// the same budget meter as worker runs.
 	Reviewer Reviewer
+
+	// ReviewRetries bounds feedback-driven re-dispatch on a request_changes
+	// verdict (#85): with retries left the task stays persisted running, the
+	// reviewer's notes are recorded as a durable blackboard note (the worker
+	// primer's source), and the existing orphan re-dispatch path re-spawns
+	// it; the new diff is re-reviewed. Exhausted retries fail the task
+	// exactly as before. Never applies to reject (budget conservation) or to
+	// review errors (no verdict was produced — nothing to act on). Zero (the
+	// zero value) = pre-#85 behavior: request_changes fails immediately.
+	ReviewRetries int
 }
 
 // outcome is one finished worker run, delivered from a worker goroutine to
@@ -89,8 +101,12 @@ type Scheduler struct {
 	// Loop-goroutine-only state.
 	inflight map[string]string    // task id → job id, workers in flight this lifetime
 	retryAt  map[string]time.Time // task id → earliest re-dispatch (rate-limit backoff)
-	spent    float64              // accumulated CostUSD this coordinator lifetime
-	paused   bool                 // fleet paused: nothing new spawns until restart
+	// reviewRetried counts feedback-driven re-dispatches per task (#85).
+	// In-memory per coordinator lifetime, same posture as the budget meter: a
+	// restart re-runs the task anyway, so the bound restarts with it.
+	reviewRetried map[string]int
+	spent         float64 // accumulated CostUSD this coordinator lifetime
+	paused        bool    // fleet paused: nothing new spawns until restart
 
 	ctx     context.Context // cancels in-flight workers on Stop
 	cancel  context.CancelFunc
@@ -119,18 +135,19 @@ func New(cli *bus.Client, opts Options) (*Scheduler, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		opts:     opts,
-		cli:      cli,
-		log:      opts.Log,
-		jobs:     job.NewStore(cli),
-		tasks:    task.NewStore(cli),
-		results:  make(chan outcome),
-		reviews:  make(chan reviewOutcome),
-		inflight: make(map[string]string),
-		retryAt:  make(map[string]time.Time),
-		ctx:      ctx,
-		cancel:   cancel,
-		stop:     make(chan struct{}),
+		opts:          opts,
+		cli:           cli,
+		log:           opts.Log,
+		jobs:          job.NewStore(cli),
+		tasks:         task.NewStore(cli),
+		results:       make(chan outcome),
+		reviews:       make(chan reviewOutcome),
+		inflight:      make(map[string]string),
+		retryAt:       make(map[string]time.Time),
+		reviewRetried: make(map[string]int),
+		ctx:           ctx,
+		cancel:        cancel,
+		stop:          make(chan struct{}),
 	}, nil
 }
 
@@ -493,6 +510,25 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 	case dec.Verdict == envelope.ReviewApprove:
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone,
 			truncate("review approved: "+dec.Notes, 512))
+	case dec.Verdict == envelope.ReviewRequestChanges && s.reviewRetried[o.task.ID] < s.opts.ReviewRetries:
+		// Bounded feedback retry (#85): record the reviewer's notes on the
+		// durable blackboard — the worker primer's source — and leave the
+		// task persisted running with no transition; it is no longer
+		// inflight, so the next sweep's orphan re-dispatch path re-spawns it
+		// and the new diff is re-reviewed. A retry the worker cannot see
+		// feedback for would burn budget reproducing the same diff, so a
+		// failed feedback write falls back to the pre-#85 typed failure.
+		attempt := s.reviewRetried[o.task.ID] + 1
+		if err := s.recordFeedback(o.task, dec.Notes, attempt); err != nil {
+			s.log.Warn("scheduler: feedback note failed; failing instead of a blind retry",
+				"task", o.task.ID, "err", err)
+			s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
+				truncate(fmt.Sprintf("review %s: %s", dec.Verdict, dec.Notes), 512))
+			break
+		}
+		s.reviewRetried[o.task.ID] = attempt
+		s.log.Info("scheduler: review requested changes; re-dispatching with feedback",
+			"task", o.task.ID, "attempt", attempt, "max", s.opts.ReviewRetries)
 	case dec.Verdict == envelope.ReviewRequestChanges, dec.Verdict == envelope.ReviewReject:
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
 			truncate(fmt.Sprintf("review %s: %s", dec.Verdict, dec.Notes), 512))
@@ -568,11 +604,13 @@ func (s *Scheduler) cancelTask(rec task.Record, byID map[string]task.Record, rea
 		return
 	}
 	delete(s.retryAt, rec.ID)
+	delete(s.reviewRetried, rec.ID)
 	byID[rec.ID] = updated
 	s.publishTask(updated)
 }
 
-// transitionTask is the outcome-path task move + derived event.
+// transitionTask is the outcome-path task move + derived event. A move to a
+// terminal state also clears the task's feedback-retry counter (#85).
 func (s *Scheduler) transitionTask(id string, from, to envelope.TaskState, reason string) {
 	updated, err := s.tasks.Transition(id, from, to, schedulerID, reason)
 	if err != nil {
@@ -580,7 +618,42 @@ func (s *Scheduler) transitionTask(id string, from, to envelope.TaskState, reaso
 			"task", id, "from", string(from), "to", string(to), "err", err)
 		return
 	}
+	delete(s.reviewRetried, id)
 	s.publishTask(updated)
+}
+
+// recordFeedback appends the reviewer's request_changes notes to the job
+// repo's durable blackboard as a coordinator-authored context note. The
+// worker primer (sidecar.BuildMemoryPrimer) replays the blackboard into the
+// retry's prompt, so the feedback rides an existing path — no Driver/Result
+// reshape. Sender binding (From == payload ID) is what keeps the note visible
+// to the primer's replay discipline.
+func (s *Scheduler) recordFeedback(rec task.Record, notes string, attempt int) error {
+	jrec, found, err := s.jobs.Get(rec.Job)
+	if err != nil {
+		return fmt.Errorf("scheduler: read job %s: %w", rec.Job, err)
+	}
+	if !found {
+		return fmt.Errorf("scheduler: task %s references unknown job %s", rec.ID, rec.Job)
+	}
+	text := fmt.Sprintf(
+		"REVIEW FEEDBACK for task %s (%q, attempt %d): the submitted diff was returned with request_changes. Reviewer notes: %s. Address this feedback and complete the task again.",
+		rec.ID, rec.Title, attempt, truncate(notes, 512))
+	env, err := envelope.New(envelope.KindNote, schedulerID, envelope.SubjectNote(jrec.Repo),
+		&envelope.NotePayload{ID: schedulerID, Decision: text, Repo: jrec.Repo, Kind: envelope.NoteKindContext})
+	if err != nil {
+		return err
+	}
+	raw, err := envelope.Encode(env)
+	if err != nil {
+		return err
+	}
+	// json.RawMessage, not []byte: StreamAppend marshals its argument, and a
+	// bare []byte would land base64-wrapped — unreadable to every replayer.
+	if _, err := s.cli.StreamAppend(envelope.StreamNotes(jrec.Repo), json.RawMessage(raw)); err != nil {
+		return fmt.Errorf("scheduler: blackboard append: %w", err)
+	}
+	return nil
 }
 
 // checkBudgetBeforeSpawn reports whether spawning is allowed, pausing the

@@ -223,6 +223,7 @@ func (c *Coordinator) Start() error {
 			}
 			c.reviewer = rev
 			sopts.Reviewer = rev
+			sopts.ReviewRetries = c.cfg.ReviewRetries
 		}
 		sch, err := scheduler.New(cli, sopts)
 		if err != nil {
@@ -234,7 +235,8 @@ func (c *Coordinator) Start() error {
 		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
 			"reposDir", c.cfg.ReposDir, "budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
 		if c.reviewer != nil {
-			c.log.Info("review gating enabled", "role", c.cfg.ReviewRole, "timeout", c.cfg.ReviewTimeout)
+			c.log.Info("review gating enabled", "role", c.cfg.ReviewRole,
+				"timeout", c.cfg.ReviewTimeout, "retries", c.cfg.ReviewRetries)
 		}
 	} else if c.cfg.ReviewRole != "" {
 		c.log.Warn("MESH_REVIEW_ROLE set but MESH_WORKER_CLI unset; review gating inactive")

@@ -13,22 +13,22 @@ import (
 // task's terminal state on the typed verdict — opt-in via Options.Reviewer
 // (nil = pre-#80 behavior: worker success → done, no review).
 //
-// Gating policy (the design fork resolved for #80, see DECISIONS.md):
+// Gating policy (the design fork resolved for #80, retry added by #85 — see
+// DECISIONS.md):
 //
 //   - approve          → task done (the only path from a reviewed success to done)
-//   - request_changes  → task failed, typed reason carries the verdict + notes
-//   - reject           → task failed, same shape
-//   - error (any code) → task failed — NEVER a silent approve (never-fake-success)
+//   - request_changes  → with retries left (Options.ReviewRetries, #85): the
+//     reviewer's notes land on the durable blackboard (the worker primer's
+//     source) and the task stays persisted running for the orphan
+//     re-dispatch path to re-spawn; the new diff is re-reviewed. Exhausted →
+//     task failed, typed reason carries the verdict + notes.
+//   - reject           → task failed immediately, never retried (budget
+//     conservation: feedback cannot fix a fundamentally wrong approach)
+//   - error (any code) → task failed, never retried — NEVER a silent approve
+//     (never-fake-success; no verdict was produced, so there is no feedback)
 //   - no diff to review (head == base per the worker's committed metadata)
 //     → task done without spending a review turn: the gate gates DIFFS, and a
 //     typed worker success with zero file changes has nothing to judge.
-//
-// request_changes does NOT re-dispatch in this slice: a bounded retry needs
-// worker-runtime support that is out of #80's lane (branch-aware worktree
-// re-allocation after a successful first run, plus a feedback channel into the
-// worker prompt) — tracked as a follow-up issue. Failing typed beats burning a
-// worker turn on an unchanged prompt, and the existing fail-fast path already
-// cancels dependents of a failed task.
 //
 // One authority per fact: the tasks KV record stays the sole authority for
 // task state. The KindReview event is the gate's INPUT (and the audit tap),

@@ -1,14 +1,12 @@
 package observe
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -29,7 +27,7 @@ func ListenWithFallback(addr string, log *slog.Logger) (net.Listener, error) {
 	if err == nil {
 		return ln, nil
 	}
-	if !errors.Is(err, syscall.EADDRINUSE) {
+	if !addrInUse(err) {
 		return nil, err
 	}
 	ln, fbErr := net.Listen("tcp", "127.0.0.1:0")

@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -70,7 +69,7 @@ func (m *mesh) sidecarPID(viaAgent, name string) int {
 func (m *mesh) killSidecar(viaAgent, name string) {
 	m.t.Helper()
 	pid := m.sidecarPID(viaAgent, name)
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+	if err := killProcess(pid); err != nil {
 		m.t.Fatalf("kill sidecar %s (pid %d): %v", name, pid, err)
 	}
 }
@@ -153,7 +152,7 @@ func TestChaosCrashThenRejoinSameName(t *testing.T) {
 	m.join("test", "builder")
 
 	oldPID := m.sidecarPID("watch", "test")
-	if err := syscall.Kill(oldPID, syscall.SIGKILL); err != nil {
+	if err := killProcess(oldPID); err != nil {
 		t.Fatalf("kill test sidecar %d: %v", oldPID, err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -226,8 +227,10 @@ func TestTokenFileWrittenAndRemovedOnStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat token file: %v", err)
 	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("token file mode %04o, want 0600", mode)
+	if runtime.GOOS != "windows" {
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("token file mode %04o, want 0600", mode)
+		}
 	}
 
 	d.Stop()

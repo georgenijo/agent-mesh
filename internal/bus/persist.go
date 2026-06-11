@@ -241,16 +241,19 @@ func (s *Server) compactStreamLocked(stream string, sf *streamFile, st *streamBu
 		s.opts.Logger.Warn("bus: compact stream: write temp failed", "stream", stream)
 		return
 	}
+	// Windows cannot replace a file while our append handle is still open.
+	// Close before the rename everywhere; the next append lazily reopens the
+	// compacted file.
+	if sf.f != nil {
+		if err := sf.f.Close(); err != nil {
+			s.opts.Logger.Warn("bus: compact stream: close old file failed", "stream", stream, "error", err)
+		}
+		sf.f = nil
+	}
 	if err := os.Rename(tmp.Name(), s.streamFilePath(stream)); err != nil {
 		os.Remove(tmp.Name())
 		s.opts.Logger.Warn("bus: compact stream: rename failed", "stream", stream, "error", err)
 		return
-	}
-	// The open handle now points at the unlinked old inode; close it and let
-	// the next append lazily reopen the compacted file.
-	if sf.f != nil {
-		sf.f.Close()
-		sf.f = nil
 	}
 	sf.lines = len(st.entries)
 }

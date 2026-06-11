@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/config"
@@ -126,14 +125,14 @@ func Down(cfg config.Config, opts DownOptions) (DownReport, error) {
 	}
 
 	deadline := time.Now().Add(opts.TermTimeout)
-	signalAll(append(children, sidecars...), syscall.SIGTERM)
+	signalAll(append(children, sidecars...), signalTerminate)
 	pollUntilDead(append(children, sidecars...), deadline)
-	signalAll(coordinators, syscall.SIGTERM)
+	signalAll(coordinators, signalTerminate)
 	stragglers := pollUntilDead(append(append(children, sidecars...), coordinators...), deadline)
 
 	// Escalate. SIGKILL cannot be caught; anything still alive after the
 	// verify window is reported as failed.
-	signalAll(stragglers, syscall.SIGKILL)
+	signalAll(stragglers, signalKill)
 	for _, t := range pollUntilDead(stragglers, time.Now().Add(killVerifyTimeout)) {
 		t.Outcome = KillFailed
 		t.Detail = "still alive after SIGKILL"
@@ -152,6 +151,11 @@ func Down(cfg config.Config, opts DownOptions) (DownReport, error) {
 			rep.Clean = false
 		} else if t.Outcome == "" {
 			t.Outcome = KillTerminated
+		}
+	}
+	if rep.Clean {
+		if _, err := Clean(cfg); err != nil {
+			return rep, err
 		}
 	}
 	return rep, nil
@@ -225,9 +229,9 @@ func targetPIDs(targets []DownTarget) []int {
 	return pids
 }
 
-func signalAll(targets []*DownTarget, sig syscall.Signal) {
+func signalAll(targets []*DownTarget, sig meshSignal) {
 	for _, t := range targets {
-		if err := syscall.Kill(t.PID, sig); err != nil && err != syscall.ESRCH {
+		if err := signalProcess(t.PID, sig); err != nil && !isNoSuchProcess(err) {
 			t.Outcome = KillFailed
 			t.Detail = fmt.Sprintf("signal %s: %v", sig, err)
 		}
@@ -269,6 +273,9 @@ func pollUntilDead(targets []*DownTarget, deadline time.Time) []*DownTarget {
 // holds no sockets and runs no code — reaping it is its parent's job, not a
 // teardown failure.
 func aliveByPS(pids []int) map[int]bool {
+	if runtimeAliveByPID != nil {
+		return runtimeAliveByPID(pids)
+	}
 	out := make(map[int]bool, len(pids))
 	if len(pids) == 0 {
 		return out
@@ -313,7 +320,7 @@ func aliveByPS(pids []int) map[int]bool {
 // tempdirs live under /var → /private/var). Token-exact comparison kills the
 // /tmp/mesh1-vs-/tmp/mesh10 prefix-collision class.
 func argvOwned(pid int, meshDir string) (bool, string) {
-	raw, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	raw, err := processCommandLine(pid)
 	if err != nil {
 		return false, "argv unreadable: " + err.Error()
 	}
@@ -321,7 +328,7 @@ func argvOwned(pid int, meshDir string) (bool, string) {
 	if resolved, err := filepath.EvalSymlinks(meshDir); err == nil {
 		want[resolved] = struct{}{}
 	}
-	fields := strings.Fields(string(raw))
+	fields := strings.Fields(raw)
 	for i, f := range fields {
 		name, inline, hasInline := strings.Cut(strings.TrimLeft(f, "-"), "=")
 		if name != "mesh-dir" {

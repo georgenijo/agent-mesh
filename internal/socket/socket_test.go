@@ -65,6 +65,9 @@ func TestNoSocketIsTyped(t *testing.T) {
 }
 
 func TestSocketPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows Unix-domain sockets do not expose Unix chmod permissions")
+	}
 	_, path := startServer(t)
 	info, err := os.Stat(path)
 	if err != nil {

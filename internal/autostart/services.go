@@ -3,7 +3,6 @@ package autostart
 import (
 	"fmt"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/config"
@@ -74,10 +73,10 @@ func ensureService(cfg config.Config, name, addr, lockPath, pidFile, addrFile st
 		return up, fmt.Errorf("autostart: open %s lock: %w", name, err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockExclusive(lock); err != nil {
 		return up, fmt.Errorf("autostart: flock: %w", err)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	defer unlockFile(lock) //nolint:errcheck
 
 	// Someone else may have brought it up while we waited for the lock.
 	if svc, running := serviceRunning(pidFile, addrFile); running {

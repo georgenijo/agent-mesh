@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
@@ -100,7 +99,7 @@ func TestP0AcceptanceFlow(t *testing.T) {
 	if !ok || rec.Card.PID <= 0 {
 		t.Fatalf("no pid recorded for test agent: %+v", rec)
 	}
-	if err := syscall.Kill(rec.Card.PID, syscall.SIGKILL); err != nil {
+	if err := killProcess(rec.Card.PID); err != nil {
 		t.Fatalf("kill sidecar %d: %v", rec.Card.PID, err)
 	}
 

@@ -6,10 +6,8 @@ package e2e
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -87,7 +85,7 @@ func TestOpsDoctorClassifies(t *testing.T) {
 
 	// SIGKILL the sidecar: its socket file lingers undialable → stale_socket.
 	pid := readPidfile(t, m.agentPIDFile("patient"))
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+	if err := killProcess(pid); err != nil {
 		t.Fatal(err)
 	}
 	m.eventually(3*time.Second, "doctor flags the killed sidecar", func() bool {
@@ -110,11 +108,11 @@ func TestOpsCleanRemovesResidue(t *testing.T) {
 	}
 
 	pid := readPidfile(t, m.agentPIDFile("victim"))
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+	if err := killProcess(pid); err != nil {
 		t.Fatal(err)
 	}
 	m.eventually(2*time.Second, "killed sidecar pid gone", func() bool {
-		return syscall.Kill(pid, 0) != nil
+		return pidDead(pid)
 	})
 
 	if code, stdout, stderr := m.run("ops", "clean", "--json"); code != 0 {
@@ -144,7 +142,7 @@ func TestOpsDownGroundTruthPS(t *testing.T) {
 		}
 	}
 
-	before := psMeshPIDs(t, m.dir)
+	before := rawMeshPIDs(t, m.dir)
 	if len(before) < 3 { // two sidecars + coordinator
 		t.Fatalf("ps ground truth sees %d mesh processes, want >= 3", len(before))
 	}
@@ -153,36 +151,9 @@ func TestOpsDownGroundTruthPS(t *testing.T) {
 		t.Fatalf("ops down: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
 
-	if after := psMeshPIDs(t, m.dir); len(after) != 0 {
+	if after := rawMeshPIDs(t, m.dir); len(after) != 0 {
 		t.Fatalf("ps ground truth still sees mesh processes after down: %v", after)
 	}
-}
-
-// psMeshPIDs scans raw `ps` output for processes whose argv carries the
-// `--mesh-dir <dir>` ownership marker — deliberately independent of every
-// mesh code path.
-func psMeshPIDs(t *testing.T, dir string) []int {
-	t.Helper()
-	out, err := exec.Command("ps", "-axo", "pid=,command=").Output()
-	if err != nil {
-		t.Fatalf("ps: %v", err)
-	}
-	var pids []int
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		for i := 1; i < len(fields)-1; i++ {
-			if fields[i] == "--mesh-dir" && fields[i+1] == dir {
-				if pid, err := strconv.Atoi(fields[0]); err == nil {
-					pids = append(pids, pid)
-				}
-				break
-			}
-		}
-	}
-	return pids
 }
 
 func (m *mesh) agentPIDFile(name string) string {

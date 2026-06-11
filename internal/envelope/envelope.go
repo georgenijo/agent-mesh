@@ -54,22 +54,49 @@ const (
 	// triage attempt, carrying the typed ok|error result so the dashboard and
 	// audit taps see why a job became triaged or failed without polling KV.
 	KindTriage Kind = "triage"
+	// KindWorker is the worker-outcome observability event (#25): one per
+	// worker run on a task, carrying the typed ok|error result, the failure
+	// class, and the run's reported cost. The tasks KV record stays the
+	// authority for task state; this event explains how a run ended.
+	KindWorker Kind = "worker"
+	// KindFleet is the scheduler fleet-state event (#25): published when the
+	// scheduler pauses the worker fleet (budget cap, billing error). Jobs and
+	// tasks stay queued in their KV records — this event is the observable
+	// signal that nothing new will spawn until the fleet is reset.
+	KindFleet Kind = "fleet"
+	// KindReview is the expert-review observability event (#27): one per review
+	// an expert produces over a task's worker diff, carrying the typed verdict
+	// (approve|request_changes|reject|error). Like KindWorker it holds no
+	// authority over a KV record; it records how a diff was judged so the
+	// dashboard and the review-gating scheduler (#80) can see the verdict.
+	KindReview Kind = "review"
+	// KindReviewRequest is the scheduler→expert review request (#80): the
+	// role-addressed envelope that hands a successful worker diff to the
+	// reviewing role's expert. The expert answers with a KindReview event on
+	// mesh.review.<task>; the request itself carries no authority — the tasks
+	// KV record stays the one authority for task state, and the verdict event
+	// is the gate's input, not a second authority.
+	KindReviewRequest Kind = "review_request"
 )
 
 var knownKinds = map[Kind]bool{
-	KindRegister:  true,
-	KindLeave:     true,
-	KindHeartbeat: true,
-	KindStatus:    true,
-	KindAnnounce:  true,
-	KindClaim:     true,
-	KindAsk:       true,
-	KindAnswer:    true,
-	KindNote:      true,
-	KindTicket:    true,
-	KindJob:       true,
-	KindTask:      true,
-	KindTriage:    true,
+	KindRegister:      true,
+	KindLeave:         true,
+	KindHeartbeat:     true,
+	KindStatus:        true,
+	KindAnnounce:      true,
+	KindClaim:         true,
+	KindAsk:           true,
+	KindAnswer:        true,
+	KindNote:          true,
+	KindTicket:        true,
+	KindJob:           true,
+	KindTask:          true,
+	KindTriage:        true,
+	KindWorker:        true,
+	KindFleet:         true,
+	KindReview:        true,
+	KindReviewRequest: true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

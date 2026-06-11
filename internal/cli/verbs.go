@@ -71,6 +71,18 @@ func runJoin(args []string, stdout, stderr io.Writer) int {
 	}
 
 	resp, code, err := doVerb(socketPath, meshapi.VerbJoin, meshapi.JoinArgs{Card: card})
+	// When we spawned the sidecar ourselves, the sidecar's boot-time
+	// self-registration means handleJoin always returns rejoined:true.
+	// Correct it to rejoined:false — this is genuinely the first join.
+	if err == nil && spawned {
+		var res meshapi.JoinResult
+		if json.Unmarshal(resp.Data, &res) == nil && res.Rejoined {
+			res.Rejoined = false
+			if b, merr := json.Marshal(res); merr == nil {
+				resp.Data = b
+			}
+		}
+	}
 	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
 		var res meshapi.JoinResult
 		// "Rejoined" from a sidecar this very command spawned is just the

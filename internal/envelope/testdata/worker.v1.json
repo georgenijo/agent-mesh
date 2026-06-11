@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "worker",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.worker.01976f00-0000-7000-8000-0000000000a1",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "task": "01976f00-0000-7000-8000-0000000000a1",
+    "job": "01976f00-0000-7000-8000-00000000007e",
+    "result": "error",
+    "code": "rate_limited",
+    "costUSD": 0.0421,
+    "reason": "api_error_status 429"
+  }
+}

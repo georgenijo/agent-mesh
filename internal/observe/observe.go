@@ -125,6 +125,9 @@ func Collect(cfg config.Config) (Snapshot, error) {
 		Coordinator: CoordinatorInfo{
 			LogPath: filepath.Join(cfg.MeshDir, "logs", "coordinator.log"),
 		},
+		// Initialize to empty slice so JSON marshaling emits [] not null when
+		// no children are running (issue #62: null vs [] inconsistency).
+		Children: []ChildInfo{},
 	}
 
 	if pid, err := ReadPIDFile(cfg.CoordinatorPID()); err == nil {

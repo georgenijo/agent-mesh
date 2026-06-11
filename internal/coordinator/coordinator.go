@@ -22,28 +22,59 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
+	"github.com/georgenijo/agent-mesh/internal/scheduler"
 	"github.com/georgenijo/agent-mesh/internal/triage"
+	"github.com/georgenijo/agent-mesh/internal/worker"
 )
 
 // coordinatorID is the From id the coordinator uses on the bus.
 const coordinatorID = "coordinator"
 
-// AuditEntry is one transition record appended to the audit stream.
-// Presence entries track an agent's lifecycle; claim entries track the
-// coordinator freeing a departed agent's claims (Path/Repo identify which).
+// AuditEntry is one record appended to the unified audit stream
+// (envelope.StreamAudit) — the #29 policy/audit substrate. The coordinator is
+// its sole writer (one authority per fact), so the record shape lives here, in
+// the package that owns the stream, while the typed Kind vocabulary lives in
+// internal/envelope (AuditCategory) beside the other enums.
+//
+// The original presence/claim fields (Kind/ID/Event/Path/Repo/TS) are
+// unchanged and frozen — existing reducer/sweep/claims paths and their tests
+// depend on them. #29 adds optional correlation fields so a single ordered
+// read of the stream can reconstruct how a ticket/job/task reached its state:
+// Ticket/Job/Task tie an entry to a work unit, Role/By/State/Result carry the
+// typed lifecycle detail, and Detail is free-text context (never parsed — taps
+// discriminate on the typed fields). Every added field is omitempty, so a
+// presence/claim entry serializes byte-identically to before (golden-pinned).
 type AuditEntry struct {
-	Kind  string    `json:"kind"`  // "presence" | "claim"
-	ID    string    `json:"id"`    // the agent
-	Event string    `json:"event"` // presence: registered|left|away|recovered|evicted; claim: released|reclaimed
-	Path  string    `json:"path,omitempty"`
-	Repo  string    `json:"repo,omitempty"`
-	TS    time.Time `json:"ts"`
+	Kind  envelope.AuditCategory `json:"kind"`  // presence|claim|ticket|ask|answer|job|task|triage|worker|fleet
+	ID    string                 `json:"id"`    // the agent or actor; empty for actorless events
+	Event string                 `json:"event"` // the lifecycle verb/state within the category
+	Path  string                 `json:"path,omitempty"`
+	Repo  string                 `json:"repo,omitempty"`
+	TS    time.Time              `json:"ts"`
+
+	// #29 correlation fields — all omitempty, additive.
+	Ticket string `json:"ticket,omitempty"` // ask-ticket id (ticket/ask/answer)
+	Job    string `json:"job,omitempty"`    // job id (job/task/triage/worker)
+	Task   string `json:"task,omitempty"`   // task id (task/worker)
+	Role   string `json:"role,omitempty"`   // role addressed/owning (ask/task)
+	By     string `json:"by,omitempty"`     // actor that caused a transition, when distinct from ID
+	State  string `json:"state,omitempty"`  // resulting lifecycle state (ticket/job/task/fleet)
+	Result string `json:"result,omitempty"` // typed outcome (claim/triage/worker result)
+	Detail string `json:"detail,omitempty"` // free-text context; never parsed
 }
 
 // Coordinator runs the bus server and the registry reducer.
 type Coordinator struct {
 	cfg config.Config
 	log *slog.Logger
+
+	// WorkerJoin joins one #26 worker agent to the mesh (an embedded
+	// per-worker sidecar). It is INJECTED — by cmd/meshd in production, by
+	// tests directly — because this package must not import internal/sidecar:
+	// the sidecar package's own tests import the coordinator, and Go forbids
+	// the cycle (the same seam pattern as the expert loop's ExpertFunc).
+	// Required before Start when cfg.WorkerCLI is set; ignored otherwise.
+	WorkerJoin worker.JoinFunc
 
 	srv *bus.Server
 	cli *bus.Client
@@ -52,6 +83,14 @@ type Coordinator struct {
 	// (an autostarted coordinator must never spawn LLM processes unless the
 	// operator opted in).
 	triager *triage.Triager
+
+	// scheduler is the #25 dependency-gated worker scheduler — nil unless
+	// cfg.WorkerCLI is set, under the same opt-in rule as the triager.
+	scheduler *scheduler.Scheduler
+
+	// reviewer is the #80 review-gating transport (scheduler→expert bus round
+	// trip) — nil unless BOTH cfg.WorkerCLI and cfg.ReviewRole are set.
+	reviewer *scheduler.BusReviewer
 
 	// mu serializes every registry read-modify-write: events arrive on
 	// independent subscription goroutines, and the KV store has no
@@ -79,7 +118,26 @@ func (c *Coordinator) Start() error {
 	// StreamDir makes the bus's durable subjects (the blackboard, the audit
 	// trail) survive a coordinator restart — the registry deliberately does
 	// not: it repopulates from sidecar re-registration.
-	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{StreamDir: c.cfg.StreamsDir()})
+	//
+	// PersistBuckets makes the jobs (#23) and tasks (#24) KV records durable
+	// too (#65). Unlike registry/claims — TTL leases a live owner re-asserts —
+	// a job/task has no live owner to re-establish it, so without this a
+	// coordinator restart would lose every open job and the persisted task
+	// DAG. The bus loads these buckets in Start() *before* binding the socket,
+	// so they are whole before the triage loop / #25 scheduler (started below,
+	// only after the bus is up) can sweep them. Registry/claims stay in-memory
+	// by omission — explicit non-goal (DECISIONS.md: lease + re-establishment).
+	//
+	// BucketTriageAttempts (#64) is persisted for the same reason: it holds the
+	// triage retry attempt count + next-retry deadline, so a job mid-backoff
+	// resumes its schedule across a restart instead of restarting from attempt 0
+	// (and so a still-open job is not re-hammered on the next lifetime's sweep).
+	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{
+		StreamDir:      c.cfg.StreamsDir(),
+		PersistDir:     c.cfg.BucketsDir(),
+		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts},
+		Logger:         c.log,
+	})
 	if err := c.srv.Start(); err != nil {
 		return fmt.Errorf("coordinator: start bus: %w", err)
 	}
@@ -109,12 +167,14 @@ func (c *Coordinator) Start() error {
 	// a typed event on the job, never a coordinator crash.
 	if c.cfg.PlannerCLI != "" {
 		tri, err := triage.New(cli, triage.Options{
-			PlannerCLI: c.cfg.PlannerCLI,
-			Model:      c.cfg.PlannerModel,
-			Timeout:    c.cfg.TriageTimeout,
-			Interval:   sweepInterval(c.cfg.HeartbeatInterval),
-			WorkDir:    c.cfg.MeshDir, // clean cwd: no CLAUDE.md context tax (M0 spike)
-			Log:        c.log,
+			PlannerCLI:  c.cfg.PlannerCLI,
+			Model:       c.cfg.PlannerModel,
+			Timeout:     c.cfg.TriageTimeout,
+			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
+			WorkDir:     c.cfg.MeshDir,           // clean cwd: no CLAUDE.md context tax (M0 spike)
+			MaxAttempts: c.cfg.TriageMaxAttempts, // #64 retry/backoff policy
+			Backoff:     c.cfg.TriageBackoff,
+			Log:         c.log,
 		})
 		if err != nil {
 			c.Stop()
@@ -123,6 +183,61 @@ func (c *Coordinator) Start() error {
 		c.triager = tri
 		c.triager.Start()
 		c.log.Info("triage enabled", "planner", c.cfg.PlannerCLI)
+	}
+
+	// Scheduler (#25): opt-in via MESH_WORKER_CLI, same rule as triage — a
+	// bare `mesh join` coordinator must never start spawning workers. The
+	// driver is the #26 worker runtime: worktree-per-worker isolation with an
+	// embedded per-worker sidecar (mesh CLI access inside the run). It
+	// requires MESH_REPOS_DIR — refusing to start beats letting workers guess
+	// which directory tree they may rewrite. The scheduler itself only knows
+	// the Driver seam.
+	if c.cfg.WorkerCLI != "" {
+		drv, err := worker.NewDriver(cli, c.cfg, c.WorkerJoin, c.log)
+		if err != nil {
+			c.Stop()
+			return fmt.Errorf("coordinator: worker driver: %w", err)
+		}
+		sopts := scheduler.Options{
+			Driver:      drv,
+			BudgetUSD:   c.cfg.BudgetUSD,
+			MaxParallel: c.cfg.MaxWorkers,
+			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
+			Log:         c.log,
+		}
+		// Review gating (#80): opt-in via MESH_REVIEW_ROLE, same posture as
+		// the planner/worker knobs — unset means a worker success transitions
+		// the task to done with no review, exactly as before. Set, every
+		// successful worker diff is routed to the expert serving that role and
+		// the task's terminal state is gated on the typed verdict.
+		if c.cfg.ReviewRole != "" {
+			rev, err := scheduler.NewBusReviewer(cli, scheduler.ReviewerOptions{
+				Role:     c.cfg.ReviewRole,
+				ReposDir: c.cfg.ReposDir,
+				Timeout:  c.cfg.ReviewTimeout,
+				Log:      c.log,
+			})
+			if err != nil {
+				c.Stop()
+				return fmt.Errorf("coordinator: reviewer: %w", err)
+			}
+			c.reviewer = rev
+			sopts.Reviewer = rev
+		}
+		sch, err := scheduler.New(cli, sopts)
+		if err != nil {
+			c.Stop()
+			return fmt.Errorf("coordinator: scheduler: %w", err)
+		}
+		c.scheduler = sch
+		c.scheduler.Start()
+		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
+			"reposDir", c.cfg.ReposDir, "budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
+		if c.reviewer != nil {
+			c.log.Info("review gating enabled", "role", c.cfg.ReviewRole, "timeout", c.cfg.ReviewTimeout)
+		}
+	} else if c.cfg.ReviewRole != "" {
+		c.log.Warn("MESH_REVIEW_ROLE set but MESH_WORKER_CLI unset; review gating inactive")
 	}
 
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
@@ -145,6 +260,12 @@ func (c *Coordinator) Stop() {
 	if c.triager != nil {
 		c.triager.Stop()
 	}
+	if c.scheduler != nil {
+		c.scheduler.Stop()
+	}
+	if c.reviewer != nil {
+		c.reviewer.Close()
+	}
 	if c.cli != nil {
 		c.cli.Close()
 	}
@@ -162,8 +283,11 @@ func writeCoordinatorPID(path string) error {
 
 // reduce dispatches every tapped envelope to the matching presence handler.
 // Runs on the subscription's single delivery goroutine, so events for one
-// agent are reduced in publish order. Non-presence kinds (P1+ announce/claim/
-// note/...) are not control-plane events and are ignored here.
+// agent are reduced in publish order. Presence kinds mutate the registry; the
+// rest (P1+ announce/claim/ask/answer/ticket/job/task/...) are not control-plane
+// events but ARE fanned into the unified audit log (#29) — the coordinator is
+// the one component that taps every subject, so it is the natural single writer
+// of the audit trail (see auditObserved).
 func (c *Coordinator) reduce(env envelope.Envelope) {
 	switch env.Kind {
 	case envelope.KindRegister:
@@ -174,6 +298,14 @@ func (c *Coordinator) reduce(env envelope.Envelope) {
 		c.handleHeartbeat(env)
 	case envelope.KindStatus:
 		c.handleStatus(env)
+	default:
+		// Non-presence lifecycle event: record it in the audit log. Presence is
+		// audited at its mutation site (register/leave/away/evict) so the entry
+		// reflects the reduced outcome, not just the wire event; claims are
+		// audited where the coordinator reclaims them. Everything else is
+		// observed here. Heartbeats are intentionally not audited (every-5s
+		// noise, no lifecycle meaning).
+		c.auditObserved(env)
 	}
 }
 
@@ -420,7 +552,7 @@ func (c *Coordinator) putRecord(rec agentcard.RegistryRecord) {
 }
 
 func (c *Coordinator) audit(id, event string) {
-	entry := AuditEntry{Kind: "presence", ID: id, Event: event, TS: time.Now().UTC()}
+	entry := AuditEntry{Kind: envelope.AuditPresence, ID: id, Event: event, TS: time.Now().UTC()}
 	if _, err := c.cli.StreamAppend(envelope.StreamAudit, entry); err != nil {
 		c.log.Warn("audit append failed", "id", id, "event", event, "err", err)
 	}
@@ -432,7 +564,7 @@ func (c *Coordinator) audit(id, event string) {
 // the reducer/sweep.
 func (c *Coordinator) releaseClaims(id, event string) {
 	for _, rec := range claim.ReleaseAllOwnedBy(c.cli, id) {
-		entry := AuditEntry{Kind: "claim", ID: id, Event: event, Path: rec.Path, Repo: rec.Repo, TS: time.Now().UTC()}
+		entry := AuditEntry{Kind: envelope.AuditClaim, ID: id, Event: event, Path: rec.Path, Repo: rec.Repo, TS: time.Now().UTC()}
 		if _, err := c.cli.StreamAppend(envelope.StreamAudit, entry); err != nil {
 			c.log.Warn("claim audit append failed", "id", id, "event", event, "path", rec.Path, "err", err)
 		}

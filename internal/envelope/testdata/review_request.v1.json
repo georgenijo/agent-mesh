@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "kind": "review_request",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.review-req.auth",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "task": "01976f00-0000-7000-8000-0000000000a1",
+    "job": "01976f00-0000-7000-8000-00000000007e",
+    "role": "auth",
+    "repo": "demo",
+    "branch": "mesh/worker/01976f00-0000-7000-8000-0000000000a1",
+    "baseSHA": "cafef00dcafef00dcafef00dcafef00dcafef00d",
+    "headSHA": "deadbeefcafef00ddeadbeefcafef00ddeadbeef",
+    "changedFiles": [
+      "src/EventForm.tsx",
+      "src/api.ts"
+    ],
+    "instruction": "implement RRULE builder",
+    "diff": "--- a/src/api.ts\n+++ b/src/api.ts\n@@ -1 +1 @@\n-old\n+new\n"
+  }
+}

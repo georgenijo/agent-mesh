@@ -280,6 +280,14 @@ func payloadFor(kind Kind) validator {
 		return &TaskPayload{}
 	case KindTriage:
 		return &TriagePayload{}
+	case KindWorker:
+		return &WorkerPayload{}
+	case KindFleet:
+		return &FleetPayload{}
+	case KindReview:
+		return &ReviewPayload{}
+	case KindReviewRequest:
+		return &ReviewRequestPayload{}
 	default:
 		return nil
 	}

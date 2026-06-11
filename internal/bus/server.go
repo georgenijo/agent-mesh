@@ -39,6 +39,15 @@ type Options struct {
 	// survive a coordinator restart; see persist.go for the durability
 	// contract. Empty keeps streams purely in-memory (the P0 behavior).
 	StreamDir string
+	// PersistDir is the directory holding per-bucket op logs. When empty (or
+	// PersistBuckets is empty) every KV bucket is purely in-memory — the P0
+	// behavior, correct for the lease buckets (registry, claims) that
+	// self-heal by re-registration.
+	PersistDir string
+	// PersistBuckets names the buckets whose records must survive a
+	// coordinator restart (the autonomous-work buckets: jobs, tasks — #65).
+	// A bucket not listed here stays in-memory. See persistkv.go.
+	PersistBuckets []string
 	// Logger receives persistence warnings (corrupt lines, disk errors).
 	// nil defaults to slog.Default().
 	Logger *slog.Logger
@@ -71,6 +80,7 @@ type Server struct {
 	kv          map[string]*kvBucket
 	streams     map[string]*streamBuf
 	streamFiles map[string]*streamFile // on-disk mirrors; unused when StreamDir is empty
+	bucketFiles map[string]*bucketFile // on-disk KV op logs; unused when PersistBuckets is empty
 	conns       map[*serverConn]struct{}
 
 	janitorDone chan struct{}
@@ -106,6 +116,7 @@ func NewServer(socketPath string, opts Options) *Server {
 		kv:          make(map[string]*kvBucket),
 		streams:     make(map[string]*streamBuf),
 		streamFiles: make(map[string]*streamFile),
+		bucketFiles: make(map[string]*bucketFile),
 		conns:       make(map[*serverConn]struct{}),
 		janitorDone: make(chan struct{}),
 	}
@@ -121,6 +132,17 @@ func (s *Server) Start() error {
 	// append while history is still loading.
 	if s.opts.StreamDir != "" {
 		if err := s.loadStreams(); err != nil {
+			return err
+		}
+	}
+	// Rebuild persisted KV buckets (jobs, tasks — #65) before binding the
+	// socket too, so they are whole before any client — including the triage
+	// loop / #25 scheduler sweep that starts only after this returns — can read
+	// or mutate them. One authority per fact: the in-memory bucket is the
+	// authority; the op log is its durable mirror.
+	if len(s.opts.PersistBuckets) > 0 {
+		s.cleanBucketTemps()
+		if err := s.loadBuckets(); err != nil {
 			return err
 		}
 	}
@@ -192,6 +214,7 @@ func (s *Server) Stop() {
 	}
 	s.wg.Wait()
 	s.closeStreamFiles()
+	s.closeBucketFiles()
 	os.Remove(s.path)
 }
 
@@ -234,10 +257,17 @@ func (s *Server) janitor() {
 			return
 		case now := <-ticker.C:
 			s.mu.Lock()
-			for _, b := range s.kv {
+			for name, b := range s.kv {
+				persisted := s.persisted(name)
 				for key, e := range b.entries {
 					if e.expired(now) {
 						delete(b.entries, key)
+						if persisted {
+							// Mirror the lease expiry so a restart does not
+							// resurrect it. A no-op for jobs/tasks (untimed),
+							// correct for any future leased persisted bucket.
+							s.persistDelete(name, key)
+						}
 					}
 				}
 			}
@@ -452,6 +482,11 @@ func (s *Server) handleKV(f frame) frame {
 			e.expiresAt = now.Add(time.Duration(f.TTLMs) * time.Millisecond)
 		}
 		b.entries[f.Key] = e
+		if s.persisted(f.Bucket) {
+			// Under the same lock as the in-memory mutation, so the on-disk op
+			// order matches apply order.
+			s.persistPut(f.Bucket, f.Key, e)
+		}
 		return frame{ID: f.ID, OK: true, NewRev: e.rev}
 
 	case opKVDelete:
@@ -467,7 +502,11 @@ func (s *Server) handleKV(f frame) frame {
 				return frame{ID: f.ID, Err: &frameError{Code: errCodeCASLost, Message: "revision mismatch"}}
 			}
 		}
+		_, existed := b.entries[f.Key]
 		delete(b.entries, f.Key) // idempotent
+		if existed && s.persisted(f.Bucket) {
+			s.persistDelete(f.Bucket, f.Key)
+		}
 		return frame{ID: f.ID, OK: true}
 
 	case opKVList:

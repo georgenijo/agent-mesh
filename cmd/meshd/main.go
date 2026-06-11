@@ -22,9 +22,11 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/config"
 	"github.com/georgenijo/agent-mesh/internal/coordinator"
 	"github.com/georgenijo/agent-mesh/internal/dashboard"
+	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/observe"
 	agentruntime "github.com/georgenijo/agent-mesh/internal/runtime"
 	"github.com/georgenijo/agent-mesh/internal/sidecar"
+	"github.com/georgenijo/agent-mesh/internal/worker"
 )
 
 var version = "0.1.0-dev"
@@ -248,6 +250,36 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 		return err
 	}
 
+	// reviewFn is the expert's REVIEW capability (#27): drive the SAME resident
+	// child to review a worker diff and map the runtime's typed outcome onto the
+	// envelope.ReviewVerdict contract — never fake-success. It mirrors the answer
+	// path's best-effort --resume recovery on child death. Driven automatically
+	// by ServeReviews below (#80): the review-gating scheduler publishes
+	// role-addressed review requests and gates tasks on the verdict event.
+	reviewFn := func(askCtx context.Context, req sidecar.ReviewRequest) (sidecar.ReviewResult, error) {
+		rreq := agentruntime.ReviewRequest{
+			Instruction: req.Instruction, Diff: req.Diff, ChangedFiles: req.ChangedFiles,
+			BaseSHA: req.BaseSHA, HeadSHA: req.HeadSHA, Branch: req.Branch,
+		}
+		turnCtx, turnCancel := context.WithTimeout(askCtx, expertAskTimeout)
+		defer turnCancel()
+
+		out, err := proxy.Review(turnCtx, rreq)
+		if errors.Is(err, agentruntime.ErrProcessExited) && askCtx.Err() == nil {
+			// Best-effort crash recovery: rehydrate via --resume + re-prime, retry once.
+			if rerr := restartAndReprime(askCtx); rerr == nil {
+				out, err = proxy.Review(turnCtx, rreq)
+			}
+		}
+		return mapReviewOutcome(out, err), nil
+	}
+	// Inbound review transport (#80): serve mesh.review-req.<role> requests
+	// through the review capability. Failure to subscribe degrades the expert
+	// to answers-only — logged, never fatal (asks must keep working).
+	if err := sc.ServeReviews(ctx, reviewFn); err != nil {
+		log.Warn("expert: review-request subscription failed; reviews disabled", "err", err)
+	}
+
 	go func() {
 		opts := sidecar.ExpertOptions{Repo: repo, Prime: prime, Resync: resync}
 		if err := sc.ServeExpertWithMemory(ctx, fn, cfg.HeartbeatInterval, opts); err != nil && !errors.Is(err, context.Canceled) {
@@ -274,8 +306,69 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 	return 0
 }
 
+// mapReviewOutcome translates the runtime's typed review outcome + error onto
+// the sidecar ReviewResult (the envelope.ReviewVerdict contract). Never
+// fake-success: every non-clean outcome maps to a typed ReviewError with a
+// discriminating code, so an absent verdict is never a silent approve.
+//
+//   - ErrEmptyReview        -> error / empty_diff
+//   - ErrProcessExited      -> error / runtime_lost   (child died; recoverable)
+//   - ctx cancel / timeout  -> error / runtime_lost   (no result arrived)
+//   - *ResultError          -> error / runtime_error  (non-success turn)
+//   - ErrNoVerdict          -> error / bad_verdict     (answered, unparseable)
+//   - nil + valid verdict   -> the clean judgement
+func mapReviewOutcome(out agentruntime.ReviewOutcome, err error) sidecar.ReviewResult {
+	base := sidecar.ReviewResult{Notes: out.Notes, SessionID: out.SessionID, NumTurns: out.NumTurns}
+	if out.Turn.Result != nil {
+		// The review turn's reported cost rides on the verdict (#80) so the
+		// scheduler's budget meter accounts it like a worker run.
+		base.CostUSD = out.Turn.Result.TotalCostUSD
+	}
+	if err == nil {
+		switch out.Verdict {
+		case agentruntime.VerdictApprove:
+			base.Verdict = envelope.ReviewApprove
+		case agentruntime.VerdictRequestChanges:
+			base.Verdict = envelope.ReviewRequestChanges
+		case agentruntime.VerdictReject:
+			base.Verdict = envelope.ReviewReject
+		default:
+			// Defense in depth: a nil error must carry a real verdict.
+			base.Verdict, base.Code = envelope.ReviewError, envelope.ReviewBadVerdict
+		}
+		return base
+	}
+
+	base.Verdict = envelope.ReviewError
+	switch {
+	case errors.Is(err, agentruntime.ErrEmptyReview):
+		base.Code = envelope.ReviewEmptyDiff
+	case errors.Is(err, agentruntime.ErrProcessExited):
+		base.Code = envelope.ReviewRuntimeLost
+	case errors.Is(err, agentruntime.ErrNoVerdict):
+		base.Code = envelope.ReviewBadVerdict
+	default:
+		var re *agentruntime.ResultError
+		if errors.As(err, &re) {
+			base.Code = envelope.ReviewRuntimeError
+		} else {
+			// ctx cancel / AskTimeout / stdin write failure: the turn was lost.
+			base.Code = envelope.ReviewRuntimeLost
+		}
+	}
+	if base.Notes == "" {
+		base.Notes = err.Error()
+	}
+	return base
+}
+
 func runCoordinator(cfg config.Config, log *slog.Logger) int {
 	c := coordinator.New(cfg, log)
+	// The #26 worker driver's mesh membership: each spawned worker gets an
+	// embedded internal/sidecar joined here. Wired at this composition site —
+	// not inside the coordinator — because the sidecar package's tests import
+	// the coordinator (same seam pattern as the expert loop's ExpertFunc).
+	c.WorkerJoin = workerJoin(cfg, log)
 	if err := c.Start(); err != nil {
 		log.Error("coordinator start", "err", err)
 		return 1
@@ -283,6 +376,32 @@ func runCoordinator(cfg config.Config, log *slog.Logger) int {
 	waitSignal()
 	c.Stop()
 	return 0
+}
+
+// workerJoin builds the production worker.JoinFunc: a real per-worker sidecar.
+func workerJoin(cfg config.Config, log *slog.Logger) worker.JoinFunc {
+	return func(card agentcard.Card) (worker.Session, error) {
+		sc, err := sidecar.New(cfg, card, log)
+		if err != nil {
+			return nil, err
+		}
+		if err := sc.Start(); err != nil {
+			return nil, err
+		}
+		return workerSession{sc}, nil
+	}
+}
+
+// workerSession adapts *sidecar.Sidecar to worker.Session (the primer method
+// returns the rendered text; Leave/TrackChild/MarkChildExited promote as-is).
+type workerSession struct{ *sidecar.Sidecar }
+
+func (s workerSession) BuildPrimer(repo string, budget int) (string, error) {
+	p, err := s.Sidecar.BuildMemoryPrimer(repo, budget)
+	if err != nil {
+		return "", err
+	}
+	return p.Text, nil
 }
 
 func runDashboard(cfg config.Config, log *slog.Logger, addr string) int {

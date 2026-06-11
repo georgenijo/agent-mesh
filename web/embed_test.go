@@ -143,3 +143,35 @@ func TestIndexReferencesJobFormJS(t *testing.T) {
 		t.Fatal("index.html does not reference jobform.js")
 	}
 }
+
+// TestAppHandlesP3FrameTypes pins the P3 SSE contract for app.js: it must
+// handle all five P3 frame types (jobs/tasks/workers/triage/fleet) in its
+// onmessage handler. Any unhandled type means the panel never populates.
+func TestAppHandlesP3FrameTypes(t *testing.T) {
+	data, err := fs.ReadFile(Assets, "app.js")
+	if err != nil {
+		t.Fatalf("Assets missing app.js: %v", err)
+	}
+	js := string(data)
+	for _, frameType := range []string{"jobs", "tasks", "workers", "triage", "fleet"} {
+		// The handler must contain a branch keyed on the frame type.
+		if !strings.Contains(js, `msg.type === "`+frameType+`"`) {
+			t.Errorf("app.js does not handle P3 frame type %q in onmessage", frameType)
+		}
+	}
+}
+
+// TestIndexHasP3Panels pins that index.html contains the DOM elements the P3
+// render functions write to: jobList, taskList, workerList, fleetStatus.
+func TestIndexHasP3Panels(t *testing.T) {
+	data, err := fs.ReadFile(Assets, "index.html")
+	if err != nil {
+		t.Fatalf("Assets missing index.html: %v", err)
+	}
+	html := string(data)
+	for _, id := range []string{"jobList", "taskList", "workerList", "fleetStatus", "jobsPill", "tasksPill", "workersPill", "fleetPill"} {
+		if !strings.Contains(html, `id="`+id+`"`) {
+			t.Errorf("index.html is missing element with id=%q (required by P3 render functions)", id)
+		}
+	}
+}

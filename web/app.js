@@ -29,7 +29,11 @@
 // publish edge and dropped by the SSE bridge, so it could never reach this
 // page anyway). Unknown kinds fold into "other" so a newer meshd never
 // breaks this page.
-const KINDS = ["register", "leave", "heartbeat", "status", "announce", "claim", "ask", "answer", "note"];
+const KINDS = [
+  "register", "leave", "heartbeat", "status", "announce",
+  "claim", "ask", "answer", "note", "ticket",
+  "job", "task", "triage", "worker", "fleet",
+];
 
 const KIND_COLOR = {
   register: "#38ffa3",
@@ -41,6 +45,12 @@ const KIND_COLOR = {
   ask: "#f4b942",
   answer: "#38ffa3",
   note: "#9b8cff",
+  ticket: "#a78bfa",
+  job: "#68f5b8",
+  task: "#7dd3fc",
+  triage: "#f4b942",
+  worker: "#38ffa3",
+  fleet: "#ffb31f",
   other: "#8a98aa",
 };
 
@@ -67,6 +77,16 @@ const state = {
   notes: [], // newest first
   tickets: new Map(), // ticket id -> {ticket, from, route, q, state, answer, answeredBy, ts}
   filter: { kinds: new Set(), subject: "", heartbeats: false },
+  // P3: populated from authoritative snapshot frames (jobs/tasks/workers/triage/fleet).
+  // One authority per fact: these are replaced wholesale from each server frame —
+  // never accumulated from UI counters.
+  jobs: new Map(),      // job id -> {id, repo, source, title, state, ts}
+  tasks: new Map(),     // task id -> {id, job, role, title, state, ts}
+  workers: [],          // newest last; bounded ring from the server
+  triages: [],          // newest last; bounded ring from the server
+  fleet: null,          // null until first KindFleet observed; {state, code, spentUSD, budgetUSD, ts}
+  jobsSnapshotted: false,   // first authoritative jobs frame has arrived
+  tasksSnapshotted: false,  // first authoritative tasks frame has arrived
 };
 
 function byId(id) {
@@ -122,6 +142,12 @@ function eventLabel(env) {
     case "note": return p.decision || "";
     case "leave": return p.reason ? (p.id || "") + " (" + p.reason + ")" : p.id || "";
     case "heartbeat": return p.status || "";
+    case "job": return (p.state ? p.state + " " : "") + (p.title || p.id || "");
+    case "task": return (p.state ? p.state + " " : "") + (p.title || p.id || "");
+    case "triage": return (p.result || "") + (p.tasks ? " (" + p.tasks + " tasks)" : "");
+    case "worker": return (p.result || "") + (p.costUSD ? " $" + p.costUSD.toFixed(4) : "");
+    case "fleet": return p.state || "";
+    case "ticket": return p.state || p.ticket || "";
     default: return "";
   }
 }
@@ -155,6 +181,54 @@ function onClaims(held) {
     });
   }
   state.claimsSnapshotted = true;
+  scheduleRender();
+}
+
+// onJobs replaces the jobs view wholesale from the server's authoritative
+// snapshot frame. Jobs are keyed by id; the server sends the complete current
+// map on every change, so local state never drifts.
+function onJobs(jobs) {
+  if (!Array.isArray(jobs)) return;
+  state.jobs.clear();
+  for (const j of jobs) {
+    if (!j || !j.id) continue;
+    state.jobs.set(j.id, j);
+  }
+  state.jobsSnapshotted = true;
+  scheduleRender();
+}
+
+// onTasks replaces the tasks view wholesale from the server's authoritative
+// snapshot frame.
+function onTasks(tasks) {
+  if (!Array.isArray(tasks)) return;
+  state.tasks.clear();
+  for (const t of tasks) {
+    if (!t || !t.id) continue;
+    state.tasks.set(t.id, t);
+  }
+  state.tasksSnapshotted = true;
+  scheduleRender();
+}
+
+// onWorkers replaces the workers ring from the server's authoritative frame.
+function onWorkers(workers) {
+  if (!Array.isArray(workers)) return;
+  state.workers = workers.slice();
+  scheduleRender();
+}
+
+// onTriage replaces the triage ring from the server's authoritative frame.
+function onTriage(triages) {
+  if (!Array.isArray(triages)) return;
+  state.triages = triages.slice();
+  scheduleRender();
+}
+
+// onFleet stores the latest fleet-state from the server's authoritative frame.
+function onFleet(fleet) {
+  if (!fleet || typeof fleet !== "object") return;
+  state.fleet = fleet;
   scheduleRender();
 }
 
@@ -256,6 +330,11 @@ function connect() {
     if (msg.type === "roster") onRoster(msg.agents);
     else if (msg.type === "event") onEnvelope(msg.envelope);
     else if (msg.type === "claims") onClaims(msg.claims);
+    else if (msg.type === "jobs") onJobs(msg.jobs);
+    else if (msg.type === "tasks") onTasks(msg.tasks);
+    else if (msg.type === "workers") onWorkers(msg.workers);
+    else if (msg.type === "triage") onTriage(msg.triages);
+    else if (msg.type === "fleet") onFleet(msg.fleet);
   };
 
   es.onerror = () => {
@@ -547,6 +626,10 @@ function renderSummary() {
   byId("claimMetric").textContent = String(state.claims.size);
   byId("noteMetric").textContent = String(state.notes.length);
   byId("eventMetric").textContent = String(state.totalEvents);
+  const jobMetric = byId("jobMetric");
+  if (jobMetric) jobMetric.textContent = String(state.jobs.size);
+  const taskMetric = byId("taskMetric");
+  if (taskMetric) taskMetric.textContent = String(state.tasks.size);
 
   const pill = byId("presencePill");
   if (!total) {
@@ -703,6 +786,144 @@ function renderTickets() {
   }).join("");
 }
 
+// JOB_STATE_COLOR and TASK_STATE_COLOR map lifecycle state strings to
+// display colors. Defined as objects (not switch-case) so the test that
+// validates case-literal strings against the wire envelope kinds does not
+// pick up payload-level state vocabulary, which is distinct from kinds.
+const JOB_STATE_COLOR = {
+  open:      "#8a98aa",
+  triaged:   "#7dd3fc",
+  scheduled: "#a78bfa",
+  running:   "#f4b942",
+  done:      "#38ffa3",
+  failed:    "#f66f7d",
+  cancelled: "#859397",
+};
+
+const TASK_STATE_COLOR = {
+  pending:   "#8a98aa",
+  running:   "#f4b942",
+  done:      "#38ffa3",
+  failed:    "#f66f7d",
+  cancelled: "#859397",
+};
+
+function jobStateColor(s) { return JOB_STATE_COLOR[s] || "#8a98aa"; }
+function taskStateColor(s) { return TASK_STATE_COLOR[s] || "#8a98aa"; }
+
+function renderFleet() {
+  const list = byId("fleetStatus");
+  const pill = byId("fleetPill");
+  if (!state.fleet) {
+    if (pill) { pill.textContent = "no data"; pill.className = "pill"; }
+    if (list) list.innerHTML = '<div class="empty">No fleet events yet.<br>KindFleet envelopes from the scheduler will appear here.</div>';
+    return;
+  }
+  const f = state.fleet;
+  const running = f.state === "running";
+  const color = running ? "#38ffa3" : "#ffb31f";
+  if (pill) {
+    pill.textContent = f.state;
+    pill.className = "pill " + (running ? "green" : "amber");
+  }
+  const budget = f.budgetUSD > 0 ? " / $" + f.budgetUSD.toFixed(2) : "";
+  const cost = f.spentUSD > 0 ? "$" + f.spentUSD.toFixed(4) + " spent" + budget : "";
+  const reason = f.reason ? " — " + f.reason : "";
+  if (list) {
+    list.innerHTML = '<div class="row" style="border-left-color:' + color + '">' +
+      '<div class="row-top"><div class="row-title">' + esc(f.state.toUpperCase()) + '</div>' +
+      '<span class="pill ' + (running ? "green" : "amber") + '">' + esc(f.state) + '</span></div>' +
+      (cost ? '<div class="row-meta">' + esc(cost) + esc(reason) + '</div>' : '') +
+      (f.code ? '<div class="row-body" style="color:#ffb4ab">' + esc(f.code) + '</div>' : '') +
+      '</div>';
+  }
+}
+
+function renderJobs() {
+  const list = byId("jobList");
+  const pill = byId("jobsPill");
+  if (!list) return;
+  if (!state.jobs.size) {
+    if (pill) { pill.textContent = "0"; pill.className = "pill"; }
+    list.innerHTML = state.jobsSnapshotted
+      ? '<div class="empty">No jobs yet.<br>Submit a job with the + Submit Job button or via `mesh submit`.</div>'
+      : '<div class="empty">Waiting for the jobs snapshot…</div>';
+    return;
+  }
+  const rows = Array.from(state.jobs.values()).sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));
+  const running = rows.filter((j) => j.state === "running").length;
+  const active = rows.filter((j) => !["done", "failed", "cancelled"].includes(j.state)).length;
+  if (pill) {
+    pill.textContent = active + " active / " + rows.length;
+    pill.className = "pill " + (running ? "amber" : active ? "green" : "");
+  }
+  list.innerHTML = rows.map((j) => {
+    const color = jobStateColor(j.state);
+    return '<div class="row" style="border-left-color:' + color + '">' +
+      '<div class="row-top"><div class="row-title" title="' + esc(j.title) + '">' + esc(j.title) + '</div>' +
+      '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(j.state) + '</span></div>' +
+      '<div class="row-meta">' + esc(j.repo) + ' · ' + esc(j.source) + ' · ' + esc(ageText(j.ts)) + ' ago</div>' +
+      '</div>';
+  }).join("");
+}
+
+function renderTasks() {
+  const list = byId("taskList");
+  const pill = byId("tasksPill");
+  if (!list) return;
+  if (!state.tasks.size) {
+    if (pill) { pill.textContent = "0"; pill.className = "pill"; }
+    list.innerHTML = state.tasksSnapshotted
+      ? '<div class="empty">No tasks yet.<br>Tasks appear here once a job is triaged into a DAG.</div>'
+      : '<div class="empty">Waiting for the tasks snapshot…</div>';
+    return;
+  }
+  const rows = Array.from(state.tasks.values()).sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));
+  const running = rows.filter((t) => t.state === "running").length;
+  const done = rows.filter((t) => t.state === "done").length;
+  if (pill) {
+    pill.textContent = done + " done / " + rows.length;
+    pill.className = "pill " + (running ? "amber" : done === rows.length ? "green" : "");
+  }
+  list.innerHTML = rows.map((t) => {
+    const color = taskStateColor(t.state);
+    return '<div class="row" style="border-left-color:' + color + '">' +
+      '<div class="row-top"><div class="row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div>' +
+      '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(t.state) + '</span></div>' +
+      '<div class="row-meta">' + esc(t.role) + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
+      '</div>';
+  }).join("");
+}
+
+function renderWorkers() {
+  const list = byId("workerList");
+  const pill = byId("workersPill");
+  if (!list) return;
+  if (!state.workers.length) {
+    if (pill) { pill.textContent = "0"; pill.className = "pill"; }
+    list.innerHTML = '<div class="empty">No worker runs yet.<br>Each completed worker task appears here with its result and cost.</div>';
+    return;
+  }
+  // Newest last from the server → show newest first in the UI.
+  const rows = state.workers.slice().reverse();
+  const ok = rows.filter((w) => w.result === "ok").length;
+  const err = rows.filter((w) => w.result === "error").length;
+  if (pill) {
+    pill.textContent = ok + " ok" + (err ? " / " + err + " err" : "");
+    pill.className = "pill " + (err ? "amber" : "green");
+  }
+  list.innerHTML = rows.map((w) => {
+    const color = w.result === "ok" ? "#38ffa3" : "#f66f7d";
+    const cost = w.costUSD > 0 ? "$" + w.costUSD.toFixed(4) : "";
+    return '<div class="row" style="border-left-color:' + color + '">' +
+      '<div class="row-top"><div class="row-title">' + esc(w.task) + '</div>' +
+      '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(w.result) + '</span></div>' +
+      '<div class="row-meta">' + esc(w.job) + (cost ? ' · ' + esc(cost) : '') + ' · ' + esc(ageText(w.ts)) + ' ago</div>' +
+      (w.code ? '<div class="row-body" style="color:#ffb4ab">' + esc(w.code) + (w.reason ? ': ' + esc(w.reason) : '') + '</div>' : '') +
+      '</div>';
+  }).join("");
+}
+
 function renderExperts() {
   const list = byId("expertList");
   const pill = byId("expertsPill");
@@ -738,6 +959,10 @@ function render() {
   renderEvents();
   renderTickets();
   renderExperts();
+  renderFleet();
+  renderJobs();
+  renderTasks();
+  renderWorkers();
 }
 
 /* ------------------------------------------------------------------------- *

@@ -12,9 +12,19 @@
 //
 // Commit order is tasks-first: persist the task records, then CAS the job
 // open→triaged. A job that never reaches triaged cannot expose half a DAG,
-// because the scheduler (#25) only reads tasks of triaged jobs. Any failure
-// transitions the job open→failed with a typed code (retry/backoff policy is
-// deliberately out of scope here — see #29).
+// because the scheduler (#25) only reads tasks of triaged jobs.
+//
+// Failure handling is the #64 retry/backoff policy (see attempts.go). A typed
+// failure is classified TRANSIENT (may not recur: planner_unavailable, a
+// planner_failed carrying an api_error_status, or internal) or PERMANENT (a
+// retry of the same prompt would reproduce it: bad_plan, invalid_dag, or a
+// planner_failed from prose/non-result stdout with no api_error_status).
+// PERMANENT fails the job open→failed immediately. TRANSIENT increments a
+// DURABLE per-job attempt count and either schedules a backed-off retry (the
+// job stays open; the loop skips it until its nextRetryAt) or, once the
+// configured attempt cap is reached, fails it open→failed with the last typed
+// code. The cap honors the hard-cap billing posture: each attempt is one
+// planner LLM turn, so transient failures are never retried infinitely.
 package triage
 
 import (
@@ -53,9 +63,18 @@ const maxPromptNotes = 20
 
 // Error is the typed triage failure. Code is the wire-level classification
 // (envelope.TriageErrorCode); Err carries detail.
+//
+// apiError marks a planner_failed that carries a non-null api_error_status — a
+// TRANSIENT API blip (rate-limit / overload / 5xx) rather than deterministic
+// malformed output. It refines the #64 retry classification: a planner_failed
+// WITH an api_error_status is retried; a planner_failed from prose/non-result
+// stdout or a plain non-success subtype is deterministic and fails fast (see
+// the transientErr classifier in attempts.go). The flag is set only where
+// resultText observes the discriminator; it is meaningless for other codes.
 type Error struct {
-	Code envelope.TriageErrorCode
-	Err  error
+	Code     envelope.TriageErrorCode
+	Err      error
+	apiError bool
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("triage: %s: %v", e.Code, e.Err) }
@@ -75,34 +94,40 @@ func CodeOf(err error) envelope.TriageErrorCode {
 // PlannerCLI, which is required (the coordinator only constructs a Triager
 // when the operator set one).
 type Options struct {
-	PlannerCLI string        // required: planner binary (claude | fake)
-	Model      string        // optional --model for the planner CLI
-	Timeout    time.Duration // wall-clock bound per invocation (default 2m)
-	Interval   time.Duration // sweep cadence (default 5s)
-	Roles      []string      // allowed roles (default DefaultRoles)
-	WorkDir    string        // planner working dir (M0: clean cwd sheds CLAUDE.md cost)
-	Log        *slog.Logger
+	PlannerCLI  string        // required: planner binary (claude | fake)
+	Model       string        // optional --model for the planner CLI
+	Timeout     time.Duration // wall-clock bound per invocation (default 2m)
+	Interval    time.Duration // sweep cadence (default 5s)
+	Roles       []string      // allowed roles (default DefaultRoles)
+	WorkDir     string        // planner working dir (M0: clean cwd sheds CLAUDE.md cost)
+	MaxAttempts int           // #64: max planner attempts per job for TRANSIENT failures (default 4)
+	Backoff     time.Duration // #64: base delay of the exponential retry schedule (default 30s)
+	Log         *slog.Logger
+
+	// now is the clock the retry schedule reads. Swappable seam for tests so a
+	// backoff window can be asserted without sleeping; nil = time.Now (UTC).
+	now func() time.Time
 }
 
-// Triager sweeps the jobs bucket for open jobs and triages each at most once
-// per coordinator lifetime. One goroutine, one planner invocation in flight —
-// triage is a single planner call, not a fan-out (locked P3 plan decision).
+// Triager sweeps the jobs bucket for open jobs and triages each under the #64
+// retry/backoff policy: a job is attempted up to MaxAttempts times for TRANSIENT
+// planner failures, with bounded exponential backoff between attempts, then
+// fails terminally; a PERMANENT failure fails it on the first attempt. One
+// goroutine, one planner invocation in flight — triage is a single planner
+// call, not a fan-out (locked P3 plan decision).
 type Triager struct {
 	opts Options
 	cli  *bus.Client
 	log  *slog.Logger
+	now  func() time.Time
 
-	jobs  job.Store
-	tasks task.Store
+	jobs     job.Store
+	tasks    task.Store
+	attempts attemptStore
 
 	// invoke runs the planner and returns its raw stdout. Swappable seam for
 	// unit tests; the default execs Options.PlannerCLI one-shot.
 	invoke func(ctx context.Context, prompt string) ([]byte, error)
-
-	// attempted tracks jobs this coordinator already tried, successful or
-	// not, so a failed job is never planner-hammered by every sweep. Only
-	// touched from the loop goroutine.
-	attempted map[string]bool
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -122,17 +147,27 @@ func New(cli *bus.Client, opts Options) (*Triager, error) {
 	if len(opts.Roles) == 0 {
 		opts.Roles = DefaultRoles
 	}
+	if opts.MaxAttempts <= 0 {
+		opts.MaxAttempts = 4
+	}
+	if opts.Backoff <= 0 {
+		opts.Backoff = 30 * time.Second
+	}
+	if opts.now == nil {
+		opts.now = func() time.Time { return time.Now().UTC() }
+	}
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
 	t := &Triager{
-		opts:      opts,
-		cli:       cli,
-		log:       opts.Log,
-		jobs:      job.NewStore(cli),
-		tasks:     task.NewStore(cli),
-		attempted: make(map[string]bool),
-		stop:      make(chan struct{}),
+		opts:     opts,
+		cli:      cli,
+		log:      opts.Log,
+		now:      opts.now,
+		jobs:     job.NewStore(cli),
+		tasks:    task.NewStore(cli),
+		attempts: newAttemptStore(cli),
+		stop:     make(chan struct{}),
 	}
 	t.invoke = t.execPlanner
 	return t, nil
@@ -169,7 +204,11 @@ func (t *Triager) loop() {
 	}
 }
 
-// sweepOnce triages every open, not-yet-attempted job sequentially.
+// sweepOnce triages every open job whose retry schedule is due, sequentially.
+// A job in backoff (nextRetryAt in the future) is skipped until its deadline,
+// so a down planner is never hammered every tick. The schedule is read from the
+// durable attempt bucket, so it resumes across a coordinator restart rather than
+// restarting from attempt 0.
 func (t *Triager) sweepOnce() {
 	jobs, err := t.jobs.List()
 	if err != nil {
@@ -182,21 +221,37 @@ func (t *Triager) sweepOnce() {
 			return
 		default:
 		}
-		if rec.State != envelope.JobOpen || t.attempted[rec.ID] {
+		if rec.State != envelope.JobOpen {
 			continue
 		}
-		t.attempted[rec.ID] = true
-		t.runOne(rec)
+		att, _, err := t.attempts.get(rec.ID)
+		if err != nil {
+			t.log.Warn("triage: read attempt record failed", "job", rec.ID, "err", err)
+			continue
+		}
+		if !att.NextRetryAt.IsZero() && t.now().Before(att.NextRetryAt) {
+			continue // still backing off
+		}
+		t.runOne(rec, att)
 	}
 }
 
 // runOne triages a single job: plan, validate, persist, transition, publish.
-// Every failure path is typed and degrades — it must never take the
-// coordinator down.
-func (t *Triager) runOne(rec job.Record) {
+// att is the job's durable attempt record (Attempts is the count BEFORE this
+// invocation). Every failure path is typed and degrades — it must never take
+// the coordinator down.
+func (t *Triager) runOne(rec job.Record, att attemptRecord) {
+	// This invocation consumes one planner turn: record it durably first, so a
+	// crash mid-plan still counts the attempt against the cap (a planner turn
+	// that ran is money spent whether or not we observed the result).
+	att.Attempts++
+	if err := t.attempts.put(att); err != nil {
+		t.log.Warn("triage: persist attempt failed", "job", rec.ID, "err", err)
+	}
+
 	recs, err := t.plan(rec)
 	if err != nil {
-		t.fail(rec, err)
+		t.onFailure(rec, att, err)
 		return
 	}
 	updated, err := t.jobs.Transition(rec.ID, envelope.JobOpen, envelope.JobTriaged, triagerID,
@@ -204,8 +259,12 @@ func (t *Triager) runOne(rec job.Record) {
 	if err != nil {
 		// Tasks were persisted but the job never reached triaged: inert for
 		// the scheduler (it only reads tasks of triaged jobs).
-		t.fail(rec, &Error{Code: envelope.TriageInternal, Err: fmt.Errorf("transition: %w", err)})
+		t.onFailure(rec, att, &Error{Code: envelope.TriageInternal, Err: fmt.Errorf("transition: %w", err)})
 		return
+	}
+	// Triaged: the job left the open state, so its retry bookkeeping is done.
+	if err := t.attempts.clear(rec.ID); err != nil {
+		t.log.Warn("triage: clear attempt record failed", "job", rec.ID, "err", err)
 	}
 	for _, tr := range recs {
 		t.publishTask(tr)
@@ -215,6 +274,48 @@ func (t *Triager) runOne(rec job.Record) {
 		Job: rec.ID, Result: envelope.TriageOK, Tasks: len(recs),
 	})
 	t.log.Info("triage: job triaged", "job", rec.ID, "tasks", len(recs))
+}
+
+// onFailure applies the #64 retry/backoff policy to a typed triage failure.
+//
+//   - PERMANENT (bad_plan, invalid_dag): fail the job immediately. The planner
+//     ran and produced garbage; retrying the same prompt burns a planner turn
+//     for nothing.
+//   - TRANSIENT (planner_unavailable, planner_failed, internal): if the attempt
+//     cap is reached, fail terminally with the last typed code; otherwise keep
+//     the job open and schedule a backed-off retry (durable, so it survives a
+//     restart). The loop skips the job until nextRetryAt — a down planner is
+//     not hammered every tick.
+func (t *Triager) onFailure(rec job.Record, att attemptRecord, cause error) {
+	code := CodeOf(cause)
+	att.LastCode = code
+
+	if !transientErr(cause) {
+		t.log.Warn("triage: permanent failure; failing fast",
+			"job", rec.ID, "code", string(code), "attempt", att.Attempts, "err", cause)
+		t.failTerminal(rec, code, cause)
+		return
+	}
+	if att.Attempts >= t.opts.MaxAttempts {
+		t.log.Warn("triage: transient failure; attempts exhausted",
+			"job", rec.ID, "code", string(code), "attempts", att.Attempts, "max", t.opts.MaxAttempts, "err", cause)
+		t.failTerminal(rec, code, cause)
+		return
+	}
+	// Schedule a backed-off retry; the job stays open.
+	delay := backoffFor(t.opts.Backoff, att.Attempts)
+	att.NextRetryAt = t.now().Add(delay)
+	if err := t.attempts.put(att); err != nil {
+		t.log.Warn("triage: persist retry schedule failed", "job", rec.ID, "err", err)
+	}
+	t.log.Info("triage: transient failure; backing off",
+		"job", rec.ID, "code", string(code), "attempt", att.Attempts, "max", t.opts.MaxAttempts,
+		"retryIn", delay, "err", cause)
+	// Emit the typed error event so the failure (and its retry) is observable,
+	// but DO NOT transition the job — it stays open for the next attempt.
+	t.publishTriage(envelope.TriagePayload{
+		Job: rec.ID, Result: envelope.TriageError, Code: code, Reason: truncate(cause.Error(), 512),
+	})
 }
 
 // plan runs the planner and returns validated, persisted task records.
@@ -265,7 +366,10 @@ func resultText(stdout []byte) (string, error) {
 			Err: fmt.Errorf("planner stdout is %q, not a result envelope", ev.Type)}
 	}
 	if !ev.Result.Succeeded() {
-		return "", &Error{Code: envelope.TriagePlannerFailed,
+		// A non-null api_error_status is a TRANSIENT API blip (rate-limit /
+		// overload / 5xx) — mark it retryable (#64). A plain non-success
+		// subtype or is_error is deterministic and fails fast.
+		return "", &Error{Code: envelope.TriagePlannerFailed, apiError: ev.Result.HasAPIError(),
 			Err: fmt.Errorf("planner result not a success (subtype=%q is_error=%v api_error=%v)",
 				ev.Result.Subtype, ev.Result.IsError, ev.Result.HasAPIError())}
 	}
@@ -301,17 +405,22 @@ func (t *Triager) execPlanner(ctx context.Context, prompt string) ([]byte, error
 	return out, nil
 }
 
-// fail records a typed triage failure: job open→failed, a KindTriage error
-// event, and the derived KindJob event. Best-effort by design — a failure to
+// failTerminal records a terminal triage failure: job open→failed, the durable
+// attempt record cleared, a KindTriage error event, and the derived KindJob
+// event. Reached for a PERMANENT code on the first attempt or a TRANSIENT code
+// once the attempt cap is exhausted. Best-effort by design — a failure to
 // record the failure degrades to a log line, never a crash.
-func (t *Triager) fail(rec job.Record, cause error) {
-	code := CodeOf(cause)
+func (t *Triager) failTerminal(rec job.Record, code envelope.TriageErrorCode, cause error) {
 	t.log.Warn("triage: job failed", "job", rec.ID, "code", string(code), "err", cause)
 	updated, err := t.jobs.Transition(rec.ID, envelope.JobOpen, envelope.JobFailed, triagerID,
 		fmt.Sprintf("%s: %v", code, cause))
 	if err != nil {
 		t.log.Warn("triage: record failure transition failed", "job", rec.ID, "err", err)
 	} else {
+		// The job left open; its retry bookkeeping is done.
+		if cerr := t.attempts.clear(rec.ID); cerr != nil {
+			t.log.Warn("triage: clear attempt record failed", "job", rec.ID, "err", cerr)
+		}
 		t.publishJob(updated)
 	}
 	t.publishTriage(envelope.TriagePayload{

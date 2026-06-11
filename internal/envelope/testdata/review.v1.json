@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "id": "01976f00-0000-7000-8000-000000000001",
+  "from": "codex-7",
+  "subject": "mesh.review.01976f00-0000-7000-8000-0000000000a1",
+  "ts": "2026-06-05T00:00:00Z",
+  "payload": {
+    "task": "01976f00-0000-7000-8000-0000000000a1",
+    "job": "01976f00-0000-7000-8000-00000000007e",
+    "branch": "mesh/worker/01976f00-0000-7000-8000-0000000000a1",
+    "headSHA": "deadbeefcafef00ddeadbeefcafef00ddeadbeef",
+    "verdict": "request_changes",
+    "notes": "missing error handling on the RLS path",
+    "sessionID": "sess-auth-expert",
+    "numTurns": 3,
+    "costUSD": 0.0042
+  }
+}

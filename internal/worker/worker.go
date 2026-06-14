@@ -467,11 +467,25 @@ func (w *worker) buildPrompt() string {
 	fmt.Fprintf(&b, "\nYou are working in an ISOLATED git worktree of repo %q on branch %s.\n", w.jrec.Repo, w.branch)
 	b.WriteString("Only edit files inside this worktree. Commit your changes when done; any\n")
 	b.WriteString("uncommitted changes are committed onto your branch for you afterwards.\n")
-	b.WriteString("\nThe `mesh` CLI is available and you are already joined to the mesh:\n")
-	b.WriteString("- `mesh claim <path>` before editing files other workers may share (exit 6 = someone else holds it)\n")
-	b.WriteString("- `mesh context` replays this repo's durable decision blackboard\n")
-	b.WriteString("- `mesh note \"<decision>\"` records a durable decision for other agents\n")
-	b.WriteString("- `mesh ask --role <role> \"<question>\" --wait` asks an expert and blocks until the answer\n")
+	b.WriteString("\nThe `mesh` CLI is available and you are already joined to the mesh. You are\n")
+	b.WriteString("NOT working alone — other workers may touch this repo in parallel and expert\n")
+	b.WriteString("agents are standing by. COORDINATE, do not guess:\n")
+	b.WriteString("- `mesh context` — read this repo's durable decision blackboard FIRST, so you\n")
+	b.WriteString("  do not relitigate a settled decision.\n")
+	b.WriteString("- `mesh claim <path>` — run this BEFORE editing any file another worker might\n")
+	b.WriteString("  share. Exit code 6 means someone else holds it: pick a different file or ask\n")
+	b.WriteString("  how to proceed; never edit a file you could not claim.\n")
+	if w.d.cfg.ReviewRole != "" {
+		fmt.Fprintf(&b, "- `mesh ask --role %s \"<question>\" --wait` — when you hit a real decision you\n", w.d.cfg.ReviewRole)
+		b.WriteString("  are unsure about (an ambiguous requirement, a design choice, a convention you\n")
+		b.WriteString("  cannot verify, an acceptance criterion you cannot confirm), ASK the expert and\n")
+		b.WriteString("  wait for the answer instead of assuming. Your diff WILL be reviewed by this\n")
+		b.WriteString("  same role — a short question now beats a rejected diff later.\n")
+	} else {
+		b.WriteString("- `mesh ask --role <role> \"<question>\" --wait` — ask an expert and block for the answer.\n")
+	}
+	b.WriteString("- `mesh note \"<decision>\"` — record a durable decision (a convention you chose,\n")
+	b.WriteString("  a tradeoff you made) so the next worker and the reviewer see your reasoning.\n")
 
 	if primer, err := w.sc.BuildPrimer(w.jrec.Repo, 0); err != nil {
 		w.d.log.Warn("worker: blackboard primer failed; continuing without", "task", w.rec.ID, "err", err)

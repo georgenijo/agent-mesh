@@ -77,6 +77,7 @@ const state = {
   notes: [], // newest first
   tickets: new Map(), // ticket id -> {ticket, from, route, q, state, answer, answeredBy, ts}
   filter: { kinds: new Set(), subject: "", heartbeats: false },
+  openEvents: new Set(), // env ids whose <details> the reader has expanded
   // P3: populated from authoritative snapshot frames (jobs/tasks/workers/triage/fleet).
   // One authority per fact: these are replaced wholesale from each server frame —
   // never accumulated from UI counters.
@@ -727,6 +728,12 @@ function payloadJSON(env) {
   }, null, 2);
 }
 
+// eventId is the stable key for an observed envelope's <details> open-state.
+// Envelope ids are UUIDv7 and unique; the fallback only guards synthetic events.
+function eventId(env) {
+  return env.id || (env.kind + "|" + (env.ts || "") + "|" + (env.subject || ""));
+}
+
 // renderedEventsKey skips event-list rebuilds when neither the log nor the
 // filter changed, so a reader's expanded <details> is not collapsed by the
 // 1s roster tick.
@@ -749,6 +756,8 @@ function renderEvents() {
   }
   list.innerHTML = rows.map((env) => {
     const label = eventLabel(env);
+    const eid = eventId(env);
+    const open = state.openEvents.has(eid) ? " open" : "";
     return '<div class="row event-card" style="border-left-color:' + kindColor(env.kind) + '">' +
       '<div class="event-top">' +
       '<span class="event-kind" style="color:' + kindColor(env.kind) + '">' + esc(env.kind) + "</span>" +
@@ -756,7 +765,7 @@ function renderEvents() {
       '<span class="event-time">' + esc(timeText(env.ts)) + "</span>" +
       "</div>" +
       '<div class="row-meta">' + esc(env.from || "") + (label ? " — " + esc(label) : "") + "</div>" +
-      "<details><summary>envelope</summary><pre>" + esc(payloadJSON(env)) + "</pre></details>" +
+      '<details data-eid="' + esc(eid) + '"' + open + "><summary>envelope</summary><pre>" + esc(payloadJSON(env)) + "</pre></details>" +
       "</div>";
   }).join("");
 }
@@ -995,6 +1004,17 @@ function buildFilters() {
     state.filter.heartbeats = event.target.checked;
     renderEvents();
   });
+
+  // Preserve which envelope <details> are open across the per-event list
+  // rebuild: renderEvents() wipes #eventList.innerHTML on every new event, so
+  // without this the disclosure a reader just opened collapses on the next
+  // event. `toggle` does not bubble — listen in the capture phase.
+  byId("eventList").addEventListener("toggle", (event) => {
+    const d = event.target;
+    if (!d || d.tagName !== "DETAILS" || !d.dataset.eid) return;
+    if (d.open) state.openEvents.add(d.dataset.eid);
+    else state.openEvents.delete(d.dataset.eid);
+  }, true);
 }
 
 function styleChips() {

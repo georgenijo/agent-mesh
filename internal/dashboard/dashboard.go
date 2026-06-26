@@ -258,7 +258,7 @@ func (d *Dashboard) Start() error {
 		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: %w", err)
 	}
-	d.httpSrv = &http.Server{Handler: hostCheckMiddleware(mux)}
+	d.httpSrv = &http.Server{Handler: hostCheckMiddleware(mux, d.cfg.DashboardAllowedHosts...)}
 
 	d.wg.Add(2)
 	go func() {
@@ -939,7 +939,21 @@ func isLoopbackHost(host string) bool {
 // is also rejected — an absent Host is allowed by HTTP/1.0 but not by
 // HTTP/1.1, and the dashboard is only ever accessed on loopback where a
 // well-behaved client always supplies it.
-func hostCheckMiddleware(next http.Handler) http.Handler {
+//
+// allowed extends the loopback allow-list with extra Host values (e.g. a
+// tailnet MagicDNS name or IP) so the dashboard can be reached over a trusted
+// network. With no entries the behavior is unchanged: loopback-only.
+func hostCheckMiddleware(next http.Handler, allowed ...string) http.Handler {
+	allow := make(map[string]bool, len(allowed))
+	for _, h := range allowed {
+		if h = strings.TrimSpace(h); h == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			h = host
+		}
+		allow[strings.ToLower(h)] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if host == "" {
@@ -951,7 +965,7 @@ func hostCheckMiddleware(next http.Handler) http.Handler {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if !isLoopbackHost(host) {
+		if !isLoopbackHost(host) && !allow[strings.ToLower(host)] {
 			writeJSONError(w, `{"error":"forbidden","message":"Host not allowed"}`, http.StatusForbidden)
 			return
 		}

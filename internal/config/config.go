@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,25 +22,30 @@ const (
 	EnvRegistrationGrace = "MESH_REGISTRATION_GRACE"
 	EnvClaimTTL          = "MESH_CLAIM_TTL"
 	EnvDashboardAddr     = "MESH_DASHBOARD_ADDR"
-	EnvObserveAddr       = "MESH_OBSERVE_ADDR"
-	EnvAgentSocket       = "MESH_SOCKET"              // CLI → sidecar socket override
-	EnvMeshdBin          = "MESH_MESHD"               // path to meshd for autostart
-	EnvExpertCLI         = "MESH_EXPERT_CLI"          // agent CLI an expert responder drives (default "claude")
-	EnvPlannerCLI        = "MESH_PLANNER_CLI"         // CLI the coordinator's triage planner drives; empty = triage disabled
-	EnvPlannerModel      = "MESH_PLANNER_MODEL"       // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
-	EnvTriageTimeout     = "MESH_TRIAGE_TIMEOUT"      // wall-clock bound on one planner invocation
-	EnvTriageMaxAttempts = "MESH_TRIAGE_MAX_ATTEMPTS" // max planner attempts per job before open→failed (transient codes only); default 4
-	EnvTriageBackoff     = "MESH_TRIAGE_BACKOFF"      // base delay for the exponential triage retry backoff; default 30s
-	EnvWorkerCLI         = "MESH_WORKER_CLI"          // CLI the coordinator's scheduler drives per task; empty = scheduler disabled
-	EnvWorkerModel       = "MESH_WORKER_MODEL"        // --model passed to the worker CLI (default "sonnet"; empty = CLI default)
-	EnvWorkerTimeout     = "MESH_WORKER_TIMEOUT"      // wall-clock bound on one worker invocation
-	EnvBudgetUSD         = "MESH_BUDGET_USD"          // fleet budget cap in USD; 0/unset = unlimited
-	EnvMaxWorkers        = "MESH_MAX_WORKERS"         // max concurrent workers (default 4)
-	EnvReposDir          = "MESH_REPOS_DIR"           // dir mapping job repo names to git checkouts; required by the #26 worker driver
-	EnvKeepWorktrees     = "MESH_KEEP_WORKTREES"      // worker worktree retention: on-failure (default) | always | never
-	EnvAuditFanout       = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
-	EnvReviewRole        = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
-	EnvReviewTimeout     = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
+	// EnvDashboardAllowedHosts is a comma-separated allow-list of extra Host
+	// header values the dashboard accepts in addition to loopback. Empty (the
+	// default) keeps the secure loopback-only posture; set it to authorize a
+	// trusted remote name such as a tailnet MagicDNS host or IP.
+	EnvDashboardAllowedHosts = "MESH_DASHBOARD_ALLOWED_HOSTS"
+	EnvObserveAddr           = "MESH_OBSERVE_ADDR"
+	EnvAgentSocket           = "MESH_SOCKET"              // CLI → sidecar socket override
+	EnvMeshdBin              = "MESH_MESHD"               // path to meshd for autostart
+	EnvExpertCLI             = "MESH_EXPERT_CLI"          // agent CLI an expert responder drives (default "claude")
+	EnvPlannerCLI            = "MESH_PLANNER_CLI"         // CLI the coordinator's triage planner drives; empty = triage disabled
+	EnvPlannerModel          = "MESH_PLANNER_MODEL"       // --model passed to the planner CLI (default "sonnet"; empty = CLI default)
+	EnvTriageTimeout         = "MESH_TRIAGE_TIMEOUT"      // wall-clock bound on one planner invocation
+	EnvTriageMaxAttempts     = "MESH_TRIAGE_MAX_ATTEMPTS" // max planner attempts per job before open→failed (transient codes only); default 4
+	EnvTriageBackoff         = "MESH_TRIAGE_BACKOFF"      // base delay for the exponential triage retry backoff; default 30s
+	EnvWorkerCLI             = "MESH_WORKER_CLI"          // CLI the coordinator's scheduler drives per task; empty = scheduler disabled
+	EnvWorkerModel           = "MESH_WORKER_MODEL"        // --model passed to the worker CLI (default "sonnet"; empty = CLI default)
+	EnvWorkerTimeout         = "MESH_WORKER_TIMEOUT"      // wall-clock bound on one worker invocation
+	EnvBudgetUSD             = "MESH_BUDGET_USD"          // fleet budget cap in USD; 0/unset = unlimited
+	EnvMaxWorkers            = "MESH_MAX_WORKERS"         // max concurrent workers (default 4)
+	EnvReposDir              = "MESH_REPOS_DIR"           // dir mapping job repo names to git checkouts; required by the #26 worker driver
+	EnvKeepWorktrees         = "MESH_KEEP_WORKTREES"      // worker worktree retention: on-failure (default) | always | never
+	EnvAuditFanout           = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
+	EnvReviewRole            = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
+	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -120,8 +126,11 @@ type Config struct {
 	RegistrationGrace time.Duration // no away/evict this soon after register
 	ClaimTTL          time.Duration // claim lease backstop; renewed each heartbeat
 	DashboardAddr     string
-	ObserveAddr       string
-	ExpertCLI         string // agent CLI an expert responder drives (meshd --mode expert)
+	// DashboardAllowedHosts are extra Host header values the dashboard accepts
+	// beyond loopback (lower-cased, port stripped). Empty = loopback-only.
+	DashboardAllowedHosts []string
+	ObserveAddr           string
+	ExpertCLI             string // agent CLI an expert responder drives (meshd --mode expert)
 
 	// PlannerCLI is the agent CLI the coordinator's triage loop drives for
 	// one-shot planning (#24). Deliberately NO default: an autostarted
@@ -245,6 +254,13 @@ func Load() (Config, error) {
 
 	if addr := os.Getenv(EnvDashboardAddr); addr != "" {
 		cfg.DashboardAddr = addr
+	}
+	if hosts := os.Getenv(EnvDashboardAllowedHosts); hosts != "" {
+		for _, h := range strings.Split(hosts, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				cfg.DashboardAllowedHosts = append(cfg.DashboardAllowedHosts, strings.ToLower(h))
+			}
+		}
 	}
 	if addr := os.Getenv(EnvObserveAddr); addr != "" {
 		cfg.ObserveAddr = addr

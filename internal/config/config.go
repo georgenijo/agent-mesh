@@ -47,6 +47,7 @@ const (
 	EnvAuditFanout           = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
 	EnvReviewRole            = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
+	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -172,6 +173,16 @@ type Config struct {
 	ReviewRole string
 	// ReviewTimeout bounds one review round trip (request → verdict event).
 	ReviewTimeout time.Duration
+
+	// AutoExperts arms autonomous on-demand expert spawning (#117): when on,
+	// the coordinator watches role-addressed asks (and #80 review requests) and
+	// launches a resident `meshd --mode expert --role R` the moment one targets
+	// a role no live agent fills, then re-delivers the triggering message once
+	// the fresh expert is listening. The asker's sidecar reads the same flag to
+	// stop short-circuiting a role-ask that currently has no owner. Off by
+	// default — and on the same opt-in posture as PlannerCLI/WorkerCLI: an
+	// autostarted coordinator never spawns LLM processes unless armed.
+	AutoExperts bool
 
 	// ReposDir maps a job's repo NAME to a git checkout at <ReposDir>/<name>.
 	// Deliberately NO default: the #26 worker driver refuses to start without
@@ -311,6 +322,16 @@ func Load() (Config, error) {
 			cfg.AuditFanout = false
 		default:
 			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAuditFanout, raw)
+		}
+	}
+	if raw := os.Getenv(EnvAutoExperts); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.AutoExperts = true
+		case "off", "false", "0":
+			cfg.AutoExperts = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAutoExperts, raw)
 		}
 	}
 	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off

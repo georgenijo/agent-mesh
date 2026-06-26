@@ -92,6 +92,11 @@ type Coordinator struct {
 	// trip) — nil unless BOTH cfg.WorkerCLI and cfg.ReviewRole are set.
 	reviewer *scheduler.BusReviewer
 
+	// experts is the #117 autonomous expert spawner — nil unless
+	// cfg.AutoExperts is set. It watches role-asks / review requests and
+	// launches a resident expert when one targets an un-owned role.
+	experts *expertSpawner
+
 	// mu serializes every registry read-modify-write: events arrive on
 	// independent subscription goroutines, and the KV store has no
 	// transactions across get+put.
@@ -240,6 +245,22 @@ func (c *Coordinator) Start() error {
 		c.log.Warn("MESH_REVIEW_ROLE set but MESH_WORKER_CLI unset; review gating inactive")
 	}
 
+	// Autonomous experts (#117): opt-in via MESH_AUTO_EXPERTS, same posture as
+	// the planner/worker knobs — an autostarted coordinator never spawns LLM
+	// processes unless armed. A setup failure degrades to "no auto-experts"
+	// (logged), never a coordinator crash: presence/asks must keep working.
+	if c.cfg.AutoExperts {
+		sp, err := newExpertSpawner(cli, c.cfg, c.log)
+		if err != nil {
+			c.log.Warn("auto-experts requested but disabled", "err", err)
+		} else if err := sp.start(); err != nil {
+			c.log.Warn("auto-experts requested but disabled", "err", err)
+		} else {
+			c.experts = sp
+			c.log.Info("auto-experts enabled")
+		}
+	}
+
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
 		c.Stop()
 		return fmt.Errorf("coordinator: write pid file: %w", err)
@@ -265,6 +286,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.reviewer != nil {
 		c.reviewer.Close()
+	}
+	if c.experts != nil {
+		c.experts.stop()
 	}
 	if c.cli != nil {
 		c.cli.Close()

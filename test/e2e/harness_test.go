@@ -331,3 +331,12 @@ func findAgent(agents []agentcard.RegistryRecord, name string) (agentcard.Regist
 	}
 	return agentcard.RegistryRecord{}, false
 }
+
+func findAgentByRole(agents []agentcard.RegistryRecord, role string) (agentcard.RegistryRecord, bool) {
+	for _, a := range agents {
+		if a.Card.Role == role {
+			return a, true
+		}
+	}
+	return agentcard.RegistryRecord{}, false
+}

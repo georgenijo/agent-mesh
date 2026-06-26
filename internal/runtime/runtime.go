@@ -55,15 +55,13 @@ func DefaultArgs() []string {
 }
 
 const (
-	defaultStartTimeout = 30 * time.Second
+	// defaultStartTimeout is the liveness grace on spawn: how long Start watches
+	// for an immediate crash (bad binary/auth) before treating an alive child as
+	// ready. It is NOT a session-id deadline — this claude build emits its init
+	// (and session id) only after the first input, so session id is captured
+	// lazily on the first turn, not waited for at startup (#93).
+	defaultStartTimeout = 3 * time.Second
 	defaultCloseTimeout = 5 * time.Second
-	// startReadyGrace bounds how long spawn() waits to catch a child that dies
-	// immediately at startup (bad binary/flags). We do NOT wait for the init
-	// event here: claude in stream-json mode does not emit its init/session-id
-	// event until it receives the first input message, so blocking on init
-	// would deadlock the resident runtime. The session id is captured lazily
-	// from the init event on the first Ask instead.
-	startReadyGrace = 2 * time.Second
 )
 
 // Options configure a Proxy. Zero values take defaults. Binary/Args/Dir/Env

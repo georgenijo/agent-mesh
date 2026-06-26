@@ -23,8 +23,7 @@ func runAsk(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&wait, "wait", false, "wait for answer (explicit only)")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 1 || vs.positional[0] == "" {
 		fmt.Fprintln(stderr, `usage: mesh ask (--role R | --to ID) "<question>"`)
@@ -101,8 +100,7 @@ const defaultWaitLimit = 30 * time.Minute
 func runPoll(args []string, stdout, stderr io.Writer) int {
 	vs, code, err := setupVerb("poll", args, stderr, nil)
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 1 || vs.positional[0] == "" {
 		fmt.Fprintln(stderr, `usage: mesh poll <ticket>`)
@@ -149,8 +147,7 @@ func runInbox(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&watch, "watch", false, "wait until at least one item is available")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 0 {
 		fmt.Fprintln(stderr, `usage: mesh inbox [--limit N] [--watch]`)
@@ -194,8 +191,7 @@ func printInbox(w io.Writer, res meshapi.InboxResult) {
 func runAnswer(args []string, stdout, stderr io.Writer) int {
 	vs, code, err := setupVerb("answer", args, stderr, nil)
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 2 || vs.positional[0] == "" || vs.positional[1] == "" {
 		fmt.Fprintln(stderr, `usage: mesh answer <ticket> "<answer>"`)

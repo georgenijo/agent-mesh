@@ -73,6 +73,9 @@ func (s *Sidecar) handleIncomingAsk(env envelope.Envelope) {
 	if !joined {
 		return
 	}
+	if env.From == id {
+		return
+	}
 	rec, err := s.ticketStore().Accept(p.Ticket, id)
 	if err != nil {
 		return

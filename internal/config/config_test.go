@@ -52,6 +52,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 // the CLI default, and the timeout parses like every other duration knob.
 func TestLoadPlannerKnobs(t *testing.T) {
 	t.Setenv(EnvMeshDir, t.TempDir())
+	t.Setenv(EnvPlannerCLI, "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -119,6 +120,7 @@ func TestLoadPlannerKnobs(t *testing.T) {
 
 func TestLoadWorkerKnobs(t *testing.T) {
 	t.Setenv(EnvMeshDir, t.TempDir())
+	t.Setenv(EnvWorkerCLI, "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -219,6 +221,8 @@ func TestLoadWorkerWorktreeKnobs(t *testing.T) {
 
 func TestLoadWorkerWorktreeDefaults(t *testing.T) {
 	t.Setenv(EnvMeshDir, t.TempDir())
+	t.Setenv(EnvReposDir, "")
+	t.Setenv(EnvKeepWorktrees, "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -228,6 +232,42 @@ func TestLoadWorkerWorktreeDefaults(t *testing.T) {
 	}
 	if cfg.KeepWorktrees != KeepWorktreesOnFailure {
 		t.Fatalf("KeepWorktrees default = %q, want %q", cfg.KeepWorktrees, KeepWorktreesOnFailure)
+	}
+}
+
+func TestLoadRejectsBadBudget(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	for _, raw := range []string{"nan", "inf", "+inf"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv(EnvBudgetUSD, raw)
+			if _, err := Load(); err == nil {
+				t.Fatalf("MESH_BUDGET_USD=%q: want error, got nil", raw)
+			}
+		})
+	}
+}
+
+func TestLoadAbsolutizesMeshDir(t *testing.T) {
+	t.Setenv(EnvMeshDir, ".mesh")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(cfg.MeshDir) {
+		t.Fatalf("MeshDir = %q, want absolute path", cfg.MeshDir)
+	}
+}
+
+func TestLoadAbsolutizesReposDir(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+	t.Setenv(EnvReposDir, "repos/local")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(cfg.ReposDir) {
+		t.Fatalf("ReposDir = %q, want absolute path", cfg.ReposDir)
 	}
 }
 

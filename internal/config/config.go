@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -223,6 +224,11 @@ func Load() (Config, error) {
 		}
 		cfg.MeshDir = filepath.Join(home, ".mesh")
 	}
+	absDir, err := filepath.Abs(cfg.MeshDir)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: absolutize %s: %w", EnvMeshDir, err)
+	}
+	cfg.MeshDir = absDir
 
 	for _, d := range []struct {
 		env string
@@ -278,7 +284,7 @@ func Load() (Config, error) {
 	}
 	if raw := os.Getenv(EnvBudgetUSD); raw != "" {
 		budget, err := strconv.ParseFloat(raw, 64)
-		if err != nil || budget < 0 {
+		if err != nil || budget < 0 || math.IsNaN(budget) || math.IsInf(budget, 0) {
 			return Config{}, fmt.Errorf("config: %s=%q: want a non-negative USD amount", EnvBudgetUSD, raw)
 		}
 		cfg.BudgetUSD = budget
@@ -309,6 +315,13 @@ func Load() (Config, error) {
 	}
 	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off
 	cfg.ReposDir = os.Getenv(EnvReposDir)     // empty = worker driver refuses to construct
+	if cfg.ReposDir != "" {
+		absRepos, err := filepath.Abs(cfg.ReposDir)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: absolutize %s: %w", EnvReposDir, err)
+		}
+		cfg.ReposDir = absRepos
+	}
 	if raw := os.Getenv(EnvKeepWorktrees); raw != "" {
 		switch raw {
 		case KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever:

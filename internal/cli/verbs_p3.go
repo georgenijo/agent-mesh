@@ -40,8 +40,7 @@ func runSubmit(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&issue, "issue", "", "ingest a GitHub issue: owner/repo#N")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 
 	submitArgs, codeStr, err := buildSubmitArgs(vs.positional, repo, title, issue)

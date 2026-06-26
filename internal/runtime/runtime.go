@@ -46,12 +46,24 @@ func DefaultArgs() []string {
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
+		// A resident expert runs headless and cannot answer interactive
+		// permission prompts, so without this it is blocked from using tools
+		// (e.g. reading the repo to answer a question). The flag grants
+		// non-interactive tool use so the expert can actually do its job.
+		"--dangerously-skip-permissions",
 	}
 }
 
 const (
 	defaultStartTimeout = 30 * time.Second
 	defaultCloseTimeout = 5 * time.Second
+	// startReadyGrace bounds how long spawn() waits to catch a child that dies
+	// immediately at startup (bad binary/flags). We do NOT wait for the init
+	// event here: claude in stream-json mode does not emit its init/session-id
+	// event until it receives the first input message, so blocking on init
+	// would deadlock the resident runtime. The session id is captured lazily
+	// from the init event on the first Ask instead.
+	startReadyGrace = 2 * time.Second
 )
 
 // Options configure a Proxy. Zero values take defaults. Binary/Args/Dir/Env

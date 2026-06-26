@@ -449,6 +449,7 @@ function syncStageNodes() {
       "</div>" +
       '<div class="stat"><span class="ndot" style="background:' + def.color + ";box-shadow:0 0 8px " + def.color + '"></span><span class="msg">' + esc(msg) + "</span></div>";
     byId("nodeLayer").appendChild(el);
+    if (def.side === "top") el.dataset.drillAgent = def.key;
 
     const node = {
       key: def.key,
@@ -665,7 +666,7 @@ function renderAgents() {
     const card = agent.card || {};
     const pillClass = agent.state === "live" ? "green" : agent.state === "away" ? "amber" : "rose";
     const meta = [card.role || "-", card.repo || "", "seen " + ageText(agent.lastSeen) + " ago"].filter(Boolean).join(" · ");
-    return '<div class="row" style="border-left-color:' + (agent.state === "live" ? "rgba(56,255,163,.6)" : "rgba(255,179,31,.6)") + '">' +
+    return '<div class="row" data-drill-agent="' + esc(card.id || card.name || "") + '" style="border-left-color:' + (agent.state === "live" ? "rgba(56,255,163,.6)" : "rgba(255,179,31,.6)") + '">' +
       '<div class="row-top"><div class="row-title">' + esc(card.name || card.id || "unknown") + '</div>' +
       '<span class="pill ' + pillClass + '">' + esc(agent.state || "-") + "</span></div>" +
       '<div class="row-meta">' + esc(meta) + "</div>" +
@@ -868,7 +869,7 @@ function renderJobs() {
   }
   list.innerHTML = rows.map((j) => {
     const color = jobStateColor(j.state);
-    return '<div class="row" style="border-left-color:' + color + '">' +
+    return '<div class="row" data-drill-job="' + esc(j.id) + '" style="border-left-color:' + color + '">' +
       '<div class="row-top"><div class="row-title" title="' + esc(j.title) + '">' + esc(j.title) + '</div>' +
       '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(j.state) + '</span></div>' +
       '<div class="row-meta">' + esc(j.repo) + ' · ' + esc(j.source) + ' · ' + esc(ageText(j.ts)) + ' ago</div>' +
@@ -896,7 +897,7 @@ function renderTasks() {
   }
   list.innerHTML = rows.map((t) => {
     const color = taskStateColor(t.state);
-    return '<div class="row" style="border-left-color:' + color + '">' +
+    return '<div class="row" data-drill-task="' + esc(t.id) + '" style="border-left-color:' + color + '">' +
       '<div class="row-top"><div class="row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div>' +
       '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(t.state) + '</span></div>' +
       '<div class="row-meta">' + esc(t.role) + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
@@ -1046,3 +1047,132 @@ fitStage();
 window.addEventListener("resize", fitStage);
 setInterval(scheduleRender, 1000); // tick ages / roster staleness
 connect();
+
+/* ------------------------------------------------------------------------- *
+ * Drill-in (peek). Click a stage node / agent / job / task row for a live
+ * detail panel. Pure client-side — reads the same authoritative `state`
+ * frames already streamed over /events; observes nothing new.
+ * ------------------------------------------------------------------------- */
+(function drillIn() {
+  const style = document.createElement("style");
+  style.textContent =
+    "#drillPanel{position:fixed;top:0;right:0;width:380px;max-width:92vw;height:100vh;background:#0b1016;" +
+    "border-left:1px solid #1d2733;box-shadow:-10px 0 34px rgba(0,0,0,.55);padding:16px;overflow:auto;" +
+    "z-index:9999;font:13px/1.45 ui-sans-serif,system-ui;color:#d7e6f5;transform:translateX(106%);" +
+    "transition:transform .18s ease}" +
+    "#drillPanel.open{transform:none}" +
+    "#drillPanel .dh{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;font-size:15px;font-weight:600;margin-bottom:12px}" +
+    "#drillPanel .dx{cursor:pointer;opacity:.55;padding:0 6px;font-size:18px;line-height:1}#drillPanel .dx:hover{opacity:1}" +
+    "#drillPanel table{width:100%;border-collapse:collapse;margin-bottom:14px}" +
+    "#drillPanel td{padding:4px 6px;border-bottom:1px solid #141d27;vertical-align:top;word-break:break-word}" +
+    "#drillPanel td:first-child{color:#7d8da0;width:88px;white-space:nowrap}" +
+    "#drillPanel .deh{color:#7d8da0;text-transform:uppercase;font-size:11px;letter-spacing:.06em;margin:4px 0 6px}" +
+    "#drillPanel .de{display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid #11181f}" +
+    "#drillPanel .de .det{color:#5d6b7d;flex:0 0 auto}" +
+    ".node{cursor:pointer}[data-drill-agent],[data-drill-task],[data-drill-job]{cursor:pointer}";
+  document.head.appendChild(style);
+
+  const panel = document.createElement("aside");
+  panel.id = "drillPanel";
+  document.body.appendChild(panel);
+  let cur = null;
+
+  function row(k, v) {
+    return "<tr><td>" + esc(k) + "</td><td>" + esc(v == null || v === "" ? "-" : String(v)) + "</td></tr>";
+  }
+  function eventsFor(id) {
+    return state.events.filter(function (e) {
+      return e.from === id || e.to === id || (e.subject && e.subject.indexOf(id) !== -1);
+    }).slice(-30).reverse();
+  }
+  function openDrill(kind, id) {
+    cur = { kind: kind, id: id };
+    let title = id, rows = "", workTask = "";
+    if (kind === "task") workTask = id;
+    else if (kind === "agent") {
+      const ag = state.agents.find(function (x) { return x.card && x.card.id === id; });
+      const cwd = ag && ag.card ? (ag.card.cwd || "") : "";
+      const m = cwd.match(/workers\/([^/]+)\/?$/);
+      if (m) workTask = m[1];
+    }
+    if (kind === "agent") {
+      const a = state.agents.find(function (x) { return x.card && x.card.id === id; }) || { card: {} };
+      const c = a.card || {};
+      title = (c.name || id) + " · " + (c.role || "-");
+      rows = row("kind", "agent") + row("state", a.state) + row("role", c.role) +
+        row("model", c.model) + row("pid", c.pid) + row("repo", c.repo) +
+        row("cwd", c.cwd) + row("last seen", a.lastSeen ? ageText(a.lastSeen) + " ago" : "-");
+    } else if (kind === "task") {
+      const t = state.tasks.get(id) || {};
+      const w = state.workers.find(function (x) { return x.task === id; });
+      title = (t.role || "task") + " · " + (t.title || id);
+      rows = row("kind", "task") + row("state", t.state) + row("role", t.role) +
+        row("job", t.job) + row("title", t.title) +
+        (w ? row("result", w.result) + row("cost", w.costUSD ? "$" + w.costUSD.toFixed(4) : "-") : "") +
+        row("branch", "mesh/worker/" + id);
+    } else if (kind === "job") {
+      const j = state.jobs.get(id) || {};
+      const ts = Array.from(state.tasks.values()).filter(function (t) { return t.job === id; });
+      title = j.title || id;
+      rows = row("kind", "job") + row("state", j.state) + row("repo", j.repo) +
+        row("source", j.source) +
+        row("tasks", ts.map(function (t) { return t.role + ":" + t.state; }).join(", "));
+    }
+    const evs = eventsFor(id);
+    panel.innerHTML =
+      '<div class="dh"><span>' + esc(title) + '</span><span class="dx" id="drillClose">✕</span></div>' +
+      "<table>" + rows + "</table>" +
+      '<div class="deh">recent events (' + evs.length + ")</div>" +
+      (evs.length
+        ? evs.map(function (e) {
+            return '<div class="de"><span>' + esc(e.kind + (eventLabel(e) ? ": " + eventLabel(e) : "")) +
+              '</span><span class="det">' + esc(ageText(e.ts)) + " ago</span></div>";
+          }).join("")
+        : '<div class="de" style="color:#5d6b7d">no observed envelopes for this id yet</div>') +
+      '<div id="drillLog"><div class="deh">lifecycle log</div><div class="de" style="color:#5d6b7d">loading…</div></div>' +
+      (workTask ? '<div id="drillWork"><div class="deh">live worker output</div><div class="de" style="color:#5d6b7d">loading…</div></div>' : "");
+    byId("drillClose").onclick = function () { cur = null; panel.classList.remove("open"); };
+    fetch("/api/tasklog?id=" + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (d) {
+      const box = byId("drillLog");
+      if (!box || !cur || cur.id !== id) return;
+      const ls = d.lines || [];
+      box.innerHTML = '<div class="deh">lifecycle log (' + ls.length + ")</div>" +
+        (ls.length
+          ? ls.slice().reverse().map(function (l) { return '<div class="de" style="font-size:11px;color:#9fb3c8;display:block">' + esc(l) + "</div>"; }).join("")
+          : '<div class="de" style="color:#5d6b7d">no log lines for this id</div>');
+    }).catch(function () {});
+    if (workTask) {
+      fetch("/api/worklog?task=" + encodeURIComponent(workTask)).then(function (r) { return r.json(); }).then(function (d) {
+        const box = byId("drillWork");
+        if (!box || !cur) return;
+        const ls = d.lines || [];
+        box.innerHTML = '<div class="deh">live worker output (' + ls.length + ")</div>" +
+          (ls.length
+            ? ls.map(function (l) { return '<div class="de" style="display:block;font-size:12px;color:#cfe3d6">' + esc(l) + "</div>"; }).join("")
+            : '<div class="de" style="color:#5d6b7d">no streamed output yet</div>');
+      }).catch(function () {});
+    }
+    panel.classList.add("open");
+  }
+  window.openDrill = openDrill;
+
+  document.addEventListener("click", function (e) {
+    const a = e.target.closest("[data-drill-agent]");
+    if (a) { openDrill("agent", a.dataset.drillAgent); return; }
+    const t = e.target.closest("[data-drill-task]");
+    if (t) { openDrill("task", t.dataset.drillTask); return; }
+    const j = e.target.closest("[data-drill-job]");
+    if (j) { openDrill("job", j.dataset.drillJob); return; }
+    // Click anywhere off the panel (and not on a drill trigger) tucks it away,
+    // so the main screen is interactive again.
+    if (panel.classList.contains("open") && !panel.contains(e.target)) {
+      cur = null;
+      panel.classList.remove("open");
+    }
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { cur = null; panel.classList.remove("open"); }
+  });
+  // Live-refresh the open panel so a selected node updates in place.
+  setInterval(function () { if (cur && panel.classList.contains("open")) openDrill(cur.kind, cur.id); }, 1500);
+})();

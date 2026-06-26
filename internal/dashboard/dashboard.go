@@ -236,6 +236,8 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/claims", d.serveClaims)
 	mux.HandleFunc("GET /api/notes", d.serveNotes)
 	mux.HandleFunc("GET /api/jobs", d.serveListJobs)
+	mux.HandleFunc("GET /api/tasklog", d.serveTaskLog)
+	mux.HandleFunc("GET /api/worklog", d.serveWorkLog)
 	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
 	mountWebUI(mux)
@@ -708,6 +710,101 @@ func (d *Dashboard) serveIndex(w http.ResponseWriter, r *http.Request) {
 func (d *Dashboard) serveClassicIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML) //nolint:errcheck
+}
+
+// serveTaskLog returns coordinator-log lines mentioning a task / agent / job id —
+// the per-entity lifecycle the drill-in panel surfaces (spawn, branch, finalize,
+// errors). Read-only, same posture as /api/roster. The coordinator log is the
+// authoritative record of what actually happened, so this populates the panel
+// with truth even when the worker emitted no bus envelopes.
+func (d *Dashboard) serveTaskLog(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	w.Header().Set("Content-Type", "application/json")
+	lines := []string{}
+	if id != "" {
+		if b, err := os.ReadFile(d.cfg.MeshDir + "/logs/coordinator.log"); err == nil { //nolint:gosec
+			for _, ln := range strings.Split(string(b), "\n") {
+				if ln != "" && strings.Contains(ln, id) {
+					lines = append(lines, ln)
+				}
+			}
+		}
+	}
+	if len(lines) > 50 {
+		lines = lines[len(lines)-50:]
+	}
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "lines": lines}) //nolint:errcheck
+}
+
+// serveWorkLog tails a worker's per-task live log (the streamed claude NDJSON)
+// and returns it as short human lines — what the worker is actually doing.
+// Empty for older buffered runs (no stream log was written).
+func (d *Dashboard) serveWorkLog(w http.ResponseWriter, r *http.Request) {
+	task := strings.TrimSpace(r.URL.Query().Get("task"))
+	w.Header().Set("Content-Type", "application/json")
+	out := []string{}
+	if task != "" && !strings.ContainsAny(task, "/\\") {
+		if b, err := os.ReadFile(d.cfg.MeshDir + "/logs/worker-" + task + ".log"); err == nil { //nolint:gosec
+			for _, ln := range strings.Split(string(b), "\n") {
+				if s := summarizeClaudeEvent(strings.TrimSpace(ln)); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	if len(out) > 150 {
+		out = out[len(out)-150:]
+	}
+	json.NewEncoder(w).Encode(map[string]any{"task": task, "lines": out}) //nolint:errcheck
+}
+
+// summarizeClaudeEvent turns one stream-json NDJSON event into a short, human
+// line for the drill-in live view; returns "" for events not worth showing.
+func summarizeClaudeEvent(line string) string {
+	if line == "" {
+		return ""
+	}
+	var ev map[string]any
+	if json.Unmarshal([]byte(line), &ev) != nil {
+		return ""
+	}
+	switch ev["type"] {
+	case "system":
+		return "▸ session started"
+	case "assistant":
+		msg, _ := ev["message"].(map[string]any)
+		content, _ := msg["content"].([]any)
+		parts := []string{}
+		for _, c := range content {
+			cm, _ := c.(map[string]any)
+			switch cm["type"] {
+			case "text":
+				if t, _ := cm["text"].(string); strings.TrimSpace(t) != "" {
+					parts = append(parts, clip(strings.TrimSpace(t), 220))
+				}
+			case "tool_use":
+				name, _ := cm["name"].(string)
+				parts = append(parts, "🔧 "+name)
+			}
+		}
+		return strings.Join(parts, "  ")
+	case "user":
+		return "  ↳ tool result"
+	case "result":
+		if e, _ := ev["is_error"].(bool); e {
+			return "✗ error"
+		}
+		cost, _ := ev["total_cost_usd"].(float64)
+		return fmt.Sprintf("✓ done ($%.4f)", cost)
+	}
+	return ""
+}
+
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 func (d *Dashboard) serveRoster(w http.ResponseWriter, _ *http.Request) {

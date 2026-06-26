@@ -355,13 +355,22 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 		config.EnvAgentSocket+"="+w.sockPath,
 	)
 
-	out, err := w.adapter.Invoke(ctx, w.buildPrompt(), cliexec.InvokeOptions{
+	invokeOpts := cliexec.InvokeOptions{
 		Model:   w.d.cfg.WorkerModel,
 		WorkDir: w.dir,
 		Env:     env,
 		OnStart: func(pid int) { w.sc.TrackChild(w.d.cfg.WorkerCLI, pid) },
 		OnExit:  func(pid int) { w.sc.MarkChildExited(pid) },
-	})
+	}
+	// Live-stream the child's output to a per-task log so the dashboard drill-in
+	// can show what the worker is doing in real time. Best-effort: if the log
+	// can't be opened, LiveLog stays nil and the buffered path is used.
+	logPath := filepath.Join(w.d.cfg.MeshDir, "logs", "worker-"+filepath.Base(w.dir)+".log")
+	if logF, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); ferr == nil { //nolint:gosec
+		defer logF.Close()
+		invokeOpts.LiveLog = logF
+	}
+	out, err := w.adapter.Invoke(ctx, w.buildPrompt(), invokeOpts)
 	if err != nil {
 		return scheduler.Result{}, fmt.Errorf("worker: %w", err)
 	}

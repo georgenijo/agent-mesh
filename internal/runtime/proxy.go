@@ -334,7 +334,15 @@ func (p *Proxy) spawn(ctx context.Context, extraArgs []string) error {
 
 	go p.supervise(c, stdout)
 
-	timer := time.NewTimer(p.opts.StartTimeout)
+	// Do NOT block on the init/session-id event here. claude in stream-json
+	// mode emits init only after it receives the first input message, so
+	// waiting for it pre-input deadlocks (the resident runtime's "no session
+	// id within 30s" failure). Treat the child as started once it is running;
+	// the session id is captured lazily from the init event on the first Ask.
+	// A short grace still surfaces an immediate startup failure (bad
+	// binary/flags → fast exit), and a CLI/fake that DOES announce init
+	// unprompted is taken as instantly ready.
+	timer := time.NewTimer(startReadyGrace)
 	defer timer.Stop()
 	select {
 	case <-c.init:
@@ -342,15 +350,13 @@ func (p *Proxy) spawn(ctx context.Context, extraArgs []string) error {
 	case <-c.exited:
 		err := p.childExitError(c)
 		p.detach(c)
-		return fmt.Errorf("runtime: child exited before reporting a session id: %w", err)
+		return fmt.Errorf("runtime: child exited during startup: %w", err)
 	case <-ctx.Done():
 		p.killAndReap(c)
 		p.detach(c)
 		return fmt.Errorf("runtime: start cancelled: %w", ctx.Err())
 	case <-timer.C:
-		p.killAndReap(c)
-		p.detach(c)
-		return fmt.Errorf("runtime: child reported no session id within %s", p.opts.StartTimeout)
+		return nil // running; the session id arrives on the first Ask
 	}
 }
 

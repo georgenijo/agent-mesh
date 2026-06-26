@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -238,6 +239,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/jobs", d.serveListJobs)
 	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
+	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
@@ -888,6 +890,46 @@ func (d *Dashboard) serveListJobs(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs}) //nolint:errcheck
+}
+
+// defaultClaudeSessionsURL is the claude-sessions-viewer API proxied by
+// GET /api/claude-sessions. Override with MESH_CLAUDE_SESSIONS_URL.
+const defaultClaudeSessionsURL = "http://127.0.0.1:8765/api/sessions"
+
+var claudeSessionsClient = &http.Client{Timeout: 3 * time.Second}
+
+// serveClaudeSessions proxies the local claude-sessions-viewer API so the
+// dashboard UI can correlate mesh cc-* agents with live Claude Code session
+// telemetry (transcripts, sub-agents, RSS) on one origin.
+func (d *Dashboard) serveClaudeSessions(w http.ResponseWriter, _ *http.Request) {
+	url := os.Getenv("MESH_CLAUDE_SESSIONS_URL")
+	if url == "" {
+		url = defaultClaudeSessionsURL
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		writeJSONError(w, `{"error":"internal","message":"claude sessions proxy misconfigured"}`, http.StatusInternalServerError)
+		return
+	}
+	resp, err := claudeSessionsClient.Do(req)
+	if err != nil {
+		writeJSONError(w, `{"error":"unavailable","message":"claude-sessions-viewer not reachable — start claude-sessions-viewer/server.py on :8765"}`, http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeJSONError(w, `{"error":"unavailable","message":"claude sessions proxy read failed"}`, http.StatusBadGateway)
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		writeJSONError(w, fmt.Sprintf(`{"error":"unavailable","message":"claude-sessions-viewer returned %d"}`, resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body) //nolint:errcheck
 }
 
 // serveWriteToken returns the local write-API bearer token as JSON.

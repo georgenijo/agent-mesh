@@ -88,6 +88,10 @@ const state = {
   fleet: null,          // null until first KindFleet observed; {state, code, spentUSD, budgetUSD, ts}
   jobsSnapshotted: false,   // first authoritative jobs frame has arrived
   tasksSnapshotted: false,  // first authoritative tasks frame has arrived
+  // Claude Code session telemetry (proxied GET /api/claude-sessions).
+  claudeSessions: [],
+  claudeSessionsError: null,
+  claudeSessionsAt: 0,
 };
 
 function byId(id) {
@@ -110,6 +114,34 @@ function kindColor(kind) {
 
 function chipKind(kind) {
   return KINDS.includes(kind) ? kind : "other";
+}
+
+// Derive mesh agent name from Claude session_id (hooks/claude-code/mesh-session-start.sh).
+function meshNameFromSessionId(sessionId) {
+  if (!sessionId) return null;
+  const short = String(sessionId).replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
+  return short ? "cc-" + short : null;
+}
+
+function meshAgentForSession(session) {
+  const meshName = meshNameFromSessionId(session && session.session_id);
+  if (!meshName) return null;
+  return state.agents.find((a) => {
+    const card = a.card || {};
+    return card.name === meshName || card.id === meshName;
+  }) || null;
+}
+
+function sessionForMeshAgent(agent) {
+  const card = agent && agent.card || {};
+  const meshName = card.name || card.id || "";
+  if (!meshName.startsWith("cc-")) return null;
+  return state.claudeSessions.find((s) => meshNameFromSessionId(s.session_id) === meshName) || null;
+}
+
+function formatMB(mb) {
+  if (mb == null || Number.isNaN(mb)) return "—";
+  return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb.toFixed(0) + " MB";
 }
 
 function timeText(value) {
@@ -665,11 +697,20 @@ function renderAgents() {
     const card = agent.card || {};
     const pillClass = agent.state === "live" ? "green" : agent.state === "away" ? "amber" : "rose";
     const meta = [card.role || "-", card.repo || "", "seen " + ageText(agent.lastSeen) + " ago"].filter(Boolean).join(" · ");
+    const session = sessionForMeshAgent(agent);
+    const sessionMeta = session
+      ? '<div class="row-insight">' +
+        esc(session.status || "unknown") + " · " + formatMB(session.rss_mb) +
+        (session.subagents_running ? " · " + session.subagents_running + " sub-agent" + (session.subagents_running === 1 ? "" : "s") : "") +
+        (session.last_preview ? " · " + esc(session.last_preview.slice(0, 90)) : "") +
+        "</div>"
+      : "";
     return '<div class="row" style="border-left-color:' + (agent.state === "live" ? "rgba(56,255,163,.6)" : "rgba(255,179,31,.6)") + '">' +
       '<div class="row-top"><div class="row-title">' + esc(card.name || card.id || "unknown") + '</div>' +
       '<span class="pill ' + pillClass + '">' + esc(agent.state || "-") + "</span></div>" +
       '<div class="row-meta">' + esc(meta) + "</div>" +
       (agent.lastStatus ? '<div class="row-body">' + esc(agent.lastStatus) + "</div>" : "") +
+      sessionMeta +
       "</div>";
   }).join("");
 }
@@ -960,9 +1001,102 @@ function renderExperts() {
   }).join("");
 }
 
+function renderClaudeSessions() {
+  const list = byId("claudeSessionList");
+  const pill = byId("claudeSessionsPill");
+  if (!list) return;
+
+  if (state.claudeSessionsError) {
+    if (pill) {
+      pill.textContent = "offline";
+      pill.className = "pill rose";
+    }
+    list.innerHTML = '<div class="empty">Claude session viewer offline.<br>Run <code>python3 ~/Documents/code/claude-sessions-viewer/server.py</code> on port 8765.</div>';
+    return;
+  }
+
+  if (!state.claudeSessions.length) {
+    if (pill) {
+      pill.textContent = "0";
+      pill.className = "pill";
+    }
+    list.innerHTML = '<div class="empty">No Claude Code CLI sessions detected.</div>';
+    return;
+  }
+
+  const runningSubs = state.claudeSessions.reduce((n, s) => n + (s.subagents_running || 0), 0);
+  if (pill) {
+    pill.textContent = state.claudeSessions.length + " sess" + (runningSubs ? " · " + runningSubs + " active" : "");
+    pill.className = "pill " + (runningSubs ? "green" : "cyan");
+  }
+
+  list.innerHTML = state.claudeSessions.map((session) => {
+    const meshAgent = meshAgentForSession(session);
+    const meshName = meshNameFromSessionId(session.session_id);
+    const meshLink = meshAgent
+      ? '<span class="pill green">' + esc(meshName) + " · " + esc(meshAgent.state) + "</span>"
+      : (meshName ? '<span class="pill">unmeshed</span>' : "");
+    const statusColor = session.status === "busy" ? "#ffb31f" : session.status === "idle" ? "#38ffa3" : "#8a98aa";
+    const runningAgents = (session.subagents || []).filter((a) => a.status === "running");
+
+    const subRows = runningAgents.length
+      ? '<div class="subagent-block">' + runningAgents.map((a) =>
+          '<div class="subagent-row">' +
+          '<div class="subagent-title">' + esc(a.description) + ' <span class="pill green">running</span></div>' +
+          '<div class="subagent-meta">' + esc(a.agent_type) + " · " + esc(a.current_action || a.preview || "—") + "</div>" +
+          "</div>"
+        ).join("") + "</div>"
+      : "";
+
+    const childRows = (session.child_processes || []).slice(0, 3).map((p) =>
+      '<div class="subagent-meta">' + formatMB(p.rss_mb) + " · " + esc(p.command) + "</div>"
+    ).join("");
+
+    return '<div class="row" style="border-left-color:' + statusColor + '">' +
+      '<div class="row-top"><div class="row-title">' + esc(session.project || "unknown") + '</div>' +
+      '<span class="pill" style="border-color:' + statusColor + ';color:' + statusColor + '">' + esc(session.status || "?") + "</span></div>" +
+      '<div class="row-meta">' +
+      formatMB(session.rss_mb) + " RSS · " + formatMB(session.tree_rss_mb) + " tree · " +
+      session.cpu_percent.toFixed(1) + "% CPU · pid " + esc(session.pid) +
+      "</div>" +
+      (session.last_preview ? '<div class="row-body">' + esc(session.last_preview.slice(0, 140)) + "</div>" : "") +
+      (meshLink ? '<div class="row-meta">' + meshLink + "</div>" : "") +
+      subRows +
+      (childRows ? '<div class="subagent-block">' + childRows + "</div>" : "") +
+      "</div>";
+  }).join("");
+}
+
+async function pollClaudeSessions() {
+  try {
+    const res = await fetch("/api/claude-sessions");
+    if (!res.ok) {
+      state.claudeSessions = [];
+      state.claudeSessionsError = res.status === 503 ? "viewer offline" : "fetch failed";
+      scheduleRender();
+      return;
+    }
+    const data = await res.json();
+    state.claudeSessions = data.sessions || [];
+    state.claudeSessionsError = null;
+    state.claudeSessionsAt = Date.now();
+    scheduleRender();
+  } catch (_err) {
+    state.claudeSessions = [];
+    state.claudeSessionsError = "viewer offline";
+    scheduleRender();
+  }
+}
+
+function startClaudeSessionsPoll() {
+  pollClaudeSessions();
+  setInterval(pollClaudeSessions, 3000);
+}
+
 function render() {
   renderSummary();
   renderAgents();
+  renderClaudeSessions();
   renderClaims();
   renderNotes();
   renderEvents();
@@ -1045,4 +1179,5 @@ render();
 fitStage();
 window.addEventListener("resize", fitStage);
 setInterval(scheduleRender, 1000); // tick ages / roster staleness
+startClaudeSessionsPoll();
 connect();

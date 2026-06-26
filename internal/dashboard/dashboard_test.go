@@ -313,6 +313,79 @@ func TestSSEPresenceLifecycleContract(t *testing.T) {
 	}
 }
 
+// TestNotesEndpointAggregatesAcrossRepos locks the /api/notes observer
+// contract (issue #88): with no ?repo filter the endpoint returns blackboard
+// notes from every visible repo — discovered from agent cards and live
+// claims, the same discovery tickNotes does — not only the default repo.
+func TestNotesEndpointAggregatesAcrossRepos(t *testing.T) {
+	_, cli, d := startStack(t)
+
+	// An agent card carrying repo "alpha" is what makes that repo visible to
+	// the observer (the bus deliberately has no list-streams op).
+	card := agentcard.Card{ID: "worker", Name: "worker", Role: "builder", Repo: "alpha"}
+	env, err := envelope.New(envelope.KindRegister, "worker", envelope.SubjectRegister,
+		&envelope.RegisterPayload{Card: card})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Publish(env); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stream entries are full validated envelopes — same construction the
+	// sidecar note verb uses.
+	appendNote := func(from, repo, decision string) {
+		t.Helper()
+		env, err := envelope.New(envelope.KindNote, from, envelope.SubjectNote(repo),
+			&envelope.NotePayload{ID: from, Decision: decision, Repo: repo, Kind: envelope.NoteKindDecision})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := envelope.Encode(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cli.StreamAppend(envelope.StreamNotes(repo), json.RawMessage(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendNote("worker", "alpha", "alpha shards by tenant_id")
+	appendNote("worker", envelope.DefaultRepo, "default repo decision")
+
+	// Registration reaches the registry asynchronously; poll the endpoint
+	// until both repos' notes are visible (or fail at the deadline).
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		resp, err := http.Get(fmt.Sprintf("http://%s/api/notes", d.Addr()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Notes []envelope.Envelope `json:"notes"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if err == nil {
+			seen := map[string]bool{}
+			for _, n := range body.Notes {
+				var p envelope.NotePayload
+				if envelope.DecodeInto(n, &p) == nil {
+					seen[p.Decision] = true
+				}
+			}
+			if seen["alpha shards by tenant_id"] && seen["default repo decision"] {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("aggregate /api/notes never carried both repos' notes; saw %v", seen)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("decode /api/notes: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestDashboardIsReadOnly: killing the dashboard must not disturb agent
 // state — it holds no claims and publishes nothing.
 func TestDashboardDisconnectDoesNotAffectRegistry(t *testing.T) {

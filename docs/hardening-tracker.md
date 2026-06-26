@@ -21,8 +21,11 @@ Running list of things to fix/improve. Newest insight wins. Status: ⬜ todo · 
 - ⬜ **Model routing** — cheap model for cheap tasks, escalate when needed. Doesn't exist yet. (Audit, model-routing design)
 - ⬜ **Pin the expert model** — expert currently runs unpinned = most expensive tier. Add `MESH_EXPERT_MODEL`. (Audit, quick win)
 
-## Done
-- ✅ **Dashboard remote viewing** — added `MESH_DASHBOARD_ALLOWED_HOSTS` so the dashboard works over tailnet (was loopback-only). On branch `session/hardening`, not yet merged.
+## Done (merged to main)
+- ✅ **Dashboard remote viewing** — `MESH_DASHBOARD_ALLOWED_HOSTS` (tailnet viewing).
+- ✅ **Workers can't edit files** — `--dangerously-skip-permissions` for worker claude.
+- ✅ **Resident expert never starts (#101)** — lazy session-id capture + expert skip-permissions.
+- ✅ **5 audit bug-fixes (produced by the worker fleet, dogfooded)**: reject NaN/Inf budget; absolutize MESH_DIR/MESH_REPOS_DIR; sidecar self-accept guard; bus KV reads don't create buckets; cli `--json` on setup errors. (MAX_WORKERS ticket skipped — code already correct + tested.)
 
 ## Reference
 - Full audit (22 verified bugs + 5 architectural locks + model-routing design): `/tmp/.../tasks/wie3am57v.output`

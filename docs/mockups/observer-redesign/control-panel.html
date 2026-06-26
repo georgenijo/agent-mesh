@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Mesh — Mesh Control</title>
+<style>
+  :root{
+    --bg:#070a10;
+    --panel:#0b1018;
+    --panel-2:#0e151f;
+    --inset:#060a11;
+    --fg:#cdd9e5;
+    --fg-bright:#eef4fa;
+    --muted:#5d7186;
+    --faint:#3a4a5a;
+    --border:#18242f;
+    --border-bright:#23323f;
+    --accent:#2ee6d6;
+    --accent-2:#1bbfb3;
+    --accent-dim:#0c5d59;
+    --accent-glow:rgba(46,230,214,.14);
+    --warn:#e3b54a;
+    --warn-dim:#5a4516;
+    --danger:#e86a58;
+    --ok:#4ccf8e;
+    --mono:'JetBrains Mono','SFMono-Regular','SF Mono',ui-monospace,Menlo,Consolas,monospace;
+    --row:30px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--fg);
+    font:12.5px/1.45 var(--mono);
+    letter-spacing:.01em;
+    -webkit-font-smoothing:antialiased;
+    background-image:
+      linear-gradient(transparent 0,transparent calc(100% - 1px),rgba(46,230,214,.025) 100%),
+      radial-gradient(1200px 600px at 78% -10%,rgba(46,230,214,.05),transparent 60%);
+    background-size:100% 3px,100% 100%;
+  }
+  ::selection{background:var(--accent-dim);color:var(--fg-bright)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#16222d;border:2px solid var(--bg);border-radius:6px}
+  ::-webkit-scrollbar-thumb:hover{background:#1d2d3a}
+
+  .shell{max-width:1440px;margin:0 auto;padding:0 18px 56px}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    position:sticky;top:0;z-index:40;
+    display:flex;align-items:center;gap:18px;
+    padding:11px 4px;margin-bottom:14px;
+    background:linear-gradient(180deg,var(--bg) 70%,rgba(7,10,16,.86));
+    border-bottom:1px solid var(--border);
+    backdrop-filter:blur(6px);
+  }
+  .brand{display:flex;align-items:center;gap:11px;flex:0 0 auto}
+  .brand .glyph{
+    width:26px;height:26px;display:grid;place-items:center;
+    color:var(--accent);border:1px solid var(--accent-dim);border-radius:5px;
+    background:radial-gradient(circle at 50% 30%,var(--accent-glow),transparent 70%);
+    box-shadow:0 0 14px -4px var(--accent-glow) inset;
+  }
+  .brand .glyph svg{width:15px;height:15px}
+  .brand b{color:var(--fg-bright);font-weight:600;letter-spacing:.16em;font-size:13px}
+  .brand .sub{color:var(--muted);font-size:10px;letter-spacing:.28em;text-transform:uppercase}
+  .brand .div{width:1px;height:20px;background:var(--border-bright);margin:0 2px}
+
+  .topbar .spacer{flex:1}
+  .profile-flag{
+    display:flex;align-items:center;gap:9px;padding:5px 12px;
+    border:1px solid var(--border-bright);border-radius:6px;background:var(--panel-2);
+  }
+  .profile-flag .k{color:var(--faint);font-size:10px;letter-spacing:.2em;text-transform:uppercase}
+  .profile-flag .v{color:var(--accent);font-weight:600;letter-spacing:.04em}
+  .dirtydot{display:none;align-items:center;gap:7px;color:var(--warn);font-size:11px;letter-spacing:.04em}
+  .dirtydot.on{display:flex}
+  .dirtydot i{width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 8px var(--warn);animation:pulse 1.6s infinite}
+
+  .btn{
+    font:inherit;cursor:pointer;color:var(--fg);
+    background:var(--panel-2);border:1px solid var(--border-bright);
+    padding:7px 14px;border-radius:6px;letter-spacing:.06em;
+    text-transform:uppercase;font-size:10.5px;transition:.14s;display:inline-flex;align-items:center;gap:7px;
+  }
+  .btn:hover{border-color:#33485a;color:var(--fg-bright);background:#13202b}
+  .btn:active{transform:translateY(1px)}
+  .btn.ghost{background:transparent}
+  .btn.primary{
+    color:#04221f;background:var(--accent);border-color:var(--accent);font-weight:700;
+    box-shadow:0 0 18px -6px var(--accent);
+  }
+  .btn.primary:hover{background:#43f0e1;border-color:#43f0e1;color:#04221f}
+  .btn.primary.flash{animation:applied .7s ease}
+  @keyframes applied{0%{box-shadow:0 0 0 0 var(--accent)}50%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 18px -6px var(--accent)}}
+
+  /* ---------- status strip ---------- */
+  .statusstrip{
+    display:grid;grid-template-columns:repeat(6,1fr);gap:1px;
+    background:var(--border);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;
+  }
+  .stat{background:var(--panel);padding:11px 14px;position:relative}
+  .stat .lbl{color:var(--faint);font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;display:flex;align-items:center;gap:6px}
+  .stat .val{font-size:20px;color:var(--fg-bright);margin-top:5px;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+  .stat .val small{font-size:11px;color:var(--muted)}
+  .stat .val .accent{color:var(--accent)}
+  .livedot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 7px var(--ok);animation:pulse 1.8s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ---------- panels ---------- */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .span2{grid-column:1 / -1}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .panel>header{
+    display:flex;align-items:center;gap:10px;padding:9px 14px;
+    border-bottom:1px solid var(--border);background:var(--panel-2);
+  }
+  .panel>header .hk{color:var(--faint)}
+  .panel>header h2{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--fg-bright);font-weight:600}
+  .panel>header .meta{margin-left:auto;color:var(--muted);font-size:10px;letter-spacing:.04em}
+  .panel .body{padding:6px 14px 14px}
+
+  .row{
+    display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid #101a23;
+  }
+  .row:last-child{border-bottom:0}
+  .row .who{flex:1;min-width:0}
+  .row .who .name{color:var(--fg-bright);letter-spacing:.02em}
+  .row .who .desc{color:var(--muted);font-size:11px;margin-top:2px}
+  .row .ctl{flex:0 0 auto;display:flex;align-items:center;gap:10px}
+
+  /* badges */
+  .badge{font-size:9px;letter-spacing:.14em;text-transform:uppercase;padding:2px 7px;border-radius:4px;border:1px solid;white-space:nowrap}
+  .badge.live{color:var(--accent);border-color:var(--accent-dim);background:rgba(46,230,214,.06)}
+  .badge.restart{color:var(--warn);border-color:var(--warn-dim);background:rgba(227,181,74,.07)}
+
+  /* selects */
+  select{
+    font:inherit;color:var(--fg-bright);background:var(--inset);
+    border:1px solid var(--border-bright);border-radius:5px;padding:6px 28px 6px 10px;
+    letter-spacing:.04em;cursor:pointer;appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M1 3l4 4 4-4' stroke='%235d7186' stroke-width='1.4' fill='none'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 9px center;min-width:118px;
+  }
+  select:hover{border-color:#33485a}
+  select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+
+  .hint{
+    font-size:10px;color:var(--muted);letter-spacing:.06em;min-width:128px;text-align:right;
+    font-variant-numeric:tabular-nums;
+  }
+  .hint .c{color:var(--ok)}.hint .cc{color:var(--warn)}.hint .ccc{color:var(--danger)}
+
+  /* toggle */
+  .toggle{
+    --w:42px;width:var(--w);height:22px;border-radius:12px;flex:0 0 auto;cursor:pointer;
+    background:var(--inset);border:1px solid var(--border-bright);position:relative;transition:.18s;
+  }
+  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+    background:var(--faint);transition:.18s}
+  .toggle[aria-checked="true"]{background:var(--accent-dim);border-color:var(--accent-2)}
+  .toggle[aria-checked="true"]::after{left:22px;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+  .toggle:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-glow)}
+
+  /* slider */
+  .slider-wrap{display:flex;align-items:center;gap:14px;width:100%}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;height:4px;border-radius:3px;flex:1;cursor:pointer;
+    background:linear-gradient(90deg,var(--accent) var(--p,50%),#16222d var(--p,50%));
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--fg-bright);
+    border:3px solid var(--accent);box-shadow:0 0 10px -2px var(--accent);cursor:grab;
+  }
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--fg-bright);
+    border:3px solid var(--accent);cursor:grab}
+  .ticks{display:flex;justify-content:space-between;color:var(--faint);font-size:9px;margin-top:5px;padding:0 2px}
+  .bigval{font-size:22px;color:var(--accent);min-width:56px;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .bigval small{font-size:10px;color:var(--muted);display:block;letter-spacing:.18em;text-transform:uppercase}
+
+  /* numeric input */
+  input[type=number],input[type=text].txt{
+    font:inherit;color:var(--fg-bright);background:var(--inset);border:1px solid var(--border-bright);
+    border-radius:5px;padding:6px 9px;letter-spacing:.04em;width:100%;
+  }
+  input[type=number]{width:84px;text-align:right;font-variant-numeric:tabular-nums}
+  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+  .prefix{display:flex;align-items:center;border:1px solid var(--border-bright);border-radius:5px;background:var(--inset);overflow:hidden}
+  .prefix span{color:var(--muted);padding:0 4px 0 9px}
+  .prefix input{border:0;box-shadow:none;background:transparent;width:90px}
+  .prefix input:focus{box-shadow:none}
+
+  /* budget bar */
+  .bbar{height:9px;border-radius:5px;background:var(--inset);border:1px solid var(--border-bright);overflow:hidden;display:flex;margin-top:8px}
+  .bbar .spent{background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width .4s}
+  .bbar .spent.warn{background:linear-gradient(90deg,#caa23f,var(--warn))}
+  .bbar .spent.over{background:linear-gradient(90deg,#c2503f,var(--danger))}
+  .bbar-legend{display:flex;justify-content:space-between;margin-top:7px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .bbar-legend b{color:var(--fg-bright);font-weight:600}
+
+  /* segmented */
+  .seg{display:inline-flex;border:1px solid var(--border-bright);border-radius:6px;overflow:hidden}
+  .seg button{font:inherit;font-size:10.5px;letter-spacing:.05em;color:var(--muted);background:var(--inset);
+    border:0;border-right:1px solid var(--border-bright);padding:6px 11px;cursor:pointer;transition:.13s;text-transform:lowercase}
+  .seg button:last-child{border-right:0}
+  .seg button:hover{color:var(--fg)}
+  .seg button[aria-pressed="true"]{background:var(--accent-dim);color:var(--fg-bright)}
+
+  /* timeouts mini-grid */
+  .tgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:4px}
+  .tcell{background:var(--inset);border:1px solid var(--border);border-radius:6px;padding:9px 10px}
+  .tcell .tl{color:var(--faint);font-size:9px;letter-spacing:.18em;text-transform:uppercase}
+  .tcell .ti{display:flex;align-items:baseline;gap:4px;margin-top:6px}
+  .tcell input{width:54px;text-align:right;padding:3px 6px}
+  .tcell .u{color:var(--muted);font-size:10px}
+
+  /* profiles */
+  .profiles{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .pchip{
+    display:flex;flex-direction:column;gap:3px;padding:10px 14px;cursor:pointer;min-width:128px;
+    background:var(--panel-2);border:1px solid var(--border-bright);border-radius:7px;transition:.14s;position:relative;
+  }
+  .pchip:hover{border-color:#33485a;background:#12202b}
+  .pchip[data-active="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-dim),0 0 22px -10px var(--accent)}
+  .pchip[data-active="true"]::after{content:"ACTIVE";position:absolute;top:-8px;right:9px;font-size:8px;letter-spacing:.16em;
+    color:#04221f;background:var(--accent);padding:1px 6px;border-radius:3px;font-weight:700}
+  .pchip .pn{color:var(--fg-bright);letter-spacing:.06em;font-weight:600;display:flex;align-items:center;gap:7px}
+  .pchip .pn .dotk{width:6px;height:6px;border-radius:50%}
+  .pchip .pd{color:var(--muted);font-size:10px;letter-spacing:.02em}
+  .pchip.custom{border-style:dashed;color:var(--muted);justify-content:center;align-items:center;text-align:center;min-width:96px}
+  .pchip.custom .pn{color:var(--muted)}
+
+  /* repos */
+  .repolist{display:flex;flex-direction:column;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:8px}
+  .repo{display:flex;align-items:center;gap:11px;background:var(--inset);padding:8px 11px;cursor:pointer}
+  .repo:hover{background:#0a121b}
+  .chk{width:15px;height:15px;border:1px solid var(--border-bright);border-radius:4px;flex:0 0 auto;display:grid;place-items:center;color:transparent;transition:.12s}
+  .repo[data-on="true"] .chk{background:var(--accent);border-color:var(--accent);color:#04221f}
+  .repo[data-on="true"] .rp{color:var(--fg-bright)}
+  .repo .rp{flex:1;color:var(--muted);letter-spacing:.02em}
+  .repo .rp small{color:var(--faint);margin-left:8px;font-size:10px}
+  .repo .branch{font-size:10px;color:var(--faint)}
+
+  .field{margin-top:14px}
+  .field>label{display:block;color:var(--faint);font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:7px}
+  .taglist{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+  .tag{display:inline-flex;align-items:center;gap:7px;background:var(--inset);border:1px solid var(--border-bright);
+    border-radius:5px;padding:4px 5px 4px 10px;color:var(--fg);font-size:11px;letter-spacing:.02em}
+  .tag b{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)}
+  .tag .x{cursor:pointer;color:var(--faint);padding:0 3px;border-radius:3px}
+  .tag .x:hover{color:var(--danger);background:rgba(232,106,88,.1)}
+  .addtag{font:inherit;background:transparent;border:1px dashed var(--border-bright);color:var(--muted);
+    border-radius:5px;padding:5px 11px;cursor:pointer;letter-spacing:.04em}
+  .addtag:hover{color:var(--accent);border-color:var(--accent-dim)}
+
+  .ctrl-disabled{opacity:.38;pointer-events:none;filter:grayscale(.4)}
+
+  /* toast */
+  .toast-wrap{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:90;display:flex;flex-direction:column;gap:8px;align-items:center}
+  .toast{
+    background:var(--panel-2);border:1px solid var(--border-bright);border-left:3px solid var(--accent);
+    border-radius:6px;padding:10px 16px;color:var(--fg);font-size:11.5px;letter-spacing:.03em;
+    box-shadow:0 12px 40px -12px #000;display:flex;align-items:center;gap:10px;min-width:260px;
+    animation:slidein .25s ease;
+  }
+  .toast.warn{border-left-color:var(--warn)}
+  .toast .ti2{color:var(--accent)}.toast.warn .ti2{color:var(--warn)}
+  @keyframes slidein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  @media (max-width:900px){
+    .grid{grid-template-columns:1fr}
+    .statusstrip{grid-template-columns:repeat(3,1fr)}
+    .brand .sub{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ===================== TOP BAR ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <circle cx="12" cy="12" r="2.4"/><circle cx="4" cy="5" r="1.8"/><circle cx="20" cy="5" r="1.8"/>
+          <circle cx="4" cy="19" r="1.8"/><circle cx="20" cy="19" r="1.8"/>
+          <path d="M5.5 6L10 10.5M18.5 6L14 10.5M5.5 18L10 13.5M18.5 18L14 13.5"/>
+        </svg>
+      </span>
+      <b>AGENT&nbsp;MESH</b>
+      <span class="div"></span>
+      <span class="sub">Mesh Control</span>
+    </div>
+    <span class="spacer"></span>
+    <div class="dirtydot" id="dirty"><i></i><span id="dirtytxt">3 unsaved changes</span></div>
+    <div class="profile-flag">
+      <span class="k">Profile</span>
+      <span class="v" id="activeProfileName">Balanced</span>
+    </div>
+    <button class="btn ghost" id="btnReset">Reset</button>
+    <button class="btn" id="btnSave">Save&nbsp;Profile</button>
+    <button class="btn primary" id="btnApply">Apply&nbsp;·&nbsp;Live</button>
+  </header>
+
+  <!-- ===================== STATUS STRIP ===================== -->
+  <section class="statusstrip" aria-label="Live mesh status">
+    <div class="stat"><div class="lbl"><span class="livedot"></span>Active Workers</div>
+      <div class="val"><span id="sWorkers">4</span><small> / <span id="sWorkerCap">4</span></small></div></div>
+    <div class="stat"><div class="lbl"><span class="livedot"></span>Queued Tasks</div>
+      <div class="val" id="sQueued">11</div></div>
+    <div class="stat"><div class="lbl"><span class="livedot"></span>Experts Alive</div>
+      <div class="val" id="sExperts">2</div></div>
+    <div class="stat"><div class="lbl"><span class="livedot"></span>Spend / Cap</div>
+      <div class="val"><span class="accent" id="sSpend">4.18</span><small> / <span id="sCap">25</span> usd</small></div></div>
+    <div class="stat"><div class="lbl"><span class="livedot"></span>Bus Latency</div>
+      <div class="val" id="sLat">6<small> ms</small></div></div>
+    <div class="stat"><div class="lbl"><span class="livedot"></span>Uptime</div>
+      <div class="val" id="sUp">04:21<small>:09</small></div></div>
+  </section>
+
+  <!-- ===================== PROFILES ===================== -->
+  <section class="panel span2" style="margin-bottom:14px">
+    <header><span class="hk">$</span><h2>Profiles</h2>
+      <span class="meta">click a preset to load &middot; A/B in one tap</span></header>
+    <div class="body">
+      <div class="profiles" id="profiles">
+        <div class="pchip" data-profile="cheap">
+          <span class="pn"><span class="dotk" style="background:var(--ok)"></span>Cheap</span>
+          <span class="pd">Haiku-heavy · cap $5 · 2 workers</span></div>
+        <div class="pchip" data-profile="balanced" data-active="true">
+          <span class="pn"><span class="dotk" style="background:var(--accent)"></span>Balanced</span>
+          <span class="pd">Sonnet workers · Opus expert · cap $25</span></div>
+        <div class="pchip" data-profile="maxq">
+          <span class="pn"><span class="dotk" style="background:var(--warn)"></span>Max Quality</span>
+          <span class="pd">Opus everywhere · uncapped · 6 workers</span></div>
+        <div class="pchip" data-profile="fast">
+          <span class="pn"><span class="dotk" style="background:var(--danger)"></span>Fast</span>
+          <span class="pd">8 workers · no review gate · TTL 60s</span></div>
+        <div class="pchip custom" id="saveAs"><span class="pn">+ Save current…</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid">
+
+    <!-- ===================== MODEL ROUTING ===================== -->
+    <section class="panel">
+      <header><span class="hk">1</span><h2>Model Routing</h2><span class="meta">model per agent role</span></header>
+      <div class="body" id="routing">
+        <!-- rows injected -->
+      </div>
+    </section>
+
+    <!-- ===================== CONCURRENCY & LIMITS ===================== -->
+    <section class="panel">
+      <header><span class="hk">2</span><h2>Concurrency &amp; Limits</h2></header>
+      <div class="body">
+        <div class="row">
+          <div class="who"><div class="name">Max parallel workers</div>
+            <div class="desc">ephemeral worktree agents the scheduler may run at once</div></div>
+          <span class="badge restart">needs restart</span>
+        </div>
+        <div style="padding:2px 0 14px">
+          <div class="slider-wrap">
+            <input type="range" id="workers" min="1" max="8" step="1" value="4" />
+            <div class="bigval"><span id="workersVal">4</span><small>workers</small></div>
+          </div>
+          <div class="ticks"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div>
+        </div>
+
+        <div class="row">
+          <div class="who"><div class="name">Budget cap</div>
+            <div class="desc">hard USD ceiling per session · 0 = unlimited</div></div>
+          <span class="badge live">live</span>
+        </div>
+        <div style="padding:2px 0 12px">
+          <div class="prefix" style="width:max-content"><span>$</span><input type="number" id="budget" min="0" step="1" value="25" /></div>
+          <div class="bbar"><div class="spent" id="bbarSpent" style="width:17%"></div></div>
+          <div class="bbar-legend">
+            <span>spent <b id="legSpent">$4.18</b></span>
+            <span id="legRemain">remaining <b>$20.82</b></span>
+          </div>
+        </div>
+
+        <div class="row" style="border-bottom:0;padding-bottom:4px">
+          <div class="who"><div class="name">Per-turn timeouts</div>
+            <div class="desc">kill an agent turn that runs past its budget</div></div>
+          <span class="badge live">live</span>
+        </div>
+        <div class="tgrid">
+          <div class="tcell"><div class="tl">Planner</div><div class="ti"><input type="number" id="toPlanner" value="90" min="10"><span class="u">s</span></div></div>
+          <div class="tcell"><div class="tl">Worker</div><div class="ti"><input type="number" id="toWorker" value="300" min="10"><span class="u">s</span></div></div>
+          <div class="tcell"><div class="tl">Review</div><div class="ti"><input type="number" id="toReview" value="120" min="10"><span class="u">s</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== AUTONOMY TOGGLES ===================== -->
+    <section class="panel">
+      <header><span class="hk">3</span><h2>Autonomy</h2></header>
+      <div class="body">
+        <div class="row">
+          <div class="who"><div class="name">Auto-spawn experts</div>
+            <div class="desc">warm an Architect on demand when a worker asks a question</div></div>
+          <div class="ctl"><span class="badge live">live</span>
+            <div class="toggle" id="autoSpawn" role="switch" tabindex="0" aria-checked="true"></div></div>
+        </div>
+
+        <div class="row">
+          <div class="who"><div class="name">Review gating</div>
+            <div class="desc">block merge until a reviewer signs off the diff</div></div>
+          <div class="ctl">
+            <select id="reviewRole" title="which role reviews">
+              <option value="reviewer">by Reviewer</option>
+              <option value="architect">by Architect</option>
+              <option value="planner">by Planner</option>
+            </select>
+            <span class="badge live">live</span>
+            <div class="toggle" id="reviewGate" role="switch" tabindex="0" aria-checked="true"></div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="who"><div class="name">Idle agent reaper</div>
+            <div class="desc">retire experts with no traffic past TTL to free spend</div></div>
+          <div class="ctl">
+            <div class="prefix" style="width:max-content"><input type="number" id="reaperTTL" value="300" min="30" style="width:64px"><span style="padding:0 9px 0 4px">s TTL</span></div>
+            <span class="badge live">live</span>
+            <div class="toggle" id="reaper" role="switch" tabindex="0" aria-checked="true"></div>
+          </div>
+        </div>
+
+        <div class="row" style="border-bottom:0">
+          <div class="who"><div class="name">Worktree retention</div>
+            <div class="desc">keep the agent's git worktree after a task ends</div></div>
+          <div class="ctl"><span class="badge live">live</span>
+            <div class="seg" id="retention" role="group" aria-label="Worktree retention">
+              <button data-v="on-failure" aria-pressed="true">on-failure</button>
+              <button data-v="always" aria-pressed="false">always</button>
+              <button data-v="never" aria-pressed="false">never</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== REPOS & ACCESS ===================== -->
+    <section class="panel">
+      <header><span class="hk">4</span><h2>Repos &amp; Access</h2></header>
+      <div class="body">
+        <div class="row" style="border-bottom:0;padding-bottom:6px">
+          <div class="who"><div class="name">Repos directory</div>
+            <div class="desc">root the scheduler scans for cloneable worktrees</div></div>
+          <span class="badge restart">needs restart</span>
+        </div>
+        <input type="text" class="txt" id="reposDir" value="~/Documents/code" spellcheck="false" />
+
+        <div class="field">
+          <label>Available repos · <span id="repoCount">4</span> enabled</label>
+          <div class="repolist" id="repolist">
+            <div class="repo" data-on="true"><span class="chk">✓</span><span class="rp">agent-mesh<small>go · coordination fabric</small></span><span class="branch">main</span></div>
+            <div class="repo" data-on="true"><span class="chk">✓</span><span class="rp">whoop-dashboard<small>ts · ops dashboard</small></span><span class="branch">main</span></div>
+            <div class="repo" data-on="true"><span class="chk">✓</span><span class="rp">open-design<small>ts · design daemon</small></span><span class="branch">release-stable</span></div>
+            <div class="repo" data-on="true"><span class="chk">✓</span><span class="rp">mesh-sidecar<small>rust · per-agent sidecar</small></span><span class="branch">main</span></div>
+            <div class="repo" data-on="false"><span class="chk">✓</span><span class="rp">blackboard-svc<small>go · JetStream memory</small></span><span class="branch">wip/p2</span></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Dashboard allowed hosts <span style="color:var(--warn);text-transform:none;letter-spacing:0">· needs restart</span></label>
+          <div class="taglist" id="hosts">
+            <span class="tag"><b></b>localhost:7777<span class="x" title="remove">✕</span></span>
+            <span class="tag"><b></b>mesh.local<span class="x" title="remove">✕</span></span>
+            <span class="tag"><b></b>100.84.12.3 <small style="color:var(--faint)">tailnet</small><span class="x" title="remove">✕</span></span>
+            <button class="addtag" id="addHost">+ add host</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+(function(){
+  "use strict";
+  var $=function(s,r){return (r||document).querySelector(s)};
+  var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+
+  // ---- model catalog (cost + speed hints) ----
+  var MODELS={
+    opus:   {label:"Opus 4.8", hint:'<span class="ccc">$$$</span> · slow · deepest'},
+    sonnet: {label:"Sonnet 4.6",hint:'<span class="cc">$$</span> · fast · balanced'},
+    haiku:  {label:"Haiku 4.5", hint:'<span class="c">$</span> · fastest · light'},
+    default:{label:"Mesh default",hint:'inherit mesh policy'}
+  };
+  var ROLES=[
+    {id:"planner",  name:"Planner",   desc:"breaks tickets into ordered tasks"},
+    {id:"worker",   name:"Worker",    desc:"writes the code in an isolated worktree"},
+    {id:"architect",name:"Architect / Expert",desc:"answers workers' questions, holds context"},
+    {id:"reviewer", name:"Reviewer",  desc:"checks diffs before they merge"}
+  ];
+
+  // ---- preset profiles ----
+  var PRESETS={
+    cheap:    {planner:"haiku",worker:"haiku",architect:"sonnet",reviewer:"haiku",
+               workers:2,budget:5,toPlanner:60,toWorker:240,toReview:90,
+               autoSpawn:false,reviewGate:false,reviewRole:"reviewer",reaper:true,reaperTTL:120,retention:"never"},
+    balanced: {planner:"sonnet",worker:"sonnet",architect:"opus",reviewer:"haiku",
+               workers:4,budget:25,toPlanner:90,toWorker:300,toReview:120,
+               autoSpawn:true,reviewGate:true,reviewRole:"reviewer",reaper:true,reaperTTL:300,retention:"on-failure"},
+    maxq:     {planner:"opus",worker:"opus",architect:"opus",reviewer:"sonnet",
+               workers:6,budget:0,toPlanner:180,toWorker:600,toReview:240,
+               autoSpawn:true,reviewGate:true,reviewRole:"architect",reaper:false,reaperTTL:300,retention:"always"},
+    fast:     {planner:"sonnet",worker:"haiku",architect:"sonnet",reviewer:"haiku",
+               workers:8,budget:15,toPlanner:45,toWorker:180,toReview:60,
+               autoSpawn:true,reviewGate:false,reviewRole:"reviewer",reaper:true,reaperTTL:60,retention:"never"}
+  };
+  var PROFILE_LABELS={cheap:"Cheap",balanced:"Balanced",maxq:"Max Quality",fast:"Fast"};
+  // settings flagged needs-restart (rest are live)
+  var RESTART_KEYS={workers:1};
+
+  // ---- build routing rows ----
+  var routing=$("#routing");
+  ROLES.forEach(function(r){
+    var row=document.createElement("div");row.className="row";
+    var opts=Object.keys(MODELS).map(function(m){return '<option value="'+m+'">'+MODELS[m].label+'</option>'}).join("");
+    row.innerHTML=
+      '<div class="who"><div class="name">'+r.name+'</div><div class="desc">'+r.desc+'</div></div>'+
+      '<div class="ctl">'+
+        '<span class="hint" id="hint-'+r.id+'"></span>'+
+        '<select id="role-'+r.id+'" data-role="'+r.id+'">'+opts+'</select>'+
+        '<span class="badge live">live</span>'+
+      '</div>';
+    routing.appendChild(row);
+  });
+  function paintHint(role){
+    var v=$("#role-"+role).value;
+    $("#hint-"+role).innerHTML=MODELS[v].hint;
+  }
+
+  // ---- read / write whole config ----
+  function read(){
+    return {
+      planner:$("#role-planner").value, worker:$("#role-worker").value,
+      architect:$("#role-architect").value, reviewer:$("#role-reviewer").value,
+      workers:+$("#workers").value, budget:+$("#budget").value,
+      toPlanner:+$("#toPlanner").value, toWorker:+$("#toWorker").value, toReview:+$("#toReview").value,
+      autoSpawn:$("#autoSpawn").getAttribute("aria-checked")==="true",
+      reviewGate:$("#reviewGate").getAttribute("aria-checked")==="true",
+      reviewRole:$("#reviewRole").value,
+      reaper:$("#reaper").getAttribute("aria-checked")==="true",
+      reaperTTL:+$("#reaperTTL").value,
+      retention:$('#retention button[aria-pressed="true"]').dataset.v
+    };
+  }
+  function write(c){
+    ["planner","worker","architect","reviewer"].forEach(function(k){ $("#role-"+k).value=c[k]; paintHint(k); });
+    $("#workers").value=c.workers; $("#budget").value=c.budget;
+    $("#toPlanner").value=c.toPlanner; $("#toWorker").value=c.toWorker; $("#toReview").value=c.toReview;
+    setToggle($("#autoSpawn"),c.autoSpawn);
+    setToggle($("#reviewGate"),c.reviewGate);
+    $("#reviewRole").value=c.reviewRole;
+    setToggle($("#reaper"),c.reaper);
+    $("#reaperTTL").value=c.reaperTTL;
+    $$("#retention button").forEach(function(b){b.setAttribute("aria-pressed",b.dataset.v===c.retention)});
+    refreshDerived();
+  }
+  function setToggle(el,on){el.setAttribute("aria-checked",!!on)}
+
+  // ---- derived UI (slider fill, budget bar, disabled deps, status cap) ----
+  function refreshDerived(){
+    var c=read();
+    // slider fill + value
+    $("#workersVal").textContent=c.workers;
+    $("#workers").style.setProperty("--p",((c.workers-1)/7*100)+"%");
+    $("#sWorkerCap").textContent=c.workers;
+    // budget bar
+    var spend=parseFloat($("#sSpend").textContent)||0;
+    $("#sCap").textContent=c.budget===0?"∞":c.budget;
+    $("#legSpent").textContent="$"+spend.toFixed(2);
+    var bs=$("#bbarSpent");
+    if(c.budget===0){
+      bs.style.width="8%"; bs.className="spent";
+      $("#legRemain").innerHTML="remaining <b>∞ unlimited</b>";
+    }else{
+      var pct=Math.min(100,spend/c.budget*100);
+      bs.style.width=pct+"%";
+      bs.className="spent"+(pct>=100?" over":pct>=80?" warn":"");
+      var rem=c.budget-spend;
+      $("#legRemain").innerHTML="remaining <b>"+(rem<0?"-$"+Math.abs(rem).toFixed(2)+" OVER":"$"+rem.toFixed(2))+"</b>";
+    }
+    // dependent control enable/disable (only the dependent input, never its toggle)
+    $("#reviewRole").classList.toggle("ctrl-disabled",!c.reviewGate);
+    $("#reaperTTL").closest(".prefix").classList.toggle("ctrl-disabled",!c.reaper);
+    // repo count
+    $("#repoCount").textContent=$$('#repolist .repo[data-on="true"]').length;
+  }
+
+  // ---- dirty tracking ----
+  var applied=null, activeProfile="balanced";
+  function eq(a,b){return JSON.stringify(a)===JSON.stringify(b)}
+  function dirtyCount(){
+    var c=read(),n=0;
+    for(var k in applied){ if(!eq(applied[k],c[k])) n++; }
+    return n;
+  }
+  function markDirty(){
+    var n=dirtyCount();
+    var d=$("#dirty");
+    d.classList.toggle("on",n>0);
+    $("#dirtytxt").textContent=n+" unsaved change"+(n===1?"":"s");
+    // detect which preset (if any) the live config matches
+    var match=null;
+    for(var p in PRESETS){ if(eq(PRESETS[p],read())){match=p;break;} }
+    $$("#profiles .pchip[data-profile]").forEach(function(ch){
+      ch.setAttribute("data-active", ch.dataset.profile===match);
+    });
+    activeProfile=match;
+    $("#activeProfileName").textContent= match?PROFILE_LABELS[match]:"Custom";
+    refreshDerived();
+  }
+
+  // ---- toasts ----
+  function toast(msg,kind){
+    var t=document.createElement("div");
+    t.className="toast"+(kind==="warn"?" warn":"");
+    t.innerHTML='<span class="ti2">'+(kind==="warn"?"▲":"✓")+'</span><span>'+msg+'</span>';
+    $("#toasts").appendChild(t);
+    setTimeout(function(){t.style.transition="opacity .3s";t.style.opacity="0";setTimeout(function(){t.remove()},300)},2600);
+  }
+
+  // ================= WIRE EVENTS =================
+  // selects + numbers + range
+  document.addEventListener("input",function(e){
+    if(e.target.matches("select,input")){
+      if(e.target.dataset && e.target.dataset.role) paintHint(e.target.dataset.role);
+      markDirty();
+    }
+  });
+  document.addEventListener("change",function(e){ if(e.target.matches("select,input")) markDirty(); });
+
+  // toggles (click + keyboard)
+  $$(".toggle").forEach(function(t){
+    function flip(){ setToggle(t,t.getAttribute("aria-checked")!=="true"); markDirty(); }
+    t.addEventListener("click",flip);
+    t.addEventListener("keydown",function(e){ if(e.key===" "||e.key==="Enter"){e.preventDefault();flip();} });
+  });
+
+  // segmented retention
+  $("#retention").addEventListener("click",function(e){
+    var b=e.target.closest("button"); if(!b)return;
+    $$("#retention button").forEach(function(x){x.setAttribute("aria-pressed",x===b)});
+    markDirty();
+  });
+
+  // repo toggles
+  $("#repolist").addEventListener("click",function(e){
+    var r=e.target.closest(".repo"); if(!r)return;
+    r.setAttribute("data-on", r.dataset.on!=="true"); refreshDerived();
+  });
+
+  // hosts add/remove
+  $("#hosts").addEventListener("click",function(e){
+    if(e.target.classList.contains("x")) e.target.closest(".tag").remove();
+  });
+  $("#addHost").addEventListener("click",function(){
+    var h=prompt("Allow dashboard host (host:port or tailnet IP):");
+    if(!h)return;
+    var tag=document.createElement("span");tag.className="tag";
+    tag.innerHTML='<b></b>'+h.replace(/</g,"&lt;")+'<span class="x" title="remove">✕</span>';
+    $("#hosts").insertBefore(tag,$("#addHost"));
+  });
+
+  // profile presets
+  $("#profiles").addEventListener("click",function(e){
+    var ch=e.target.closest(".pchip[data-profile]"); if(!ch)return;
+    var p=ch.dataset.profile;
+    write(JSON.parse(JSON.stringify(PRESETS[p])));
+    markDirty();
+    toast("Loaded profile <b style='color:var(--accent)'>"+PROFILE_LABELS[p]+"</b> — review &amp; Apply to go live");
+  });
+  $("#saveAs").addEventListener("click",function(){
+    var name=prompt("Save current settings as profile:");
+    if(!name)return;
+    var key="user_"+name.toLowerCase().replace(/\s+/g,"_");
+    PRESETS[key]=read(); PROFILE_LABELS[key]=name;
+    var chip=document.createElement("div");chip.className="pchip";chip.dataset.profile=key;
+    chip.innerHTML='<span class="pn"><span class="dotk" style="background:var(--fg)"></span>'+name.replace(/</g,"&lt;")+'</span>'+
+                   '<span class="pd">custom preset</span>';
+    $("#profiles").insertBefore(chip,$("#saveAs"));
+    markDirty();
+    toast("Saved profile <b style='color:var(--accent)'>"+name.replace(/</g,"&lt;")+"</b>");
+  });
+
+  // APPLY
+  $("#btnApply").addEventListener("click",function(){
+    var c=read();
+    var restartHits=0;
+    for(var k in RESTART_KEYS){ if(applied && !eq(applied[k],c[k])) restartHits++; }
+    applied=JSON.parse(JSON.stringify(c));
+    markDirty();
+    this.classList.remove("flash");void this.offsetWidth;this.classList.add("flash");
+    if(restartHits>0) toast(restartHits+" setting"+(restartHits>1?"s":"")+" applied but <b>need a mesh restart</b> to take effect","warn");
+    else toast("Configuration applied live to the mesh");
+  });
+
+  // RESET
+  $("#btnReset").addEventListener("click",function(){
+    write(JSON.parse(JSON.stringify(applied)));
+    markDirty();
+    toast("Reverted to last applied config");
+  });
+  // SAVE PROFILE (top bar) -> same as saveAs
+  $("#btnSave").addEventListener("click",function(){$("#saveAs").click()});
+
+  // ================= LIVE STATUS SIM =================
+  var spend=4.18, up=4*3600+21*60+9;
+  function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+  setInterval(function(){
+    var cap=read().workers;
+    var aw=clamp(Math.round(cap-Math.random()*2),0,cap);
+    $("#sWorkers").textContent=aw;
+    $("#sQueued").textContent=clamp(11+Math.round((Math.random()-.45)*6),0,99);
+    $("#sExperts").textContent= read().autoSpawn? (1+Math.round(Math.random()*2)) : 0;
+    $("#sLat").innerHTML=clamp(Math.round(5+Math.random()*7),1,99)+'<small> ms</small>';
+    // spend creeps up, resets if it would blow an active cap visibly
+    spend+=Math.random()*0.06*aw;
+    var bud=read().budget;
+    if(bud>0 && spend>bud) spend=bud;
+    $("#sSpend").textContent=spend.toFixed(2);
+    refreshDerived();
+  },1400);
+  setInterval(function(){
+    up++; var h=Math.floor(up/3600),m=Math.floor(up%3600/60),s=up%60;
+    function p(n){return (n<10?"0":"")+n}
+    $("#sUp").innerHTML=p(h)+":"+p(m)+'<small>:'+p(s)+'</small>';
+  },1000);
+
+  // ================= INIT =================
+  write(JSON.parse(JSON.stringify(PRESETS.balanced)));
+  applied=read();
+  markDirty();
+})();
+</script>
+</body>
+</html>

@@ -392,6 +392,11 @@ func (s *Scheduler) handleOutcome(o outcome) {
 		res = Result{Code: code, Summary: o.err.Error(), CostUSD: o.res.CostUSD}
 	}
 	s.spent += res.CostUSD
+	// Persist cost unconditionally (not just on a budget pause), so the running
+	// total survives in the log even under an unlimited budget (MESH_BUDGET_USD=0)
+	// where the FleetPayload pause path never fires. Greppable: "cost accrued".
+	s.log.Info("scheduler: cost accrued", "source", "worker", "task", o.task.ID,
+		"deltaUSD", res.CostUSD, "spentUSD", s.spent)
 	s.publishWorker(o.task, res)
 
 	switch {
@@ -502,6 +507,8 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 	delete(s.inflight, o.task.ID)
 	dec := o.dec
 	s.spent += dec.CostUSD
+	s.log.Info("scheduler: cost accrued", "source", "review", "task", o.task.ID,
+		"deltaUSD", dec.CostUSD, "spentUSD", s.spent)
 
 	switch {
 	case dec.NoDiff:

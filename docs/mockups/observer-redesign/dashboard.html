@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Mesh — Dashboard</title>
+<style>
+  :root{
+    --bg:#070b11; --panel-2:#0e151f; --inset:#060a11;
+    --ink:#cdd9e5; --ink-bright:#eef4fa; --muted:#5d7186; --faint:#3a4a5a;
+    --border-bright:#23323f; --cyan:#21e6ff;
+    --mono:'JetBrains Mono','SFMono-Regular','SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden}
+  .view{position:fixed;inset:0;width:100%;height:100%;border:0;background:var(--bg)}
+  .view[hidden]{display:none}
+
+  /* floating mode toggle — the only chrome this shell adds */
+  .switch{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:100;
+    display:flex;align-items:center;gap:9px;background:rgba(10,16,24,.86);backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);border:1px solid var(--border-bright);border-radius:999px;
+    padding:5px 6px 5px 13px;box-shadow:0 12px 40px -14px #000;font:11px/1 var(--mono)}
+  .switch .lab{color:var(--faint);font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;padding-right:3px}
+  .seg{display:inline-flex;background:var(--inset);border:1px solid var(--border-bright);border-radius:999px;overflow:hidden}
+  .seg button{font:inherit;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+    background:transparent;border:0;padding:6px 15px;cursor:pointer;transition:.14s;display:flex;align-items:center;gap:7px}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-pressed="true"]{color:#04221f;background:var(--cyan);font-weight:700;box-shadow:0 0 16px -5px var(--cyan)}
+  .seg button .d{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.7}
+  .switch .kbd{color:var(--faint);font-size:9px;letter-spacing:.1em;border-left:1px solid var(--border-bright);padding-left:10px}
+  .switch .kbd b{color:var(--muted);font-weight:500}
+</style>
+</head>
+<body>
+  <!-- Console = attention-first operator cockpit (observer-v2) -->
+  <iframe class="view" id="vConsole" src="observer-v2.html" title="Console view"></iframe>
+  <!-- Wall = constellation-hero live observer (observer) -->
+  <iframe class="view" id="vWall" src="observer.html" title="Wall view" hidden></iframe>
+
+  <nav class="switch" role="group" aria-label="Dashboard view mode">
+    <span class="lab">View</span>
+    <div class="seg" id="seg">
+      <button data-v="console" aria-pressed="true"><span class="d"></span>Console</button>
+      <button data-v="wall" aria-pressed="false"><span class="d"></span>Wall</button>
+    </div>
+    <span class="kbd">press <b>V</b></span>
+  </nav>
+
+  <script>
+    (function(){
+      var KEY="mesh:viewmode";
+      var views={console:document.getElementById("vConsole"),wall:document.getElementById("vWall")};
+      var btns=Array.prototype.slice.call(document.querySelectorAll("#seg button"));
+      function set(mode){
+        if(mode!=="console"&&mode!=="wall")mode="console";
+        views.console.hidden=mode!=="console";
+        views.wall.hidden=mode!=="wall";
+        btns.forEach(function(b){b.setAttribute("aria-pressed",b.dataset.v===mode)});
+        try{localStorage.setItem(KEY,mode)}catch(_){}
+      }
+      btns.forEach(function(b){b.addEventListener("click",function(){set(b.dataset.v)})});
+      // 'V' toggles between modes
+      document.addEventListener("keydown",function(e){
+        if(e.key==="v"||e.key==="V"){var cur=views.console.hidden?"wall":"console";set(cur==="console"?"wall":"console");}
+      });
+      var saved="console"; try{saved=localStorage.getItem(KEY)||"console"}catch(_){}
+      set(saved);
+    })();
+  </script>
+</body>
+</html>

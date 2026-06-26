@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Mesh — Topology Lab</title>
+<style>
+  :root{
+    --bg:#070b11; --panel:#0b1119; --panel-2:#0e151f; --inset:#060a11;
+    --ink:#cdd9e5; --ink-bright:#eef4fa; --muted:#5d7186; --faint:#3a4a5a;
+    --border:#18242f; --border-bright:#23323f;
+    --cyan:#21e6ff; --green:#38ffa3; --task:#7dd3fc;
+    --c-planner:#ffb31f; --c-worker:#6aa8ff; --c-expert:#a78bfa; --c-review:#f472b6; --c-mem:#5eead4; --c-coord:#38ffa3;
+    --mono:'JetBrains Mono','SFMono-Regular','SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);font:12.5px/1.45 var(--mono);letter-spacing:.01em;
+    -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(1100px 540px at 70% -12%,rgba(33,230,255,.05),transparent 60%);}
+  ::selection{background:#0c5d59;color:var(--ink-bright)}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#16222d;border:2px solid var(--bg);border-radius:6px}
+
+  .wrap{max-width:1400px;margin:0 auto;padding:14px 18px 40px}
+
+  /* lab bar (this is a design-exploration control, not product chrome) */
+  .labbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:11px 4px 13px;border-bottom:1px solid var(--border);margin-bottom:14px}
+  .title{display:flex;align-items:center;gap:10px}
+  .title .g{width:24px;height:24px;display:grid;place-items:center;color:var(--cyan);
+    border:1px solid #0c5d59;border-radius:5px;background:radial-gradient(circle at 50% 30%,rgba(33,230,255,.16),transparent 70%)}
+  .title b{color:var(--ink-bright);font-weight:600;letter-spacing:.16em;font-size:12.5px}
+  .title .tag{color:var(--muted);font-size:9.5px;letter-spacing:.24em;text-transform:uppercase;
+    border:1px solid var(--border-bright);border-radius:4px;padding:2px 7px}
+  .spacer{flex:1}
+
+  .ctlgroup{display:flex;align-items:center;gap:9px}
+  .ctlgroup .lab{color:var(--faint);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase}
+  .seg{display:inline-flex;border:1px solid var(--border-bright);border-radius:6px;overflow:hidden}
+  .seg button{font:inherit;font-size:10.5px;letter-spacing:.06em;color:var(--muted);background:var(--inset);
+    border:0;border-right:1px solid var(--border-bright);padding:6px 13px;cursor:pointer;transition:.13s;text-transform:uppercase}
+  .seg button:last-child{border-right:0}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:#0c5d59;color:var(--ink-bright)}
+  input[type=range]{-webkit-appearance:none;appearance:none;height:4px;border-radius:3px;width:150px;cursor:pointer;
+    background:linear-gradient(90deg,var(--cyan) var(--p,30%),#16222d var(--p,30%))}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+    background:var(--ink-bright);border:3px solid var(--cyan);box-shadow:0 0 9px -2px var(--cyan);cursor:grab}
+  .num{color:var(--cyan);min-width:30px;text-align:center;font-variant-numeric:tabular-nums;font-size:14px}
+  .toggle{width:40px;height:21px;border-radius:11px;cursor:pointer;background:var(--inset);
+    border:1px solid var(--border-bright);position:relative;transition:.18s}
+  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--faint);transition:.18s}
+  .toggle[aria-checked="true"]{background:#0c5d59;border-color:#1bbfb3}
+  .toggle[aria-checked="true"]::after{left:21px;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+
+  /* stage panel */
+  .stagewrap{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .stagehead{display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--panel-2)}
+  .stagehead h2{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-bright);font-weight:600}
+  .stagehead .legend{margin-left:auto;display:flex;gap:14px;align-items:center;color:var(--muted);font-size:10px}
+  .stagehead .legend i{display:inline-flex;align-items:center;gap:5px;letter-spacing:.04em}
+  .dotk{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .lab-explain{color:var(--muted);font-size:10.5px;letter-spacing:.02em;margin-left:6px}
+
+  .stage{position:relative;height:600px;background:
+    radial-gradient(900px 480px at 50% 46%,rgba(33,230,255,.04),transparent 70%),var(--inset);
+    overflow:hidden}
+  .stage svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+
+  /* ---------- constellation nodes ---------- */
+  .cnode{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:5px;
+    cursor:default;transition:opacity .25s, filter .25s}
+  .cnode .disc{display:grid;place-items:center;border-radius:50%;border:1.5px solid;position:relative;
+    font-size:14px;transition:.2s}
+  .cnode .nm{font-size:10px;letter-spacing:.03em;color:var(--ink);white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+  .cnode .nm small{color:var(--faint)}
+  .cnode.idle{opacity:.4;filter:grayscale(.5)}
+  .cnode.idle .nm{display:none}
+  .cnode.away{opacity:.2}
+  .cnode.away .disc{border-style:dashed}
+  .cnode.active .disc{animation:nodepulse 1.8s ease-in-out infinite}
+  @keyframes nodepulse{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 4px rgba(33,230,255,.10)}}
+  .cnode .ping{position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--cyan);opacity:0}
+  .cnode.flash .ping{animation:ping .55s ease-out}
+  @keyframes ping{0%{opacity:.8;transform:scale(.7)}100%{opacity:0;transform:scale(1.7)}}
+  /* hub */
+  .cnode.hub .disc{width:64px;height:64px;font-size:24px}
+  .cnode.hub .nm{font-size:11px;color:var(--ink-bright);letter-spacing:.08em;text-transform:uppercase}
+  /* structural (planner/expert/reviewer/mem) */
+  .cnode.struct .disc{width:46px;height:46px;font-size:17px}
+  .cnode.struct .nm{color:var(--ink-bright)}
+  /* worker */
+  .cnode.worker .disc{width:30px;height:30px;font-size:12px}
+  .cnode.worker.dot .disc{width:13px;height:13px;font-size:0;border-width:0}
+  .cnode.worker.dot .nm{display:none}
+  .cnode.worker.dot.active .disc{width:15px;height:15px}
+  /* idle cluster pod */
+  .cnode.pod .disc{width:40px;height:40px;font-size:11px;border-style:dashed;color:var(--muted);
+    flex-direction:column;line-height:1.1;cursor:pointer}
+  .cnode.pod .disc b{color:var(--ink);font-size:13px}
+  .cnode.pod .nm{color:var(--muted)}
+
+  /* ---------- lanes ---------- */
+  .lanes{display:none;height:600px;padding:12px;gap:12px;grid-template-columns:repeat(5,1fr)}
+  .lanes.on{display:grid}
+  .lane{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .lane>header{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--border);background:#0c131c}
+  .lane>header .lg{font-size:13px}
+  .lane>header h3{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-bright);font-weight:600}
+  .lane>header .cnt{margin-left:auto;color:var(--muted);font-size:10px;background:var(--inset);
+    border:1px solid var(--border-bright);border-radius:10px;padding:1px 8px;font-variant-numeric:tabular-nums}
+  .lanebody{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:0}
+  .chip{display:flex;align-items:center;gap:8px;background:var(--inset);border:1px solid var(--border);
+    border-left:2px solid var(--faint);border-radius:6px;padding:6px 9px;transition:.18s;flex:0 0 auto}
+  .chip .cg{font-size:11px;flex:0 0 auto}
+  .chip .meta{min-width:0;flex:1}
+  .chip .meta .nm{color:var(--ink-bright);font-size:10.5px;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .meta .ms{color:var(--muted);font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .chip .sd{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .chip.idle{opacity:.5}.chip.idle .meta .ms{display:none}
+  .chip.away{opacity:.28;border-left-color:transparent}
+  .chip.flash{border-color:var(--cyan);box-shadow:0 0 0 1px rgba(33,230,255,.4),0 0 14px -4px var(--cyan)}
+  .idlefold{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px;letter-spacing:.04em;
+    cursor:pointer;padding:6px 4px;border-top:1px dashed var(--border-bright);margin-top:2px}
+  .idlefold:hover{color:var(--ink)}
+  .idlefold .ar{transition:.2s}.idlefold[data-open="true"] .ar{transform:rotate(90deg)}
+
+  /* tooltip */
+  .tip{position:fixed;z-index:50;pointer-events:none;background:#0c131c;border:1px solid var(--border-bright);
+    border-radius:6px;padding:8px 11px;font-size:10.5px;color:var(--ink);box-shadow:0 14px 40px -12px #000;
+    opacity:0;transition:opacity .12s;max-width:240px}
+  .tip.on{opacity:1}
+  .tip .tn{color:var(--ink-bright);font-weight:600;letter-spacing:.04em;display:flex;align-items:center;gap:7px}
+  .tip .tr{color:var(--muted);margin-top:3px}
+  .tip .tm{color:var(--task);margin-top:5px;font-size:10px;border-top:1px solid var(--border);padding-top:5px}
+  .tip .st{font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+
+  .footnote{margin-top:12px;color:var(--muted);font-size:10.5px;letter-spacing:.02em;display:flex;gap:22px;flex-wrap:wrap}
+  .footnote b{color:var(--ink)}
+  @media (max-width:1000px){.lanes{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="labbar">
+    <div class="title">
+      <span class="g">◎</span><b>TOPOLOGY&nbsp;LAB</b>
+      <span class="tag">Observer redesign</span>
+    </div>
+    <span class="lab-explain">scrub agent count &amp; traffic — watch which layout stays readable</span>
+    <span class="spacer"></span>
+
+    <div class="ctlgroup"><span class="lab">Layout</span>
+      <div class="seg" id="layout">
+        <button data-v="constellation" aria-pressed="true">Constellation</button>
+        <button data-v="lanes" aria-pressed="false">Lanes</button>
+      </div>
+    </div>
+    <div class="ctlgroup"><span class="lab">Agents</span>
+      <input type="range" id="count" min="2" max="40" step="1" value="6">
+      <span class="num" id="countVal">6</span>
+    </div>
+    <div class="ctlgroup"><span class="lab">Traffic</span>
+      <div class="seg" id="traffic">
+        <button data-v="0" aria-pressed="false">Off</button>
+        <button data-v="1" aria-pressed="true">Calm</button>
+        <button data-v="2" aria-pressed="false">Busy</button>
+      </div>
+    </div>
+    <div class="ctlgroup"><span class="lab">Cluster idle</span>
+      <div class="toggle" id="clusterIdle" role="switch" tabindex="0" aria-checked="true"></div>
+    </div>
+  </div>
+
+  <div class="stagewrap">
+    <div class="stagehead">
+      <h2 id="stageTitle">Constellation</h2>
+      <div class="legend">
+        <i><span class="dotk" style="background:var(--c-coord)"></span>coordinator</i>
+        <i><span class="dotk" style="background:var(--c-planner)"></span>planner</i>
+        <i><span class="dotk" style="background:var(--c-expert)"></span>expert</i>
+        <i><span class="dotk" style="background:var(--c-worker)"></span>worker</i>
+        <i><span class="dotk" style="background:var(--c-review)"></span>reviewer</i>
+        <i><span class="dotk" style="background:var(--c-mem)"></span>blackboard</i>
+      </div>
+    </div>
+    <div class="stage" id="stage">
+      <svg class="edges" id="edges" preserveAspectRatio="none"></svg>
+      <!-- constellation nodes injected here -->
+    </div>
+    <div class="lanes" id="lanes"><!-- lane columns injected --></div>
+  </div>
+
+  <div class="footnote">
+    <span><b>Constellation</b> — structure at a glance; workers collapse to dots + an idle pod past ~14. Best for "is the fleet healthy".</span>
+    <span><b>Lanes</b> — role columns, idle folds away, never overlaps. Best for "what is each agent doing" at high N.</span>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+(function(){
+  "use strict";
+  var $=function(s,r){return (r||document).querySelector(s)};
+  var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+  var SVGNS="http://www.w3.org/2000/svg";
+  function rnd(n){return Math.floor(Math.random()*n)}
+  function pick(a){return a[rnd(a.length)]}
+
+  var COL={coordinator:"#38ffa3",planner:"#ffb31f",worker:"#6aa8ff",expert:"#a78bfa",reviewer:"#f472b6",blackboard:"#5eead4"};
+  var GLYPH={coordinator:"✺",planner:"▲",worker:"⬡",expert:"★",reviewer:"●",blackboard:"▤"};
+  var WORKER_ACTS=["editing auth/middleware.go","running go test ./...","claiming web/app.js","rebasing onto main",
+    "writing handler tests","grepping for callers","applying review fixes","scaffolding sidecar",
+    "resolving merge conflict","drafting migration"];
+  var EXPERT_ACTS=["answered: use ctx cancel","holding repo map","reviewing claim #4192","cached 12 answers"];
+
+  // ---------- model ----------
+  var DOT_THRESHOLD=14;          // workers shown as dots above this
+  var state={layout:"constellation",count:6,traffic:1,clusterIdle:true,podOpen:false};
+  var agents=[];                 // built fleet
+  var WORKER_NAMES=["amalgam","drifter","quartz","beacon","umbra","cinder","relay","vesper","tpowan","glyph","onyx","mica","slate","ember","flux","prism","talon","nimbus","cobalt","reef","halcyon","dune","wren","argo","kestrel","fen","loam","brisk","vale","yarrow","corin","mesa","ridge","010c4d3a","02a3119f","6d8f00ee","e0e6b1d5"];
+
+  function buildFleet(n){
+    agents=[];
+    agents.push({id:"coordinator",name:"coordinator",role:"coordinator",st:"active",msg:"routing bus · 14 streams"});
+    var rest=n;
+    agents.push({id:"planner",name:"planner",role:"planner",st:"active",msg:"split TICKET-318 → 6 tasks"}); rest--;
+    var nExp=Math.max(1,Math.min(4,Math.ceil(n/12)));
+    for(var e=0;e<nExp && rest>0;e++){agents.push({id:"expert-"+e,name:"expert-"+(e+1),role:"expert",st:"active",msg:pick(EXPERT_ACTS)});rest--;}
+    if(rest>0){agents.push({id:"reviewer",name:"reviewer",role:"reviewer",st:"active",msg:"gating diff #4192"});rest--;}
+    agents.push({id:"blackboard",name:"blackboard",role:"blackboard",st:"active",msg:"312 notes · 41 claims"});
+    // workers fill the remainder
+    for(var w=0;rest>0;w++,rest--){
+      var stt=Math.random()<0.55?"active":(Math.random()<0.8?"idle":"away");
+      agents.push({id:"w"+w,name:WORKER_NAMES[w%WORKER_NAMES.length],role:"worker",st:stt,
+        msg:stt==="active"?pick(WORKER_ACTS):(stt==="idle"?"idle · awaiting task":"away · ttl 60s")});
+    }
+  }
+  function workers(){return agents.filter(function(a){return a.role==="worker"})}
+  function byRole(r){return agents.filter(function(a){return a.role===r})}
+
+  // ---------- render: CONSTELLATION ----------
+  var stage=$("#stage"), edges=$("#edges"), lanes=$("#lanes");
+  var nodeEls={}; // id -> el  (constellation)
+
+  function clearStage(){
+    $$(".cnode",stage).forEach(function(n){n.remove()});
+    edges.textContent=""; nodeEls={};
+  }
+  function disc(color,glyph){return '<div class="disc" style="color:'+color+';border-color:'+color+'88;background:'+color+'14">'+glyph+'<span class="ping"></span></div>'}
+
+  function placeNode(a,cls,x,y,glyphOverride){
+    var el=document.createElement("div");
+    el.className="cnode "+cls+" "+(a.st);
+    el.style.left=x+"px"; el.style.top=y+"px";
+    var g=glyphOverride!=null?glyphOverride:(GLYPH[a.role]||"◆");
+    el.innerHTML=disc(COL[a.role]||"#6aa8ff",g)+'<div class="nm">'+a.name+(a.role==="worker"?'':' <small>'+a.role+'</small>')+'</div>';
+    el.__agent=a;
+    stage.appendChild(el); nodeEls[a.id]=el;
+    return el;
+  }
+  function edge(x1,y1,x2,y2,color,op,w){
+    var p=document.createElementNS(SVGNS,"line");
+    p.setAttribute("x1",x1);p.setAttribute("y1",y1);p.setAttribute("x2",x2);p.setAttribute("y2",y2);
+    p.setAttribute("stroke",color);p.setAttribute("stroke-width",w||1);p.setAttribute("opacity",op);
+    edges.appendChild(p); return p;
+  }
+  var pos={}; // id -> {x,y} for traffic animation
+
+  function renderConstellation(){
+    clearStage();
+    var W=stage.clientWidth||1100, H=stage.clientHeight||600;
+    var cx=W/2, cy=H/2;
+    var R=Math.min(W,H);
+    pos={};
+
+    // hub
+    var coord=byRole("coordinator")[0];
+    placeNode(coord,"hub",cx,cy); pos[coord.id]={x:cx,y:cy};
+
+    // inner structural ring: planner, experts, reviewer, blackboard
+    var struct=[].concat(byRole("planner"),byRole("expert"),byRole("reviewer"),byRole("blackboard"));
+    var r1=R*0.26;
+    struct.forEach(function(a,i){
+      var ang=(-90 + i*(360/struct.length))*Math.PI/180;
+      var x=cx+Math.cos(ang)*r1, y=cy+Math.sin(ang)*r1*0.82;
+      placeNode(a,"struct",x,y); pos[a.id]={x:x,y:y};
+      edge(cx,cy,x,y,COL[a.role],a.role==="blackboard"?.18:.22,1.4);
+    });
+
+    // outer worker ring
+    var ws=workers();
+    var idleWs=ws.filter(function(a){return a.st!=="active"});
+    var showWs=ws;
+    var clustered=null;
+    if(state.clusterIdle && idleWs.length>3 && !state.podOpen){
+      showWs=ws.filter(function(a){return a.st==="active"});
+      clustered=idleWs;
+    }
+    var asDots=showWs.length>DOT_THRESHOLD;
+    var r2=R*0.46;
+    var total=showWs.length+(clustered?1:0);
+    showWs.forEach(function(a,i){
+      var ang=(-90 + i*(360/Math.max(total,1)))*Math.PI/180;
+      var x=cx+Math.cos(ang)*r2, y=cy+Math.sin(ang)*r2*0.82;
+      var el=placeNode(a,"worker"+(asDots?" dot":""),x,y); pos[a.id]={x:x,y:y};
+      // edge worker -> assigned expert (only active = live work shown)
+      if(a.st==="active"){
+        var exps=byRole("expert"); var ex=exps[i%exps.length]||coord;
+        var ep=pos[ex.id]; if(ep) edge(x,y,ep.x,ep.y,"#6aa8ff",.16,1);
+      }
+    });
+    // idle pod
+    if(clustered){
+      var ang=(-90 + showWs.length*(360/Math.max(total,1)))*Math.PI/180;
+      var x=cx+Math.cos(ang)*r2, y=cy+Math.sin(ang)*r2*0.82;
+      var el=document.createElement("div");
+      el.className="cnode pod";
+      el.style.left=x+"px"; el.style.top=y+"px";
+      el.innerHTML='<div class="disc"><b>+'+clustered.length+'</b>idle</div><div class="nm">idle workers</div>';
+      el.addEventListener("click",function(){state.podOpen=true;render()});
+      stage.appendChild(el);
+    }
+  }
+
+  // ---------- render: LANES ----------
+  var LANE_DEFS=[
+    {role:"planner",title:"Planner",glyph:"▲"},
+    {role:"worker",title:"Workers",glyph:"⬡"},
+    {role:"expert",title:"Experts",glyph:"★"},
+    {role:"reviewer",title:"Review",glyph:"●"},
+    {role:"blackboard",title:"Memory",glyph:"▤"}
+  ];
+  function chip(a){
+    var c=COL[a.role];
+    return '<div class="chip '+a.st+'" data-id="'+a.id+'" style="border-left-color:'+c+'">'+
+      '<span class="cg" style="color:'+c+'">'+(GLYPH[a.role]||"◆")+'</span>'+
+      '<div class="meta"><div class="nm">'+a.name+'</div><div class="ms">'+a.msg+'</div></div>'+
+      '<span class="sd" style="background:'+(a.st==="active"?c:a.st==="idle"?"#3a4a5a":"#1c2630")+
+        (a.st==="active"?";box-shadow:0 0 7px "+c:"")+'"></span></div>';
+  }
+  function renderLanes(){
+    lanes.textContent="";
+    LANE_DEFS.forEach(function(L){
+      var list=byRole(L.role); if(L.role==="planner"||L.role==="reviewer"){} // single
+      var col=document.createElement("div"); col.className="lane";
+      var active=list.filter(function(a){return a.st==="active"});
+      var rest=list.filter(function(a){return a.st!=="active"});
+      var html='<header><span class="lg" style="color:'+COL[L.role]+'">'+L.glyph+'</span><h3>'+L.title+'</h3>'+
+        '<span class="cnt">'+list.length+'</span></header><div class="lanebody">';
+      active.forEach(function(a){html+=chip(a)});
+      if(rest.length){
+        html+='<div class="idlefold" data-open="'+(state.podOpen?'true':'false')+'"><span class="ar">▸</span> '+rest.length+' idle / away</div>';
+        if(state.podOpen) rest.forEach(function(a){html+=chip(a)});
+      }
+      html+='</div>';
+      col.innerHTML=html;
+      lanes.appendChild(col);
+    });
+    $$(".idlefold",lanes).forEach(function(f){
+      f.addEventListener("click",function(){state.podOpen=!state.podOpen;renderLanes()});
+    });
+  }
+
+  // ---------- master render ----------
+  function render(){
+    if(state.layout==="constellation"){
+      lanes.classList.remove("on"); stage.style.display=""; edges.style.display="";
+      $("#stageTitle").textContent="Constellation";
+      renderConstellation();
+    }else{
+      stage.style.display="none";
+      lanes.classList.add("on");
+      $("#stageTitle").textContent="Role lanes";
+      renderLanes();
+    }
+  }
+
+  // ---------- traffic sim ----------
+  function flashConstellation(a,b){
+    [a,b].forEach(function(id){var el=nodeEls[id];if(el){el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash");
+      setTimeout(function(){el&&el.classList.remove("flash")},560);}});
+    var pa=pos[a], pb=pos[b]; if(!pa||!pb)return;
+    var dot=document.createElementNS(SVGNS,"circle");
+    dot.setAttribute("r","3.5");dot.setAttribute("fill","#21e6ff");
+    dot.setAttribute("filter","drop-shadow(0 0 4px #21e6ff)");
+    edges.appendChild(dot);
+    var t0=null,dur=620;
+    function step(ts){if(!t0)t0=ts;var k=Math.min(1,(ts-t0)/dur);
+      dot.setAttribute("cx",pa.x+(pb.x-pa.x)*k);dot.setAttribute("cy",pa.y+(pb.y-pa.y)*k);
+      if(k<1)requestAnimationFrame(step);else dot.remove();}
+    requestAnimationFrame(step);
+  }
+  function flashLane(id){
+    var c=lanes.querySelector('.chip[data-id="'+id+'"]'); if(!c)return;
+    c.classList.add("flash");setTimeout(function(){c.classList.remove("flash")},560);
+  }
+  function tick(){
+    if(state.traffic===0)return;
+    var act=agents.filter(function(a){return a.role==="worker"&&a.st==="active"});
+    if(!act.length)return;
+    var w=pick(act);
+    var targets=byRole("expert").concat(byRole("coordinator"),byRole("blackboard"));
+    var t=pick(targets);
+    // refresh that worker's action so cards feel live
+    w.msg=pick(WORKER_ACTS);
+    if(state.layout==="constellation"){ flashConstellation(w.id,t.id); var el=nodeEls[w.id];}
+    else { var c=lanes.querySelector('.chip[data-id="'+w.id+'"] .ms'); if(c)c.textContent=w.msg; flashLane(w.id); flashLane(t.id); }
+  }
+  var trafficTimer=null;
+  function restartTraffic(){
+    if(trafficTimer)clearInterval(trafficTimer);
+    if(state.traffic===0)return;
+    trafficTimer=setInterval(tick, state.traffic===2?420:1100);
+  }
+  // occasional state churn so idle/active shifts (feels alive)
+  setInterval(function(){
+    if(state.traffic===0)return;
+    var ws=workers(); if(ws.length<2)return;
+    var w=pick(ws);
+    if(Math.random()<0.5){ w.st = w.st==="active"?"idle":"active";
+      w.msg = w.st==="active"?pick(WORKER_ACTS):"idle · awaiting task";
+      render();
+    }
+  },2600);
+
+  // ---------- tooltip ----------
+  var tip=$("#tip");
+  stage.addEventListener("mousemove",function(e){
+    var n=e.target.closest&&e.target.closest(".cnode");
+    if(!n||!n.__agent){tip.classList.remove("on");return;}
+    var a=n.__agent, c=COL[a.role];
+    tip.innerHTML='<div class="tn"><span style="color:'+c+'">'+(GLYPH[a.role]||"◆")+'</span>'+a.name+
+      ' <span class="st" style="color:'+(a.st==="active"?"#38ffa3":a.st==="idle"?"#5d7186":"#f66f7d")+'">'+a.st+'</span></div>'+
+      '<div class="tr">'+a.role+'</div><div class="tm">'+a.msg+'</div>';
+    tip.classList.add("on");
+    tip.style.left=Math.min(e.clientX+14,window.innerWidth-250)+"px";
+    tip.style.top=(e.clientY+14)+"px";
+  });
+  stage.addEventListener("mouseleave",function(){tip.classList.remove("on")});
+
+  // ---------- controls ----------
+  $("#layout").addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;
+    $$("#layout button").forEach(function(x){x.setAttribute("aria-pressed",x===b)});
+    state.layout=b.dataset.v; state.podOpen=false; render();});
+  $("#traffic").addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;
+    $$("#traffic button").forEach(function(x){x.setAttribute("aria-pressed",x===b)});
+    state.traffic=+b.dataset.v; restartTraffic();});
+  var ci=$("#clusterIdle");
+  function flipCluster(){ci.setAttribute("aria-checked",ci.getAttribute("aria-checked")!=="true");
+    state.clusterIdle=ci.getAttribute("aria-checked")==="true"; state.podOpen=false; render();}
+  ci.addEventListener("click",flipCluster);
+  ci.addEventListener("keydown",function(e){if(e.key===" "||e.key==="Enter"){e.preventDefault();flipCluster()}});
+  $("#count").addEventListener("input",function(){
+    state.count=+this.value; $("#countVal").textContent=this.value;
+    this.style.setProperty("--p",((this.value-2)/38*100)+"%");
+    state.podOpen=false; buildFleet(state.count); render();
+  });
+  window.addEventListener("resize",function(){if(state.layout==="constellation")renderConstellation()});
+
+  // ---------- init ----------
+  $("#count").style.setProperty("--p",((6-2)/38*100)+"%");
+  buildFleet(state.count);
+  render();
+  restartTraffic();
+})();
+</script>
+</body>
+</html>

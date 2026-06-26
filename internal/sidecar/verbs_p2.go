@@ -304,7 +304,17 @@ func (s *Sidecar) ensureResponder(role, to string) error {
 		}
 	}
 	if to != "" {
+		// A direct --to ask names a specific agent; there is nothing to spawn,
+		// so an absent target is always an error.
 		return fmt.Errorf("no live agent %q", to)
+	}
+	// Autonomous experts (#117): when armed, a role-ask with no live owner is
+	// NOT an error — the coordinator watches role-asks and spawns a resident
+	// expert for the role, then re-delivers this ask once it is listening. Let
+	// the ask through so the ticket is created and published for the coordinator
+	// to observe. Unset = pre-#117 behavior (fail fast, no owner = no answer).
+	if s.cfg.AutoExperts {
+		return nil
 	}
 	return fmt.Errorf("no live agent with role %q", role)
 }

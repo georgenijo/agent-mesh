@@ -2,6 +2,9 @@
 
 Running list of things to fix/improve. Newest insight wins. Status: ⬜ todo · 🔄 in progress · ✅ done
 
+## Big unlocks (done)
+- ✅ **Autonomous on-demand experts (#117)** — the coordinator now spins up an expert ITSELF the moment an agent asks a role nobody is filling (and the same for review requests). No human pre-spawns experts — drop work, the cheap workers run, and when one needs an architect/senior the coordinator brings one up on demand. Behind `MESH_AUTO_EXPERTS=on` (off = old behavior). Proven cross-process: ask an empty `auth` role → coordinator launches `expert-auth-*` → it answers the original question. On `session/auto-experts`.
+
 ## Top priority (blocks trusting the fleet)
 - ✅ **Workers can't edit files** — FIXED: added `--dangerously-skip-permissions` to the worker's `claude` invocation (`internal/cliexec/adapter.go`). Was the root cause of the empty pilot run; confirmed fixed — a worker wrote a correct real fix to `config.go`. On `session/hardening`.
 - ⬜ **Objective "done" gate** — a task can't be `done` unless it actually changed code AND `go build` + `go test` pass. (Audit Fork E; confirmed live: ticket #1 marked "done" with zero changes.)

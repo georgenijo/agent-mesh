@@ -66,9 +66,11 @@ func New(opts Options) *Proxy {
 	return &Proxy{opts: opts.withDefaults()}
 }
 
-// Start spawns the resident child and blocks until its init event yields a
-// session id (bounded by ctx and Options.StartTimeout). On failure the child
-// is killed and reaped and the proxy returns to the not-started state.
+// Start spawns the resident child and returns once it is live. It does NOT wait
+// for a session id (this claude build emits its init only after the first
+// input); the session id is captured lazily on the first turn. Start fails only
+// if the child crashes within the StartTimeout liveness grace or ctx is
+// cancelled — in which case the child is killed and reaped.
 func (p *Proxy) Start(ctx context.Context) error {
 	p.askMu.Lock()
 	defer p.askMu.Unlock()
@@ -291,7 +293,8 @@ func (p *Proxy) Pid() int {
 
 // --- internals -----------------------------------------------------------------
 
-// spawn starts one child generation and waits for its session id.
+// spawn starts one child generation and returns once it is live (it does not
+// wait for a session id; see Start).
 func (p *Proxy) spawn(ctx context.Context, extraArgs []string) error {
 	args := make([]string, 0, len(p.opts.Args)+len(extraArgs))
 	args = append(args, p.opts.Args...)
@@ -334,23 +337,28 @@ func (p *Proxy) spawn(ctx context.Context, extraArgs []string) error {
 
 	go p.supervise(c, stdout)
 
+	// Do NOT block startup on a session id: this claude build emits its
+	// session_id-bearing `init` only AFTER the first input, never on spawn, so
+	// waiting for it pre-input deadlocks (the "no session id within 30s"
+	// failure, #93). StartTimeout is now a short liveness grace: a child still
+	// alive past it is treated as ready, and readLoop captures the session id
+	// lazily from the first turn. A fast exit (bad binary/flags) is still
+	// surfaced, and a build/fake that DOES emit init early is taken immediately.
 	timer := time.NewTimer(p.opts.StartTimeout)
 	defer timer.Stop()
 	select {
 	case <-c.init:
-		return nil
+		return nil // a build/hook that does emit init early — take it
 	case <-c.exited:
 		err := p.childExitError(c)
 		p.detach(c)
-		return fmt.Errorf("runtime: child exited before reporting a session id: %w", err)
+		return fmt.Errorf("runtime: child exited during startup: %w", err)
 	case <-ctx.Done():
 		p.killAndReap(c)
 		p.detach(c)
 		return fmt.Errorf("runtime: start cancelled: %w", ctx.Err())
 	case <-timer.C:
-		p.killAndReap(c)
-		p.detach(c)
-		return fmt.Errorf("runtime: child reported no session id within %s", p.opts.StartTimeout)
+		return nil // alive, no init yet — expected; the first turn yields the session id
 	}
 }
 

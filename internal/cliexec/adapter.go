@@ -42,10 +42,12 @@
 package cliexec
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
 )
@@ -119,6 +121,14 @@ type InvokeOptions struct {
 	// Callers use this to mark the child as exited on the ops plane
 	// (MarkChildExited).
 	OnExit func(pid int)
+
+	// LiveLog, when non-nil, switches the claude invocation to streaming
+	// (`--output-format stream-json --verbose`) and tees every NDJSON event
+	// line to this writer as it arrives — so callers can surface what the
+	// child is doing in real time. The final result event is still returned
+	// as the (legacy-shaped) result bytes, so downstream result parsing is
+	// unchanged. Nil keeps the buffered `--output-format json` behavior.
+	LiveLog io.Writer
 }
 
 // Adapter is the per-CLI interface every supported agent CLI must satisfy to
@@ -197,7 +207,23 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 		wd = 3 * time.Second
 	}
 
-	args := []string{"-p", "--output-format", "json"}
+	streaming := opts.LiveLog != nil
+	format := "json"
+	if streaming {
+		format = "stream-json"
+	}
+	// --dangerously-skip-permissions: a headless worker cannot answer an
+	// interactive permission prompt, so without this claude is blocked from
+	// using Edit/Write/Bash and makes zero file changes while still returning
+	// is_error:false success — a silent no-op. The worker runs in an isolated
+	// per-task git worktree, so granting tool access is bounded to that tree.
+	args := []string{"-p", "--output-format", format, "--dangerously-skip-permissions"}
+	if streaming {
+		// `claude -p --output-format stream-json` requires --verbose; the stream
+		// emits one NDJSON event per line and the final type=result event carries
+		// the same fields as the buffered json result.
+		args = append(args, "--verbose")
+	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
@@ -212,10 +238,36 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 	}
 	cmd.WaitDelay = wd
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
+	if !streaming {
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("claude: failed to start: %w", err)
+		}
+		pid := cmd.Process.Pid
+		if opts.OnStart != nil {
+			opts.OnStart(pid)
+		}
+		waitErr := cmd.Wait()
+		if opts.OnExit != nil {
+			opts.OnExit(pid)
+		}
+		if waitErr != nil {
+			return nil, classifyRunErr(ctx, waitErr, &stderr)
+		}
+		return stdout.Bytes(), nil
+	}
+
+	// Streaming path: tee each NDJSON event line to LiveLog as it arrives, and
+	// keep the last non-empty line (the type=result event) as the legacy-shaped
+	// result bytes — so the caller's result parser is unchanged.
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("claude: stdout pipe: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("claude: failed to start: %w", err)
 	}
@@ -223,22 +275,39 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 	if opts.OnStart != nil {
 		opts.OnStart(pid)
 	}
-
+	scanner := bufio.NewScanner(pipe)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	var last []byte
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		tee := make([]byte, len(line)+1)
+		copy(tee, line)
+		tee[len(line)] = '\n'
+		_, _ = opts.LiveLog.Write(tee)
+		if len(bytes.TrimSpace(line)) > 0 {
+			last = append(last[:0], line...)
+		}
+	}
 	waitErr := cmd.Wait()
 	if opts.OnExit != nil {
 		opts.OnExit(pid)
 	}
-
 	if waitErr != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("claude: timed out or cancelled: %w", ctx.Err())
-		}
-		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("claude: exited: %w: %s", waitErr, truncate(stderr.String(), 2048))
-		}
-		return nil, fmt.Errorf("claude: failed to run: %w", waitErr)
+		return nil, classifyRunErr(ctx, waitErr, &stderr)
 	}
-	return stdout.Bytes(), nil
+	return last, nil
+}
+
+// classifyRunErr maps a cmd.Wait() error to the adapter's error contract,
+// preferring ctx cancellation, then stderr detail.
+func classifyRunErr(ctx context.Context, waitErr error, stderr *bytes.Buffer) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("claude: timed out or cancelled: %w", ctx.Err())
+	}
+	if stderr.Len() > 0 {
+		return fmt.Errorf("claude: exited: %w: %s", waitErr, truncate(stderr.String(), 2048))
+	}
+	return fmt.Errorf("claude: failed to run: %w", waitErr)
 }
 
 // CodexAdapter is a STUB for OpenAI Codex CLI support.

@@ -46,11 +46,21 @@ func DefaultArgs() []string {
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
+		// A resident expert runs headless and cannot answer interactive
+		// permission prompts, so without this it is blocked from using tools
+		// (e.g. reading the repo to answer a question). The flag grants
+		// non-interactive tool use so the expert can actually do its job.
+		"--dangerously-skip-permissions",
 	}
 }
 
 const (
-	defaultStartTimeout = 30 * time.Second
+	// defaultStartTimeout is the liveness grace on spawn: how long Start watches
+	// for an immediate crash (bad binary/auth) before treating an alive child as
+	// ready. It is NOT a session-id deadline — this claude build emits its init
+	// (and session id) only after the first input, so session id is captured
+	// lazily on the first turn, not waited for at startup (#93).
+	defaultStartTimeout = 3 * time.Second
 	defaultCloseTimeout = 5 * time.Second
 )
 

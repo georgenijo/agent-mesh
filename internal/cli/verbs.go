@@ -107,13 +107,11 @@ func runLeave(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return ExitError
+		return emitSetupErr(stdout, stderr, *jsonOut, ExitError, err)
 	}
 	socketPath, code, err := resolveSocket(cfg, *sock)
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, *jsonOut, code, err)
 	}
 	resp, code, err := doVerb(socketPath, meshapi.VerbLeave, meshapi.LeaveArgs{Reason: *reason})
 	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
@@ -136,13 +134,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return ExitError
+		return emitSetupErr(stdout, stderr, *jsonOut, ExitError, err)
 	}
 	socketPath, code, err := resolveSocket(cfg, *sock)
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, *jsonOut, code, err)
 	}
 	resp, code, err := doVerb(socketPath, meshapi.VerbStatus, meshapi.StatusArgs{Text: positional[0]})
 	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {
@@ -160,13 +156,11 @@ func runWho(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return ExitError
+		return emitSetupErr(stdout, stderr, *jsonOut, ExitError, err)
 	}
 	socketPath, code, err := resolveSocket(cfg, *sock)
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, *jsonOut, code, err)
 	}
 	resp, code, err := doVerb(socketPath, meshapi.VerbWho, nil)
 	return emit(stdout, stderr, *jsonOut, resp, code, err, func(w io.Writer) {

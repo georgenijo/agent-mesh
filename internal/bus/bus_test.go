@@ -402,6 +402,41 @@ func TestStreamReadDoesNotAllocateSlot(t *testing.T) {
 	}
 }
 
+// TestKVReadMissingBucketDoesNotCreate is the KV analogue of
+// TestStreamReadDoesNotAllocateSlot: a KVGet or KVList against a bucket that
+// was never written must not create the bucket, so read-only callers cannot
+// exhaust the bounded bucket budget.
+func TestKVReadMissingBucketDoesNotCreate(t *testing.T) {
+	s, path := newTestServer(t, Options{})
+	c := dialTest(t, path, ClientOptions{})
+
+	// Get on a non-existent bucket: must succeed with not-found, not an error.
+	_, found, err := c.KVGet("ghost", "any-key")
+	if err != nil {
+		t.Fatalf("KVGet on missing bucket errored: %v", err)
+	}
+	if found {
+		t.Fatal("KVGet on missing bucket returned found=true")
+	}
+
+	// List on a non-existent bucket: must succeed with an empty map, not an error.
+	keys, err := c.KVList("ghost")
+	if err != nil {
+		t.Fatalf("KVList on missing bucket errored: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("KVList on missing bucket returned %d keys, want 0", len(keys))
+	}
+
+	// The bucket must not have been created: the slot budget is untouched.
+	s.mu.Lock()
+	bucketCount := len(s.kv)
+	s.mu.Unlock()
+	if bucketCount != 0 {
+		t.Fatalf("reads created %d bucket(s), want 0", bucketCount)
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

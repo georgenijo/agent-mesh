@@ -440,9 +440,17 @@ func (s *Server) handleKV(f frame) frame {
 
 	b := s.kv[f.Bucket]
 	if b == nil {
-		// Buckets are created on first use, but the count of distinct names
-		// is capped — lazily creating one per arbitrary peer-supplied name
-		// would be an unbounded-memory vector.
+		// Read ops against a missing bucket return empty/not-found without
+		// allocating — only write ops create a bucket on first use.
+		switch f.Op {
+		case opKVGet:
+			return frame{ID: f.ID, OK: true, Found: false}
+		case opKVList:
+			return frame{ID: f.ID, OK: true, Keys: map[string]KVValue{}}
+		}
+		// Write ops create the bucket on first use, but the count of distinct
+		// names is capped — lazily creating one per arbitrary peer-supplied
+		// name would be an unbounded-memory vector.
 		if len(s.kv) >= maxStoreNames {
 			return frame{ID: f.ID, Err: &frameError{Code: errCodeBadRequest, Message: "too many buckets"}}
 		}

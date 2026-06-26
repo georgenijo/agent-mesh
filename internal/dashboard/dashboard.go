@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -236,8 +237,11 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/claims", d.serveClaims)
 	mux.HandleFunc("GET /api/notes", d.serveNotes)
 	mux.HandleFunc("GET /api/jobs", d.serveListJobs)
+	mux.HandleFunc("GET /api/tasklog", d.serveTaskLog)
+	mux.HandleFunc("GET /api/worklog", d.serveWorkLog)
 	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
+	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
@@ -258,7 +262,7 @@ func (d *Dashboard) Start() error {
 		os.Remove(d.cfg.DashboardTokenFile()) //nolint:errcheck
 		return fmt.Errorf("dashboard: %w", err)
 	}
-	d.httpSrv = &http.Server{Handler: hostCheckMiddleware(mux)}
+	d.httpSrv = &http.Server{Handler: hostCheckMiddleware(mux, d.cfg.DashboardAllowedHosts...)}
 
 	d.wg.Add(2)
 	go func() {
@@ -710,6 +714,101 @@ func (d *Dashboard) serveClassicIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Write(indexHTML) //nolint:errcheck
 }
 
+// serveTaskLog returns coordinator-log lines mentioning a task / agent / job id —
+// the per-entity lifecycle the drill-in panel surfaces (spawn, branch, finalize,
+// errors). Read-only, same posture as /api/roster. The coordinator log is the
+// authoritative record of what actually happened, so this populates the panel
+// with truth even when the worker emitted no bus envelopes.
+func (d *Dashboard) serveTaskLog(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	w.Header().Set("Content-Type", "application/json")
+	lines := []string{}
+	if id != "" {
+		if b, err := os.ReadFile(d.cfg.MeshDir + "/logs/coordinator.log"); err == nil { //nolint:gosec
+			for _, ln := range strings.Split(string(b), "\n") {
+				if ln != "" && strings.Contains(ln, id) {
+					lines = append(lines, ln)
+				}
+			}
+		}
+	}
+	if len(lines) > 50 {
+		lines = lines[len(lines)-50:]
+	}
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "lines": lines}) //nolint:errcheck
+}
+
+// serveWorkLog tails a worker's per-task live log (the streamed claude NDJSON)
+// and returns it as short human lines — what the worker is actually doing.
+// Empty for older buffered runs (no stream log was written).
+func (d *Dashboard) serveWorkLog(w http.ResponseWriter, r *http.Request) {
+	task := strings.TrimSpace(r.URL.Query().Get("task"))
+	w.Header().Set("Content-Type", "application/json")
+	out := []string{}
+	if task != "" && !strings.ContainsAny(task, "/\\") {
+		if b, err := os.ReadFile(d.cfg.MeshDir + "/logs/worker-" + task + ".log"); err == nil { //nolint:gosec
+			for _, ln := range strings.Split(string(b), "\n") {
+				if s := summarizeClaudeEvent(strings.TrimSpace(ln)); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	if len(out) > 150 {
+		out = out[len(out)-150:]
+	}
+	json.NewEncoder(w).Encode(map[string]any{"task": task, "lines": out}) //nolint:errcheck
+}
+
+// summarizeClaudeEvent turns one stream-json NDJSON event into a short, human
+// line for the drill-in live view; returns "" for events not worth showing.
+func summarizeClaudeEvent(line string) string {
+	if line == "" {
+		return ""
+	}
+	var ev map[string]any
+	if json.Unmarshal([]byte(line), &ev) != nil {
+		return ""
+	}
+	switch ev["type"] {
+	case "system":
+		return "▸ session started"
+	case "assistant":
+		msg, _ := ev["message"].(map[string]any)
+		content, _ := msg["content"].([]any)
+		parts := []string{}
+		for _, c := range content {
+			cm, _ := c.(map[string]any)
+			switch cm["type"] {
+			case "text":
+				if t, _ := cm["text"].(string); strings.TrimSpace(t) != "" {
+					parts = append(parts, clip(strings.TrimSpace(t), 220))
+				}
+			case "tool_use":
+				name, _ := cm["name"].(string)
+				parts = append(parts, "🔧 "+name)
+			}
+		}
+		return strings.Join(parts, "  ")
+	case "user":
+		return "  ↳ tool result"
+	case "result":
+		if e, _ := ev["is_error"].(bool); e {
+			return "✗ error"
+		}
+		cost, _ := ev["total_cost_usd"].(float64)
+		return fmt.Sprintf("✓ done ($%.4f)", cost)
+	}
+	return ""
+}
+
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
+
 func (d *Dashboard) serveRoster(w http.ResponseWriter, _ *http.Request) {
 	d.mu.Lock()
 	roster := d.roster
@@ -890,6 +989,46 @@ func (d *Dashboard) serveListJobs(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs}) //nolint:errcheck
 }
 
+// defaultClaudeSessionsURL is the claude-sessions-viewer API proxied by
+// GET /api/claude-sessions. Override with MESH_CLAUDE_SESSIONS_URL.
+const defaultClaudeSessionsURL = "http://127.0.0.1:8765/api/sessions"
+
+var claudeSessionsClient = &http.Client{Timeout: 3 * time.Second}
+
+// serveClaudeSessions proxies the local claude-sessions-viewer API so the
+// dashboard UI can correlate mesh cc-* agents with live Claude Code session
+// telemetry (transcripts, sub-agents, RSS) on one origin.
+func (d *Dashboard) serveClaudeSessions(w http.ResponseWriter, _ *http.Request) {
+	url := os.Getenv("MESH_CLAUDE_SESSIONS_URL")
+	if url == "" {
+		url = defaultClaudeSessionsURL
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		writeJSONError(w, `{"error":"internal","message":"claude sessions proxy misconfigured"}`, http.StatusInternalServerError)
+		return
+	}
+	resp, err := claudeSessionsClient.Do(req)
+	if err != nil {
+		writeJSONError(w, `{"error":"unavailable","message":"claude-sessions-viewer not reachable — start claude-sessions-viewer/server.py on :8765"}`, http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeJSONError(w, `{"error":"unavailable","message":"claude sessions proxy read failed"}`, http.StatusBadGateway)
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		writeJSONError(w, fmt.Sprintf(`{"error":"unavailable","message":"claude-sessions-viewer returned %d"}`, resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body) //nolint:errcheck
+}
+
 // serveWriteToken returns the local write-API bearer token as JSON.
 // This endpoint is intentionally served over the same loopback-bound listener
 // as the rest of the dashboard — the same trust boundary that already gives
@@ -939,7 +1078,21 @@ func isLoopbackHost(host string) bool {
 // is also rejected — an absent Host is allowed by HTTP/1.0 but not by
 // HTTP/1.1, and the dashboard is only ever accessed on loopback where a
 // well-behaved client always supplies it.
-func hostCheckMiddleware(next http.Handler) http.Handler {
+//
+// allowed extends the loopback allow-list with extra Host values (e.g. a
+// tailnet MagicDNS name or IP) so the dashboard can be reached over a trusted
+// network. With no entries the behavior is unchanged: loopback-only.
+func hostCheckMiddleware(next http.Handler, allowed ...string) http.Handler {
+	allow := make(map[string]bool, len(allowed))
+	for _, h := range allowed {
+		if h = strings.TrimSpace(h); h == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			h = host
+		}
+		allow[strings.ToLower(h)] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if host == "" {
@@ -951,7 +1104,7 @@ func hostCheckMiddleware(next http.Handler) http.Handler {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if !isLoopbackHost(host) {
+		if !isLoopbackHost(host) && !allow[strings.ToLower(host)] {
 			writeJSONError(w, `{"error":"forbidden","message":"Host not allowed"}`, http.StatusForbidden)
 			return
 		}

@@ -36,15 +36,15 @@ func setupVerb(name string, args []string, stderr io.Writer, extra func(fs *flag
 	}
 	positional, err := parseFlagsAnywhere(fs, args)
 	if err != nil {
-		return verbSetup{}, ExitUsage, err
+		return verbSetup{jsonOut: *jsonOut}, ExitUsage, err
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return verbSetup{}, ExitError, err
+		return verbSetup{jsonOut: *jsonOut}, ExitError, err
 	}
 	socketPath, code, err := resolveSocket(cfg, *sock)
 	if err != nil {
-		return verbSetup{}, code, err
+		return verbSetup{jsonOut: *jsonOut}, code, err
 	}
 	return verbSetup{socketPath: socketPath, jsonOut: *jsonOut, positional: positional}, ExitOK, nil
 }
@@ -55,8 +55,7 @@ func runClaim(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&repo, "repo", "", "repo id (default: agent card repo)")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 1 || vs.positional[0] == "" {
 		fmt.Fprintln(stderr, `usage: mesh claim <path> [--repo R]`)
@@ -97,8 +96,7 @@ func runRelease(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&repo, "repo", "", "repo id (default: agent card repo)")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 1 || vs.positional[0] == "" {
 		fmt.Fprintln(stderr, `usage: mesh release <path> [--repo R]`)
@@ -138,8 +136,7 @@ func runAnnounce(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&paths, "paths", "", "comma-separated paths this intent touches")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 1 || vs.positional[0] == "" {
 		fmt.Fprintln(stderr, `usage: mesh announce "<intent>" [--paths a,b] [--repo R]`)
@@ -166,8 +163,7 @@ func runNote(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&ticket, "ticket", "", "related ticket id")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 1 || vs.positional[0] == "" {
 		fmt.Fprintln(stderr, `usage: mesh note "<text>" [--repo R] [--kind K] [--ticket T]`)
@@ -192,8 +188,7 @@ func runContext(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&repo, "repo", "", "repo id (default: agent card repo)")
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "mesh:", err)
-		return code
+		return emitSetupErr(stdout, stderr, vs.jsonOut, code, err)
 	}
 	if len(vs.positional) != 0 {
 		fmt.Fprintln(stderr, `usage: mesh context [--repo R]`)

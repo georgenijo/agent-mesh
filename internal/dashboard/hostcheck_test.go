@@ -67,6 +67,54 @@ func TestHostCheckMiddlewareRejectsEvilHost(t *testing.T) {
 	}
 }
 
+// TestHostCheckMiddlewareAllowsConfiguredHosts pins the MESH_DASHBOARD_ALLOWED_HOSTS
+// escape hatch: a configured remote Host (e.g. a tailnet name or IP) passes,
+// case- and port-insensitively, while an unconfigured host still 403s and
+// loopback keeps working — so the allow-list extends, never replaces, the
+// secure default.
+func TestHostCheckMiddlewareAllowsConfiguredHosts(t *testing.T) {
+	allowed := []string{"George-Ubuntu.tail1fdfb0.ts.net", "100.117.125.1"}
+
+	pass := []string{
+		"george-ubuntu.tail1fdfb0.ts.net",      // exact (lower-cased)
+		"george-ubuntu.tail1fdfb0.ts.net:8800", // with port
+		"GEORGE-UBUNTU.TAIL1FDFB0.TS.NET",      // upper-cased Host header
+		"100.117.125.1:8800",                   // configured IP with port
+		"127.0.0.1",                            // loopback still allowed
+	}
+	reject := []string{"evil.example", "george-ubuntu.other.ts.net", "100.117.125.2"}
+
+	newHandler := func() (http.Handler, *bool) {
+		called := false
+		sentinel := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})
+		return hostCheckMiddleware(sentinel, allowed...), &called
+	}
+
+	for _, host := range pass {
+		handler, called := newHandler()
+		req := httptest.NewRequest("GET", "/api/write-token", nil)
+		req.Host = host
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK || !*called {
+			t.Errorf("allowed host %q: status %d called=%v, want 200/true", host, rr.Code, *called)
+		}
+	}
+	for _, host := range reject {
+		handler, called := newHandler()
+		req := httptest.NewRequest("GET", "/api/write-token", nil)
+		req.Host = host
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden || *called {
+			t.Errorf("rejected host %q: status %d called=%v, want 403/false", host, rr.Code, *called)
+		}
+	}
+}
+
 // TestHostCheckMiddlewareAllowsLoopbackHosts pins that all canonical loopback
 // forms pass the middleware and reach the inner handler.
 func TestHostCheckMiddlewareAllowsLoopbackHosts(t *testing.T) {

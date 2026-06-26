@@ -224,6 +224,7 @@ body {
 
 .panel-topology { height: 280px; flex-shrink: 0; }
 .panel-agents   { flex: 1; }
+.panel-claude   { flex: 1; min-height: 160px; }
 .panel-events   { flex: 1; }
 .panel-claims   { flex: 1; }
 .panel-notes    { flex: 1; }
@@ -620,6 +621,45 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-insight {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--primary-mid);
+  margin-top: 4px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.subagent-block {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(49, 57, 77, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagent-row {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--r);
+  padding: 4px 6px;
+}
+
+.subagent-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface);
+}
+
+.subagent-meta {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--outline);
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* ══════════════════════════════════════════

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -214,6 +216,85 @@ func TestExitForCode(t *testing.T) {
 			t.Errorf("exitForCode(%q) = %d, want %d", row.code, got, row.wantExit)
 		}
 	}
+}
+
+// TestSetupErrJSON verifies that setup-time errors (config load failure,
+// not-joined, ambiguous socket) write a JSON error object to stdout — not
+// stderr — when --json is set, and exit with the correct code.
+// emitSetupErr is the code path under test; emit() handles post-socket errors.
+func TestSetupErrJSON(t *testing.T) {
+	// assertSetupErrJSON is a shared helper that validates the JSON shape and
+	// confirms it did not leak to stderr.
+	assertSetupErrJSON := func(t *testing.T, stdout, stderr string) {
+		t.Helper()
+		outTrimmed := strings.TrimSpace(stdout)
+		if outTrimmed == "" {
+			t.Fatal("stdout empty: JSON error object must go to stdout with --json")
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(outTrimmed), &obj); err != nil {
+			t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, stdout)
+		}
+		if ok, exists := obj["ok"]; !exists || ok != false {
+			t.Errorf("JSON missing or wrong 'ok': %v", obj)
+		}
+		if _, exists := obj["message"]; !exists {
+			t.Errorf("JSON missing 'message': %v", obj)
+		}
+		// The JSON object must not appear on stderr.
+		if strings.Contains(stderr, `"ok"`) {
+			t.Errorf("JSON error object leaked to stderr: %q", stderr)
+		}
+	}
+
+	t.Run("config_load_failure", func(t *testing.T) {
+		// An invalid duration makes config.Load return an error before any
+		// socket lookup; runWho calls emitSetupErr with the parsed --json flag.
+		t.Setenv(config.EnvHeartbeatInterval, "not-a-duration")
+		code, stdout, stderr := run(t, "who", "--json")
+		if code != ExitError {
+			t.Fatalf("exit = %d, want %d (ExitError)\nstdout: %s\nstderr: %s",
+				code, ExitError, stdout, stderr)
+		}
+		assertSetupErrJSON(t, stdout, stderr)
+	})
+
+	t.Run("not_joined", func(t *testing.T) {
+		// run() uses an empty MESH_DIR so resolveSocket finds no sockets and
+		// returns ExitNotJoined; emitSetupErr must route the error to stdout.
+		code, stdout, stderr := run(t, "who", "--json")
+		if code != ExitNotJoined {
+			t.Fatalf("exit = %d, want %d (ExitNotJoined)\nstdout: %s\nstderr: %s",
+				code, ExitNotJoined, stdout, stderr)
+		}
+		assertSetupErrJSON(t, stdout, stderr)
+	})
+
+	t.Run("ambiguous_socket", func(t *testing.T) {
+		// Create two stub .sock files in agents/ so resolveSocket returns
+		// ExitUsage (ambiguous — need --socket or $MESH_SOCKET to pick one).
+		dir := testsock.Dir(t)
+		agentsDir := filepath.Join(dir, "agents")
+		if err := os.MkdirAll(agentsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"alpha.sock", "beta.sock"} {
+			f, err := os.Create(filepath.Join(agentsDir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+		}
+		t.Setenv(config.EnvMeshDir, dir)
+		t.Setenv(config.EnvAgentSocket, "")
+		var stdout, stderr bytes.Buffer
+		code := Run([]string{"who", "--json"}, &stdout, &stderr)
+		if code != ExitUsage {
+			t.Fatalf("exit = %d, want %d (ExitUsage)\nstdout: %s\nstderr: %s",
+				code, ExitUsage, stdout.String(), stderr.String())
+		}
+		assertSetupErrJSON(t, stdout.String(), stderr.String())
+	})
 }
 
 // TestErrorJSONShape pins the {"ok":false,"code":"...","message":"..."} shape

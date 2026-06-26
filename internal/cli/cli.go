@@ -229,6 +229,19 @@ func emit(stdout, stderr io.Writer, jsonOut bool, resp socket.Response, code int
 	return code
 }
 
+// emitSetupErr writes a setup-time error (config.Load or resolveSocket failure)
+// in the same JSON shape as emit, falling back to a human-readable stderr line.
+func emitSetupErr(stdout, stderr io.Writer, jsonOut bool, code int, err error) int {
+	if jsonOut {
+		obj := map[string]any{"ok": false, "code": "", "message": err.Error()}
+		b, _ := json.Marshal(obj) //nolint:errcheck
+		fmt.Fprintln(stdout, string(b))
+		return code
+	}
+	fmt.Fprintln(stderr, "mesh:", err)
+	return code
+}
+
 // parseFlagsAnywhere parses fs while allowing positional arguments to appear
 // before, between, or after flags (Go's flag package stops at the first
 // positional). Returns the positional arguments in order.

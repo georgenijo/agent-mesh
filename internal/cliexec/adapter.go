@@ -197,7 +197,12 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 		wd = 3 * time.Second
 	}
 
-	args := []string{"-p", "--output-format", "json"}
+	// --dangerously-skip-permissions: a headless worker cannot answer an
+	// interactive permission prompt, so without this claude is blocked from
+	// using Edit/Write/Bash and makes zero file changes while still returning
+	// is_error:false success — a silent no-op. The worker runs in an isolated
+	// per-task git worktree, so granting tool access is bounded to that tree.
+	args := []string{"-p", "--output-format", "json", "--dangerously-skip-permissions"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}

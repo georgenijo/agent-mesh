@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -278,7 +279,7 @@ func Load() (Config, error) {
 	}
 	if raw := os.Getenv(EnvBudgetUSD); raw != "" {
 		budget, err := strconv.ParseFloat(raw, 64)
-		if err != nil || budget < 0 {
+		if err != nil || budget < 0 || math.IsNaN(budget) || math.IsInf(budget, 0) {
 			return Config{}, fmt.Errorf("config: %s=%q: want a non-negative USD amount", EnvBudgetUSD, raw)
 		}
 		cfg.BudgetUSD = budget

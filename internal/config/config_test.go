@@ -231,6 +231,19 @@ func TestLoadWorkerWorktreeDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsBadBudget(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	for _, raw := range []string{"nan", "inf", "+inf"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv(EnvBudgetUSD, raw)
+			if _, err := Load(); err == nil {
+				t.Fatalf("MESH_BUDGET_USD=%q: want error, got nil", raw)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsBadKeepWorktrees(t *testing.T) {
 	t.Setenv(EnvMeshDir, t.TempDir())
 	t.Setenv(EnvKeepWorktrees, "sometimes")

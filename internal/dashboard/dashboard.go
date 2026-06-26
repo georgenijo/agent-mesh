@@ -622,19 +622,10 @@ func (d *Dashboard) tickClaims() {
 // discovered from agent cards and live claims (the bus has no list-streams
 // op, deliberately: streams are named by the shared subject taxonomy).
 func (d *Dashboard) tickNotes(roster []agentcard.RegistryRecord) {
-	repos := map[string]bool{envelope.DefaultRepo: true}
-	for _, rec := range roster {
-		if envelope.ValidRepo(rec.Card.Repo) {
-			repos[rec.Card.Repo] = true
-		}
-	}
 	d.mu.Lock()
-	for _, h := range d.claims {
-		if envelope.ValidRepo(h.Record.Repo) {
-			repos[h.Record.Repo] = true
-		}
-	}
+	claims := d.claims
 	d.mu.Unlock()
+	repos := visibleRepos(roster, claims)
 
 	for repo := range repos {
 		stream := envelope.StreamNotes(repo)
@@ -660,6 +651,26 @@ func (d *Dashboard) tickNotes(roster []agentcard.RegistryRecord) {
 			d.mu.Unlock()
 		}
 	}
+}
+
+// visibleRepos returns the repos the observer can see: the default repo,
+// every valid repo on an agent card, and every valid repo holding a live
+// claim. The bus deliberately has no list-streams op — streams are named by
+// the shared subject taxonomy — so repos are discovered from the roster and
+// claims, the same way for the SSE tick and the REST endpoints.
+func visibleRepos(roster []agentcard.RegistryRecord, claims []claim.Held) map[string]bool {
+	repos := map[string]bool{envelope.DefaultRepo: true}
+	for _, rec := range roster {
+		if envelope.ValidRepo(rec.Card.Repo) {
+			repos[rec.Card.Repo] = true
+		}
+	}
+	for _, h := range claims {
+		if envelope.ValidRepo(h.Record.Repo) {
+			repos[h.Record.Repo] = true
+		}
+	}
+	return repos
 }
 
 func (d *Dashboard) fetchRoster() ([]agentcard.RegistryRecord, error) {
@@ -841,21 +852,71 @@ func (d *Dashboard) serveClaims(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"claims": held}) //nolint:errcheck
 }
 
-// serveNotes replays a repo's blackboard stream (?repo=R, default repo when
-// omitted) as decoded note envelopes.
+// serveNotes replays blackboard streams as decoded note envelopes. With
+// ?repo=R it reads that one repo (response carries "repo", as it always has);
+// with no filter it aggregates every visible repo — discovered from agent
+// cards and live claims, exactly like tickNotes — so the panel reflects the
+// whole mesh, not just the default repo (issue #88). The aggregate response
+// carries "repos", the sorted list that was merged, and notes ordered by
+// envelope timestamp across streams.
 func (d *Dashboard) serveNotes(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	if repo == "" {
-		repo = envelope.DefaultRepo
-	}
-	if !envelope.ValidRepo(repo) {
-		writeJSONError(w, `{"error":"bad_request","message":"invalid repo id"}`, http.StatusBadRequest)
+	if repo := r.URL.Query().Get("repo"); repo != "" {
+		if !envelope.ValidRepo(repo) {
+			writeJSONError(w, `{"error":"bad_request","message":"invalid repo id"}`, http.StatusBadRequest)
+			return
+		}
+		notes, err := d.readNotes(repo)
+		if err != nil {
+			writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"repo": repo, "notes": notes}) //nolint:errcheck
 		return
 	}
-	entries, err := d.bus.StreamRead(envelope.StreamNotes(repo), 0)
+
+	// Aggregate path: fresh authoritative reads (registry + claims KV), same
+	// posture as serveClaims — never derived from tick state that may not
+	// have run yet.
+	roster, err := d.fetchRoster()
 	if err != nil {
 		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
 		return
+	}
+	claims, err := claim.ListAll(d.bus)
+	if err != nil {
+		d.mu.Lock()
+		claims = d.claims // last good snapshot; bus may be reconnecting
+		d.mu.Unlock()
+	}
+	repoSet := visibleRepos(roster, claims)
+	repos := make([]string, 0, len(repoSet))
+	for repo := range repoSet {
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+
+	notes := make([]envelope.Envelope, 0)
+	for _, repo := range repos {
+		ns, err := d.readNotes(repo)
+		if err != nil {
+			continue // one unreadable stream never blanks the whole panel
+		}
+		notes = append(notes, ns...)
+	}
+	sort.SliceStable(notes, func(i, j int) bool { return notes[i].TS.Before(notes[j].TS) })
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"repos": repos, "notes": notes}) //nolint:errcheck
+}
+
+// readNotes replays one repo's blackboard stream, dropping anything that is
+// not a well-formed note envelope — a malformed record never breaks the
+// observer.
+func (d *Dashboard) readNotes(repo string) ([]envelope.Envelope, error) {
+	entries, err := d.bus.StreamRead(envelope.StreamNotes(repo), 0)
+	if err != nil {
+		return nil, err
 	}
 	notes := make([]envelope.Envelope, 0, len(entries))
 	for _, e := range entries {
@@ -865,8 +926,7 @@ func (d *Dashboard) serveNotes(w http.ResponseWriter, r *http.Request) {
 		}
 		notes = append(notes, env)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"repo": repo, "notes": notes}) //nolint:errcheck
+	return notes, nil
 }
 
 // --- Write API (P4, issue #47) ---------------------------------------------------

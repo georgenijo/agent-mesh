@@ -67,12 +67,13 @@ const (
 
 // jobSnap is one job row as carried in the "jobs" SSE frame.
 type jobSnap struct {
-	ID     string            `json:"id"`
-	Repo   string            `json:"repo"`
-	Source string            `json:"source"`
-	Title  string            `json:"title"`
-	State  envelope.JobState `json:"state"`
-	TS     time.Time         `json:"ts"`
+	ID        string            `json:"id"`
+	Repo      string            `json:"repo"`
+	Source    string            `json:"source"`
+	SourceRef string            `json:"sourceRef,omitempty"`
+	Title     string            `json:"title"`
+	State     envelope.JobState `json:"state"`
+	TS        time.Time         `json:"ts"`
 }
 
 // taskSnap is one task row as carried in the "tasks" SSE frame.
@@ -336,12 +337,13 @@ func (d *Dashboard) recordJob(env envelope.Envelope) {
 		return
 	}
 	snap := jobSnap{
-		ID:     p.ID,
-		Repo:   p.Repo,
-		Source: p.Source,
-		Title:  p.Title,
-		State:  p.State,
-		TS:     env.TS,
+		ID:        p.ID,
+		Repo:      p.Repo,
+		Source:    p.Source,
+		SourceRef: p.SourceRef,
+		Title:     p.Title,
+		State:     p.State,
+		TS:        env.TS,
 	}
 	d.mu.Lock()
 	d.jobs[p.ID] = snap

@@ -151,6 +151,15 @@ function timeText(value) {
   return t.toLocaleTimeString();
 }
 
+// issueURL converts a sourceRef like "owner/repo#N" to a GitHub issue URL.
+// Returns null if the ref is absent or doesn't match the expected pattern.
+function issueURL(ref) {
+  if (!ref) return null;
+  const m = ref.match(/^([^/\s#]+\/[^/\s#]+)#(\d+)$/);
+  if (!m) return null;
+  return "https://github.com/" + m[1] + "/issues/" + m[2];
+}
+
 function ageText(value) {
   if (!value) return "-";
   const t = new Date(value).getTime();
@@ -910,10 +919,14 @@ function renderJobs() {
   }
   list.innerHTML = rows.map((j) => {
     const color = jobStateColor(j.state);
+    const url = issueURL(j.sourceRef);
+    const issueLink = url
+      ? ' · <a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer" style="color:#7dd3fc" onclick="event.stopPropagation()">' + esc(j.sourceRef) + '</a>'
+      : '';
     return '<div class="row" data-drill-job="' + esc(j.id) + '" style="border-left-color:' + color + '">' +
       '<div class="row-top"><div class="row-title" title="' + esc(j.title) + '">' + esc(j.title) + '</div>' +
       '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(j.state) + '</span></div>' +
-      '<div class="row-meta">' + esc(j.repo) + ' · ' + esc(j.source) + ' · ' + esc(ageText(j.ts)) + ' ago</div>' +
+      '<div class="row-meta">' + esc(j.repo) + ' · ' + esc(j.source) + issueLink + ' · ' + esc(ageText(j.ts)) + ' ago</div>' +
       '</div>';
   }).join("");
 }
@@ -1249,8 +1262,12 @@ connect();
       const j = state.jobs.get(id) || {};
       const ts = Array.from(state.tasks.values()).filter(function (t) { return t.job === id; });
       title = j.title || id;
+      const jUrl = issueURL(j.sourceRef);
+      const issueRow = j.sourceRef
+        ? "<tr><td>issue</td><td>" + (jUrl ? '<a href="' + esc(jUrl) + '" target="_blank" rel="noopener noreferrer" style="color:#7dd3fc">' + esc(j.sourceRef) + "</a>" : esc(j.sourceRef)) + "</td></tr>"
+        : "";
       rows = row("kind", "job") + row("state", j.state) + row("repo", j.repo) +
-        row("source", j.source) +
+        row("source", j.source) + issueRow +
         row("tasks", ts.map(function (t) { return t.role + ":" + t.state; }).join(", "));
     }
     const evs = eventsFor(id);

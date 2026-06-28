@@ -53,7 +53,7 @@ func (s *Sidecar) handleSubmit(req socket.Request) socket.Response {
 	}
 
 	env, err := envelope.New(envelope.KindJob, id, envelope.SubjectJob(rec.ID), &envelope.JobPayload{
-		ID: rec.ID, Repo: rec.Repo, Source: rec.Source, Title: rec.Title, State: rec.State,
+		ID: rec.ID, Repo: rec.Repo, Source: rec.Source, SourceRef: rec.SourceRef, Title: rec.Title, State: rec.State,
 	})
 	if err != nil {
 		return socket.Fail(socket.CodeInternal, err.Error())

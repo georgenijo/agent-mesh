@@ -173,11 +173,12 @@ func (p TicketPayload) validate() error {
 // authority for job state; this event lets the dashboard and e2e watch intake
 // without polling the KV. It carries just enough to render a job row.
 type JobPayload struct {
-	ID     string   `json:"id"`
-	Repo   string   `json:"repo"`
-	Source string   `json:"source"` // manual | github
-	Title  string   `json:"title"`
-	State  JobState `json:"state"`
+	ID        string   `json:"id"`
+	Repo      string   `json:"repo"`
+	Source    string   `json:"source"`              // manual | github
+	SourceRef string   `json:"sourceRef,omitempty"` // e.g. "owner/repo#123" for github
+	Title     string   `json:"title"`
+	State     JobState `json:"state"`
 }
 
 func (p JobPayload) validate() error {

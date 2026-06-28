@@ -140,3 +140,49 @@ func TestGetMissing(t *testing.T) {
 		t.Fatal("expected not found")
 	}
 }
+
+func TestCreatePersistsIssueSourceRef(t *testing.T) {
+	store, cleanup := jobStore(t)
+	defer cleanup()
+
+	rec, err := store.Create(Record{
+		Repo:      "octo/cat",
+		Source:    SourceGitHub,
+		SourceRef: "octo/cat#42",
+		Title:     "Fix the bug",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.SourceRef != "octo/cat#42" {
+		t.Fatalf("sourceRef = %q, want octo/cat#42", rec.SourceRef)
+	}
+
+	got, found, err := store.Get(rec.ID)
+	if err != nil || !found {
+		t.Fatalf("get found=%v err=%v", found, err)
+	}
+	if got.SourceRef != "octo/cat#42" {
+		t.Fatalf("persisted sourceRef = %q, want octo/cat#42", got.SourceRef)
+	}
+	if got.Source != SourceGitHub {
+		t.Fatalf("source = %q, want github", got.Source)
+	}
+}
+
+func TestCreateManualJobNoSourceRef(t *testing.T) {
+	store, cleanup := jobStore(t)
+	defer cleanup()
+
+	rec, err := store.Create(Record{
+		Repo:   "demo",
+		Source: SourceManual,
+		Title:  "some manual task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.SourceRef != "" {
+		t.Fatalf("manual job sourceRef = %q, want empty", rec.SourceRef)
+	}
+}

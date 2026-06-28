@@ -248,6 +248,51 @@ func TestLoadRejectsBadBudget(t *testing.T) {
 	}
 }
 
+func TestLoadExpertIdleTTLKnob(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	// Default: 5 minutes.
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExpertIdleTTL != DefaultExpertIdleTTL {
+		t.Fatalf("ExpertIdleTTL default = %s, want %s", cfg.ExpertIdleTTL, DefaultExpertIdleTTL)
+	}
+
+	// Explicit positive value.
+	t.Setenv(EnvExpertIdleTTL, "2m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExpertIdleTTL != 2*time.Minute {
+		t.Fatalf("ExpertIdleTTL = %s, want 2m", cfg.ExpertIdleTTL)
+	}
+
+	// Zero = disabled (must not error).
+	t.Setenv(EnvExpertIdleTTL, "0s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load with ExpertIdleTTL=0s: %v", err)
+	}
+	if cfg.ExpertIdleTTL != 0 {
+		t.Fatalf("ExpertIdleTTL = %s, want 0 (disabled)", cfg.ExpertIdleTTL)
+	}
+
+	// Negative value must error.
+	t.Setenv(EnvExpertIdleTTL, "-1m")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted negative ExpertIdleTTL")
+	}
+
+	// Unparseable value must error.
+	t.Setenv(EnvExpertIdleTTL, "not-a-duration")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted unparseable ExpertIdleTTL")
+	}
+}
+
 func TestLoadAbsolutizesMeshDir(t *testing.T) {
 	t.Setenv(EnvMeshDir, ".mesh")
 	cfg, err := Load()

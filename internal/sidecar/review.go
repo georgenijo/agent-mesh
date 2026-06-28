@@ -160,6 +160,8 @@ func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
 			HeadSHA:      p.HeadSHA,
 			Branch:       p.Branch,
 		}
+		// Any review request counts as activity for the idle reaper (#105).
+		s.touchExpertActivity()
 		if _, err := s.Review(ctx, fn, req); err != nil {
 			// Review already recorded the typed error verdict event; this is
 			// the unclassifiable-internal-fault surface, log only.

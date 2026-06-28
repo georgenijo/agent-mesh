@@ -281,7 +281,7 @@ func runExpert(cfg config.Config, log *slog.Logger, name, role, caps, repo, mode
 	}
 
 	go func() {
-		opts := sidecar.ExpertOptions{Repo: repo, Prime: prime, Resync: resync}
+		opts := sidecar.ExpertOptions{Repo: repo, Prime: prime, Resync: resync, IdleTTL: cfg.ExpertIdleTTL}
 		if err := sc.ServeExpertWithMemory(ctx, fn, cfg.HeartbeatInterval, opts); err != nil && !errors.Is(err, context.Canceled) {
 			log.Warn("expert loop ended", "err", err)
 		}

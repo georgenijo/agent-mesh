@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
@@ -51,6 +52,12 @@ type Sidecar struct {
 
 	childrenMu sync.Mutex
 	children   []meshapi.ChildProc
+
+	// expertLastActivity stores the UnixNano timestamp of the most recent ask
+	// or review handled by this expert. Initialized and checked by the idle
+	// reaper in ServeExpertWithMemory (#105); touched by drainInbox and the
+	// ServeReviews callback. Zero = not yet initialized (reaper uses start time).
+	expertLastActivity atomic.Int64
 
 	stop     chan struct{} // closes on Stop: ends background loops
 	done     chan struct{} // closes when a leave verb requests daemon exit

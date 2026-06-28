@@ -48,6 +48,7 @@ const (
 	EnvReviewRole            = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
+	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -110,6 +111,12 @@ const (
 	// one resident-expert LLM turn (5–60s observed), so this is generous;
 	// past it the gate treats the review as lost — never as an approval.
 	DefaultReviewTimeout = 5 * time.Minute
+
+	// DefaultExpertIdleTTL is how long an auto-spawned expert may sit idle
+	// (no ask or review handled) before it self-terminates (#105). Five
+	// minutes matches a typical LLM turn round-trip; set MESH_EXPERT_IDLE_TTL=0
+	// to disable the reaper.
+	DefaultExpertIdleTTL = 5 * time.Minute
 
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
@@ -202,6 +209,12 @@ type Config struct {
 	// existing reducer/sweep paths depend on, are always emitted) — for local
 	// tuning and test determinism (issue #29: "knobs for ... test determinism").
 	AuditFanout bool
+
+	// ExpertIdleTTL is the idle reaper window for auto-spawned expert agents
+	// (#105): an expert that handles no ask or review for this long exits
+	// cleanly and deregisters, so the coordinator forgets it and re-spawns on
+	// demand. 0 disables the reaper (the expert runs until signalled).
+	ExpertIdleTTL time.Duration
 }
 
 // Load resolves config from the environment with defaults.
@@ -224,6 +237,7 @@ func Load() (Config, error) {
 		ReviewTimeout:     DefaultReviewTimeout,
 		KeepWorktrees:     KeepWorktreesOnFailure,
 		AuditFanout:       true,
+		ExpertIdleTTL:     DefaultExpertIdleTTL,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -333,6 +347,18 @@ func Load() (Config, error) {
 		default:
 			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAutoExperts, raw)
 		}
+	}
+	// ExpertIdleTTL: 0 is a valid value (disables the reaper), so this knob
+	// uses its own parse path instead of the positive-only duration list above.
+	if raw := os.Getenv(EnvExpertIdleTTL); raw != "" {
+		dur, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %s=%q: %w", EnvExpertIdleTTL, raw, err)
+		}
+		if dur < 0 {
+			return Config{}, fmt.Errorf("config: %s must be non-negative, got %q", EnvExpertIdleTTL, raw)
+		}
+		cfg.ExpertIdleTTL = dur // 0 = disabled (reaper never fires)
 	}
 	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off
 	cfg.ReposDir = os.Getenv(EnvReposDir)     // empty = worker driver refuses to construct

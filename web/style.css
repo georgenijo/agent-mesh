@@ -632,6 +632,36 @@ body {
   white-space: normal;
 }
 
+/* Task group headers (renderTasks grouped-by-job view) */
+.task-group { display: flex; flex-direction: column; }
+.task-group + .task-group { margin-top: 2px; }
+.task-group-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 10px 3px;
+  background: rgba(255,255,255,0.03);
+  border-left: 2px solid transparent;
+}
+.task-group-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--on-surface-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.task-group-count {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--outline);
+  flex-shrink: 0;
+}
+.task-row { padding-left: 18px; }
+
 .subagent-block {
   margin-top: 6px;
   padding-top: 4px;

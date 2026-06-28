@@ -78,12 +78,13 @@ type jobSnap struct {
 
 // taskSnap is one task row as carried in the "tasks" SSE frame.
 type taskSnap struct {
-	ID    string             `json:"id"`
-	Job   string             `json:"job"`
-	Role  string             `json:"role"`
-	Title string             `json:"title"`
-	State envelope.TaskState `json:"state"`
-	TS    time.Time          `json:"ts"`
+	ID     string             `json:"id"`
+	Job    string             `json:"job"`
+	Role   string             `json:"role"`
+	Title  string             `json:"title"`
+	State  envelope.TaskState `json:"state"`
+	Worker string             `json:"worker"` // short worker name: w-<last12 of id>
+	TS     time.Time          `json:"ts"`
 }
 
 // workerSnap is one worker-run entry as carried in the "workers" SSE frame.
@@ -365,6 +366,24 @@ func (d *Dashboard) recordJob(env envelope.Envelope) {
 	d.broadcastJobs(snapshot)
 }
 
+// taskWorkerName derives the short worker mesh name from a task ID.
+// Mirrors internal/worker.workerName — must stay in sync with that function.
+func taskWorkerName(taskID string) string {
+	compact := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, taskID)
+	if len(compact) > 12 {
+		compact = compact[len(compact)-12:]
+	}
+	if compact == "" {
+		compact = "task"
+	}
+	return "w-" + compact
+}
+
 // recordTask upserts a task snapshot from a KindTask envelope.
 func (d *Dashboard) recordTask(env envelope.Envelope) {
 	var p envelope.TaskPayload
@@ -372,12 +391,13 @@ func (d *Dashboard) recordTask(env envelope.Envelope) {
 		return
 	}
 	snap := taskSnap{
-		ID:    p.ID,
-		Job:   p.Job,
-		Role:  p.Role,
-		Title: p.Title,
-		State: p.State,
-		TS:    env.TS,
+		ID:     p.ID,
+		Job:    p.Job,
+		Role:   p.Role,
+		Title:  p.Title,
+		State:  p.State,
+		Worker: taskWorkerName(p.ID),
+		TS:     env.TS,
 	}
 	d.mu.Lock()
 	d.tasks[p.ID] = snap

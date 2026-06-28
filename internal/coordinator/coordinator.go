@@ -98,6 +98,10 @@ type Coordinator struct {
 	// launches a resident expert when one targets an un-owned role.
 	experts *expertSpawner
 
+	// jobsIngress is the #119 HTTP POST /jobs dispatch endpoint — nil unless
+	// cfg.JobsAddr is set (off by default; opt-in only).
+	jobsIngress *jobsIngress
+
 	// mu serializes every registry read-modify-write: events arrive on
 	// independent subscription goroutines, and the KV store has no
 	// transactions across get+put.
@@ -263,6 +267,18 @@ func (c *Coordinator) Start() error {
 		}
 	}
 
+	// Jobs ingress (#119): opt-in via MESH_JOBS_ADDR — disabled when empty.
+	if c.cfg.JobsAddr != "" {
+		ji, err := newJobsIngress(c.cfg.JobsAddr, c.cli)
+		if err != nil {
+			c.Stop()
+			return fmt.Errorf("coordinator: jobs ingress: %w", err)
+		}
+		c.jobsIngress = ji
+		ji.start()
+		c.log.Info("jobs ingress started", "addr", ji.addr())
+	}
+
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
 		c.Stop()
 		return fmt.Errorf("coordinator: write pid file: %w", err)
@@ -291,6 +307,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.experts != nil {
 		c.experts.stop()
+	}
+	if c.jobsIngress != nil {
+		c.jobsIngress.close()
 	}
 	if c.cli != nil {
 		c.cli.Close()

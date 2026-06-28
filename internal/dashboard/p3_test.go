@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 )
 
@@ -458,6 +459,101 @@ func TestSSEP3SnapshotReplayOnConnect(t *testing.T) {
 		},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAgentCostsAccumulateOnWorkerRun locks the per-agent cost contract:
+// a KindWorker envelope with CostUSD must produce an "agentcosts" SSE frame
+// and be reflected in GET /api/agent-costs. The worker's model is snapshotted
+// from its registry card when it is present in the live roster.
+func TestAgentCostsAccumulateOnWorkerRun(t *testing.T) {
+	// Use a fast roster tick so the worker's card is visible before recordWorker runs.
+	_, cli, d := startStackEvery(t, 25*time.Millisecond)
+	base := "http://" + d.Addr()
+
+	// Register a worker agent with a known model so the dashboard can snapshot it.
+	const taskID = "task-agentcost-01"
+	workerName := taskWorkerName(taskID)
+	const model = "sonnet"
+	card := agentcard.Card{ID: workerName, Name: workerName, Role: "worker", Model: model}
+	regEnv, err := envelope.New(envelope.KindRegister, workerName, envelope.SubjectRegister,
+		&envelope.RegisterPayload{Card: card})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Publish(regEnv); err != nil {
+		t.Fatal(err)
+	}
+
+	// Give the dashboard's rosterLoop (25ms tick) time to ingest the registration.
+	time.Sleep(100 * time.Millisecond)
+
+	sseResp, err := http.Get(base + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sseResp.Body.Close()
+
+	const cost = 0.0123
+	workerEnv, err := envelope.New(envelope.KindWorker, workerName, envelope.SubjectWorker(taskID),
+		&envelope.WorkerPayload{
+			Task:    taskID,
+			Job:     "job-agentcost-01",
+			Result:  envelope.WorkerOK,
+			CostUSD: cost,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Publish(workerEnv); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := collectP3Frames(t, sseResp, 3*time.Second, map[string]func(map[string]json.RawMessage) bool{
+		"agentcosts frame carries worker cost and model": func(raw map[string]json.RawMessage) bool {
+			if frameType(raw) != "agentcosts" {
+				return false
+			}
+			var agents []agentCostEntry
+			if err := json.Unmarshal(raw["agents"], &agents); err != nil {
+				return false
+			}
+			for _, a := range agents {
+				if a.Name == workerName && a.CostUSD == cost && a.Model == model {
+					return true
+				}
+			}
+			return false
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// REST endpoint must also reflect the accumulated cost.
+	resp, err := http.Get(base + "/api/agent-costs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/agent-costs: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Agents []agentCostEntry `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, a := range body.Agents {
+		if a.Name == workerName && a.CostUSD == cost {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("GET /api/agent-costs: worker %q with cost %v not found; got %+v",
+			workerName, cost, body.Agents)
 	}
 }
 

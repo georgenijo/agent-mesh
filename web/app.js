@@ -88,6 +88,12 @@ const state = {
   fleet: null,          // null until first KindFleet observed; {state, code, spentUSD, budgetUSD, ts}
   jobsSnapshotted: false,   // first authoritative jobs frame has arrived
   tasksSnapshotted: false,  // first authoritative tasks frame has arrived
+  // Persistent cost ledger: from GET /api/cost + SSE "cost" frame.
+  // {spentUSD, budgetUSD?, byModel?}. Null until first cost frame arrives.
+  cost: null,
+  // Per-agent cumulative cost: from SSE "agentcosts" frame + GET /api/agent-costs.
+  // Map from worker short name → {model, costUSD}. Replaced wholesale each frame.
+  agentCosts: new Map(),
   // Claude Code session telemetry (proxied GET /api/claude-sessions).
   claudeSessions: [],
   claudeSessionsError: null,
@@ -274,6 +280,47 @@ function onFleet(fleet) {
   scheduleRender();
 }
 
+// onCost stores the latest persistent cost snapshot from the "cost" SSE frame
+// or the /api/cost poll. {spentUSD, budgetUSD?, byModel?}.
+function onCost(c) {
+  if (!c || typeof c !== "object") return;
+  state.cost = c;
+  scheduleRender();
+}
+
+// onAgentCosts replaces the per-agent cost map from the "agentcosts" SSE frame
+// or GET /api/agent-costs. Each entry: {name, model?, costUSD}.
+function onAgentCosts(agents) {
+  if (!Array.isArray(agents)) return;
+  state.agentCosts.clear();
+  for (const a of agents) {
+    if (!a || !a.name) continue;
+    state.agentCosts.set(a.name, { model: a.model || "", costUSD: a.costUSD || 0 });
+  }
+  scheduleRender();
+}
+
+// agentModel returns the model string for a worker by short name, checking
+// the agentCosts cache first (persists after the worker leaves) then the live
+// roster as a fallback.
+function agentModel(workerName) {
+  if (!workerName) return "";
+  const ac = state.agentCosts.get(workerName);
+  if (ac && ac.model) return ac.model;
+  const agent = state.agents.find((a) => a.card && (a.card.name === workerName || a.card.id === workerName));
+  return (agent && agent.card && agent.card.model) || "";
+}
+
+async function pollCost() {
+  try {
+    const res = await fetch("/api/cost");
+    if (res.status === 404) return; // backend opt-out; SSE frame backfills
+    if (!res.ok) return;
+    const data = await res.json();
+    onCost(data);
+  } catch (_) {}
+}
+
 function onEnvelope(env) {
   if (!env || typeof env !== "object" || !env.kind) return;
   state.events.push(env);
@@ -377,6 +424,8 @@ function connect() {
     else if (msg.type === "workers") onWorkers(msg.workers);
     else if (msg.type === "triage") onTriage(msg.triages);
     else if (msg.type === "fleet") onFleet(msg.fleet);
+    else if (msg.type === "cost") onCost(msg.cost);
+    else if (msg.type === "agentcosts") onAgentCosts(msg.agents);
   };
 
   es.onerror = () => {
@@ -706,7 +755,10 @@ function renderAgents() {
   list.innerHTML = state.agents.map((agent) => {
     const card = agent.card || {};
     const pillClass = agent.state === "live" ? "green" : agent.state === "away" ? "amber" : "rose";
-    const meta = [card.role || "-", card.repo || "", "seen " + ageText(agent.lastSeen) + " ago"].filter(Boolean).join(" · ");
+    const ac = state.agentCosts.get(card.name || card.id);
+    const model = card.model || (ac && ac.model) || "";
+    const costStr = ac && ac.costUSD > 0 ? "$" + ac.costUSD.toFixed(4) : "";
+    const meta = [card.role || "-", model, card.repo || "", costStr, "seen " + ageText(agent.lastSeen) + " ago"].filter(Boolean).join(" · ");
     const session = sessionForMeshAgent(agent);
     const sessionMeta = session
       ? '<div class="row-insight">' +
@@ -871,6 +923,34 @@ const TASK_STATE_COLOR = {
 function jobStateColor(s) { return JOB_STATE_COLOR[s] || "#8a98aa"; }
 function taskStateColor(s) { return TASK_STATE_COLOR[s] || "#8a98aa"; }
 
+function renderCost() {
+  const panel = byId("costPanel");
+  const pill = byId("costPill");
+  if (!panel) return;
+  if (!state.cost) {
+    if (pill) { pill.textContent = "—"; pill.className = "pill"; }
+    panel.innerHTML = '<div class="empty">No cost data yet.<br>Cost accrues as worker runs complete.</div>';
+    return;
+  }
+  const c = state.cost;
+  const spent = "$" + (c.spentUSD || 0).toFixed(4);
+  const budget = c.budgetUSD > 0 ? " / $" + c.budgetUSD.toFixed(2) : "";
+  const overBudget = c.budgetUSD > 0 && (c.spentUSD || 0) >= c.budgetUSD;
+  if (pill) {
+    pill.textContent = spent;
+    pill.className = "pill " + (overBudget ? "rose" : (c.spentUSD || 0) > 0 ? "amber" : "");
+  }
+  let html = '<div class="row" style="border-left-color:#ffb31f">' +
+    '<div class="row-top"><div class="row-title">Cumulative Spend</div>' +
+    '<span class="pill amber">' + esc(spent + budget) + '</span></div>';
+  if (c.byModel && Object.keys(c.byModel).length > 0) {
+    const models = Object.entries(c.byModel).sort((a, b) => b[1] - a[1]);
+    html += '<div class="row-meta">' + models.map(([m, v]) => esc(m) + " $" + v.toFixed(4)).join(" · ") + "</div>";
+  }
+  html += "</div>";
+  panel.innerHTML = html;
+}
+
 function renderFleet() {
   const list = byId("fleetStatus");
   const pill = byId("fleetPill");
@@ -975,10 +1055,14 @@ function renderTasks() {
     for (const t of group.tasks) {
       const color = taskStateColor(t.state);
       const workerLabel = t.worker || "";
+      const model = agentModel(t.worker);
+      const workerRun = t.worker ? state.workers.slice().reverse().find((w) => w.task === t.id) : null;
+      const runCostStr = workerRun && workerRun.costUSD > 0 ? "$" + workerRun.costUSD.toFixed(4) : "";
+      const metaParts = [t.role, workerLabel, model, runCostStr, ageText(t.ts) + " ago"].filter(Boolean);
       html += '<div class="row task-row" data-drill-task="' + esc(t.id) + '" style="border-left-color:' + color + '">' +
         '<div class="row-top"><div class="row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div>' +
         '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(t.state) + '</span></div>' +
-        '<div class="row-meta">' + esc(t.role) + (workerLabel ? ' · ' + esc(workerLabel) : '') + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
+        '<div class="row-meta">' + esc(metaParts.join(" · ")) + '</div>' +
         '</div>';
     }
     html += '</div>';
@@ -1143,6 +1227,7 @@ function render() {
   renderEvents();
   renderTickets();
   renderExperts();
+  renderCost();
   renderFleet();
   renderJobs();
   renderTasks();
@@ -1221,6 +1306,7 @@ fitStage();
 window.addEventListener("resize", fitStage);
 setInterval(scheduleRender, 1000); // tick ages / roster staleness
 startClaudeSessionsPoll();
+pollCost(); // seed cost panel before first SSE cost frame
 connect();
 
 /* ------------------------------------------------------------------------- *

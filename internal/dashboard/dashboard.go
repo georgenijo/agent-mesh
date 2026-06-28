@@ -128,6 +128,16 @@ type costSnap struct {
 	ByModel   map[string]float64 `json:"byModel,omitempty"`
 }
 
+// agentCostEntry is one row in the "agentcosts" SSE frame and
+// GET /api/agent-costs. CostUSD is cumulative across all worker runs observed
+// since the dashboard started; it resets on restart (same lifecycle as the
+// workers ring). Model is snapshotted from the agent card on first run.
+type agentCostEntry struct {
+	Name    string  `json:"name"`
+	Model   string  `json:"model,omitempty"`
+	CostUSD float64 `json:"costUSD"`
+}
+
 // claimLogEntry is one observed claim lifecycle event for the history panel.
 // Result is the wire ClaimResult (claimed|lost|error) for takes, or the
 // synthetic "released" for a claim that left the authoritative KV snapshot.
@@ -187,6 +197,13 @@ type Dashboard struct {
 	triages []triageSnap        // bounded ring, newest last
 	fleet   *fleetSnap          // nil until the first KindFleet is observed
 
+	// agentCosts and agentModels accumulate per-worker-agent spend and their
+	// registered model since the dashboard started. Keyed by the short worker
+	// mesh name (taskWorkerName(taskID)). Updated in recordWorker when
+	// CostUSD > 0; broadcast as "agentcosts" SSE frame on each update.
+	agentCosts  map[string]float64 // worker name → cumulative USD
+	agentModels map[string]string  // worker name → model (from card)
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -208,6 +225,8 @@ func New(cfg config.Config, addr string, log *slog.Logger) *Dashboard {
 		noteSeq:     make(map[string]uint64),
 		jobs:        make(map[string]jobSnap),
 		tasks:       make(map[string]taskSnap),
+		agentCosts:  make(map[string]float64),
+		agentModels: make(map[string]string),
 		stop:        make(chan struct{}),
 	}
 }
@@ -255,6 +274,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
 	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
 	mux.HandleFunc("GET /api/cost", d.serveCost)
+	mux.HandleFunc("GET /api/agent-costs", d.serveAgentCosts)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
@@ -428,7 +448,8 @@ func (d *Dashboard) recordTask(env envelope.Envelope) {
 	d.broadcastTasks(snapshot)
 }
 
-// recordWorker appends a worker-run snapshot to the bounded ring.
+// recordWorker appends a worker-run snapshot to the bounded ring and
+// accumulates per-agent cost in agentCosts/agentModels.
 func (d *Dashboard) recordWorker(env envelope.Envelope) {
 	var p envelope.WorkerPayload
 	if err := envelope.DecodeInto(env, &p); err != nil {
@@ -448,11 +469,43 @@ func (d *Dashboard) recordWorker(env envelope.Envelope) {
 	if len(d.workers) > maxClaimLog { // reuse the same cap
 		d.workers = d.workers[len(d.workers)-maxClaimLog:]
 	}
-	snapshot := append([]workerSnap(nil), d.workers...)
+	workersSnap := append([]workerSnap(nil), d.workers...)
+	// Accumulate per-agent cost. Always update (even $0) so a worker appears in
+	// the roster with their model. Model is snapshotted on first run from the
+	// live registry; workers may leave before the next roster tick so we cache.
+	workerName := taskWorkerName(snap.Task)
+	d.agentCosts[workerName] += snap.CostUSD
+	if _, seen := d.agentModels[workerName]; !seen {
+		for _, rec := range d.roster {
+			if rec.Card.Name == workerName {
+				d.agentModels[workerName] = rec.Card.Model
+				break
+			}
+		}
+	}
+	agentCostsSnap := d.buildAgentCostsSnap()
 	d.mu.Unlock()
-	if msg, err := json.Marshal(map[string]any{"type": "workers", "workers": snapshot}); err == nil {
+	if msg, err := json.Marshal(map[string]any{"type": "workers", "workers": workersSnap}); err == nil {
 		d.broadcast(msg)
 	}
+	if msg, err := json.Marshal(map[string]any{"type": "agentcosts", "agents": agentCostsSnap}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// buildAgentCostsSnap returns a sorted snapshot of per-agent cost entries.
+// Must be called with mu held.
+func (d *Dashboard) buildAgentCostsSnap() []agentCostEntry {
+	out := make([]agentCostEntry, 0, len(d.agentCosts))
+	for name, costUSD := range d.agentCosts {
+		out = append(out, agentCostEntry{
+			Name:    name,
+			Model:   d.agentModels[name],
+			CostUSD: costUSD,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // recordTriage appends a triage-attempt snapshot to the bounded ring.
@@ -686,6 +739,18 @@ func (d *Dashboard) serveCost(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cs) //nolint:errcheck
+}
+
+// serveAgentCosts returns per-worker-agent cumulative cost and model since
+// the dashboard started. Cost accumulates from KindWorker envelopes; model is
+// snapshotted from the agent card on the first run observed. Read-only,
+// unauthenticated (same posture as /api/roster).
+func (d *Dashboard) serveAgentCosts(w http.ResponseWriter, _ *http.Request) {
+	d.mu.Lock()
+	snap := d.buildAgentCostsSnap()
+	d.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"agents": snap}) //nolint:errcheck
 }
 
 // tickNotes tails every visible repo's blackboard stream and broadcasts new
@@ -1277,6 +1342,7 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 	workersSnap := append([]workerSnap(nil), d.workers...)
 	triagesSnap := append([]triageSnap(nil), d.triages...)
 	fleetSnap := d.fleet
+	agentCostsSnap := d.buildAgentCostsSnap()
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
@@ -1349,6 +1415,12 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 				flusher.Flush()
 			}
 		}
+	}
+
+	// Initial per-agent cost snapshot.
+	if msg, err := json.Marshal(map[string]any{"type": "agentcosts", "agents": agentCostsSnap}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
 	}
 
 	for {

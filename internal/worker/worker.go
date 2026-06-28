@@ -385,7 +385,7 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 		return scheduler.Result{}, fmt.Errorf("worker stdout is %q, not a result envelope", ev.Type)
 	}
 
-	res := scheduler.Result{CostUSD: ev.Result.TotalCostUSD, SessionID: ev.Result.SessionID, Model: w.d.cfg.WorkerModel}
+	res := scheduler.Result{CostUSD: ev.Result.TotalCostUSD, SessionID: ev.Result.SessionID, Model: w.d.cfg.WorkerModel, Agent: workerName(w.rec.ID)}
 	switch {
 	case ev.Result.Succeeded():
 		meta, err := w.commitAndDescribe(ctx)

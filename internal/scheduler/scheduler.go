@@ -405,7 +405,7 @@ func (s *Scheduler) handleOutcome(o outcome) {
 	}
 	s.spent += res.CostUSD
 	if s.costLedger != nil && res.CostUSD != 0 {
-		if err := s.costLedger.Add(res.CostUSD, res.Model); err != nil {
+		if err := s.costLedger.Add(res.CostUSD, res.Model, res.Agent); err != nil {
 			s.log.Warn("scheduler: persist cost ledger failed", "err", err)
 		}
 	}
@@ -520,7 +520,7 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 	dec := o.dec
 	s.spent += dec.CostUSD
 	if s.costLedger != nil && dec.CostUSD != 0 {
-		if err := s.costLedger.Add(dec.CostUSD, ""); err != nil {
+		if err := s.costLedger.Add(dec.CostUSD, "", ""); err != nil {
 			s.log.Warn("scheduler: persist review cost ledger failed", "err", err)
 		}
 	}

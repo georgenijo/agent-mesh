@@ -120,12 +120,14 @@ type fleetSnap struct {
 }
 
 // costSnap carries the persistent cost window as carried in the "cost" SSE
-// frame and GET /api/cost: cumulative spend, configured budget, and per-model
-// breakdown. Populated from the durable cost-ledger KV bucket.
+// frame and GET /api/cost: cumulative spend, configured budget, per-model
+// breakdown, and per-agent breakdown. Populated from the durable cost-ledger
+// KV bucket.
 type costSnap struct {
 	SpentUSD  float64            `json:"spentUSD"`
 	BudgetUSD float64            `json:"budgetUSD,omitempty"`
 	ByModel   map[string]float64 `json:"byModel,omitempty"`
+	ByAgent   map[string]float64 `json:"byAgent,omitempty"`
 }
 
 // claimLogEntry is one observed claim lifecycle event for the history panel.
@@ -663,6 +665,7 @@ func (d *Dashboard) tickCost() {
 		SpentUSD:  snap.SpentUSD,
 		BudgetUSD: d.cfg.BudgetUSD,
 		ByModel:   snap.ByModel,
+		ByAgent:   snap.ByAgent,
 	}
 	if msg, err := json.Marshal(map[string]any{"type": "cost", "cost": cs}); err == nil {
 		d.broadcast(msg)
@@ -670,8 +673,9 @@ func (d *Dashboard) tickCost() {
 }
 
 // serveCost returns the persistent cost window: cumulative spend, configured
-// budget (MESH_BUDGET_USD), and per-model breakdown. Read-only, same posture
-// as /api/roster — the cost-ledger KV bucket is the one authority.
+// budget (MESH_BUDGET_USD), per-model breakdown, and per-agent breakdown.
+// Read-only, same posture as /api/roster — the cost-ledger KV bucket is the
+// one authority.
 func (d *Dashboard) serveCost(w http.ResponseWriter, _ *http.Request) {
 	ledger := cost.New(d.bus)
 	snap, err := ledger.Load()
@@ -683,6 +687,7 @@ func (d *Dashboard) serveCost(w http.ResponseWriter, _ *http.Request) {
 		SpentUSD:  snap.SpentUSD,
 		BudgetUSD: d.cfg.BudgetUSD,
 		ByModel:   snap.ByModel,
+		ByAgent:   snap.ByAgent,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cs) //nolint:errcheck
@@ -1343,7 +1348,7 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 	// Initial cost snapshot so the cost panel renders immediately on connect.
 	if ledger := cost.New(d.bus); ledger != nil {
 		if snap, err := ledger.Load(); err == nil {
-			cs := costSnap{SpentUSD: snap.SpentUSD, BudgetUSD: d.cfg.BudgetUSD, ByModel: snap.ByModel}
+			cs := costSnap{SpentUSD: snap.SpentUSD, BudgetUSD: d.cfg.BudgetUSD, ByModel: snap.ByModel, ByAgent: snap.ByAgent}
 			if msg, err := json.Marshal(map[string]any{"type": "cost", "cost": cs}); err == nil {
 				fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
 				flusher.Flush()

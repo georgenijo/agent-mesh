@@ -20,14 +20,16 @@ const maxPromptBody = 16 << 10 // 16 KiB
 // buildPrompt renders the one-shot planning prompt for a job.
 func buildPrompt(rec job.Record, roles []string, notes []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `You are the triage planner for an autonomous coding system. Decompose the job below into a directed acyclic graph (DAG) of concrete subtasks.
+	fmt.Fprintf(&b, `You are the triage planner for an autonomous coding system. Plan the work for the job below.
+
+By DEFAULT, the whole job is ONE task — a single agent does the entire ticket end to end. Only split into multiple tasks when the job contains genuinely INDEPENDENT pieces that different agents could build AT THE SAME TIME without editing the same files. Tests, types, config, wiring, and docs are NEVER their own task — they belong to the task that owns the feature. A normal ticket produces exactly one task; splitting is the rare exception, not the default.
 
 Output requirements — follow these exactly:
 - Respond with ONLY one JSON object. No prose, no markdown fences, no explanation.
 - The object must have this shape:
   {"version":%d,"nodes":[{"id":"<slug>","title":"<short imperative>","description":"<what and why>","role":"<role>","dependsOn":["<id>",...],"files":["<path or area>",...],"acceptance":["<verifiable criterion>",...]}]}
 - "version" must be %d.
-- 1 to %d nodes. Prefer the smallest decomposition that lets independent work run in parallel.
+- 1 to %d nodes, and STRONGLY prefer exactly 1. Add another node ONLY for a genuinely separate, parallelizable work item — never to break one feature into sequential steps.
 - "id": a short unique slug per node (letters, digits, - or _; max 64 chars).
 - "role": exactly one of: %s.
 - "dependsOn": ids of nodes that must complete first. No cycles. Omit or use [] when independent.

@@ -273,7 +273,9 @@
     </div>
     <form id="jobForm" class="jf-body" autocomplete="off" novalidate>
       <label class="jf-label" for="jfRepo">Repo <span class="jf-req">*</span></label>
-      <input class="jf-input" id="jfRepo" name="repo" type="text" placeholder="e.g. myproject" required spellcheck="false" autocomplete="off">
+      <select class="jf-input" id="jfRepo" name="repo" required>
+        <option value="" disabled selected>Loading repos…</option>
+      </select>
       <label class="jf-label" for="jfTitle2">Title <span class="jf-req">*</span></label>
       <input class="jf-input" id="jfTitle2" name="title" type="text" placeholder="One-line description of the job" required spellcheck="false" autocomplete="off">
       <label class="jf-label" for="jfBody">Body <span class="jf-opt">(optional)</span></label>

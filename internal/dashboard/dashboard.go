@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -257,6 +258,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
 	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
 	mux.HandleFunc("GET /api/cost", d.serveCost)
+	mux.HandleFunc("GET /api/repos", d.serveListRepos)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
@@ -691,6 +693,50 @@ func (d *Dashboard) serveCost(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cs) //nolint:errcheck
+}
+
+// repoEntry is one detected repo under MESH_REPOS_DIR, as returned by
+// GET /api/repos.
+type repoEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// serveListRepos scans MESH_REPOS_DIR and returns the detected git repos as a
+// JSON array. Returns {"repos":[]} when ReposDir is unset or empty. Only
+// immediate subdirectories that contain a .git entry are included —
+// intentionally shallow: repo names are top-level directory names under
+// ReposDir, matching the convention the worker driver uses.
+func (d *Dashboard) serveListRepos(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if d.cfg.ReposDir == "" {
+		json.NewEncoder(w).Encode(map[string]any{"repos": []repoEntry{}}) //nolint:errcheck
+		return
+	}
+	entries, err := os.ReadDir(d.cfg.ReposDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			json.NewEncoder(w).Encode(map[string]any{"repos": []repoEntry{}}) //nolint:errcheck
+			return
+		}
+		writeJSONError(w, `{"error":"internal","message":"could not scan repos dir"}`, http.StatusInternalServerError)
+		return
+	}
+	repos := make([]repoEntry, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		gitPath := d.cfg.ReposDir + "/" + e.Name() + "/.git"
+		if _, err := os.Stat(gitPath); err != nil {
+			continue // not a git repo
+		}
+		repos = append(repos, repoEntry{
+			Name: e.Name(),
+			Path: d.cfg.ReposDir + "/" + e.Name(),
+		})
+	}
+	json.NewEncoder(w).Encode(map[string]any{"repos": repos}) //nolint:errcheck
 }
 
 // tickNotes tails every visible repo's blackboard stream and broadcasts new

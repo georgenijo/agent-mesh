@@ -18,16 +18,13 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"regexp"
 	"strings"
 
+	"github.com/georgenijo/agent-mesh/internal/coordinator/nlparser"
 	"github.com/georgenijo/agent-mesh/internal/job"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
 	"github.com/georgenijo/agent-mesh/internal/socket"
 )
-
-// issueRefRE matches an --issue reference: owner/repo#N.
-var issueRefRE = regexp.MustCompile(`^([^/\s#]+/[^/\s#]+)#(\d+)$`)
 
 // maxTitleFromBody is the first-line title truncation length (~80 chars).
 const maxTitleFromBody = 80
@@ -103,20 +100,21 @@ func buildSubmitArgs(positional []string, repo, title, issue string) (meshapi.Su
 	}, socket.CodeOK, nil
 }
 
-// githubSubmitArgs ingests a GitHub issue via `gh issue view`. Repo defaults to
-// the issue's owner/repo when --repo is not given.
+// githubSubmitArgs ingests a GitHub issue via `gh issue view`. Accepts either
+// a full GitHub URL (https://github.com/owner/repo/issues/N) or the short
+// owner/repo#N form. Repo defaults to the plain repository name (last segment
+// of owner/repo) when --repo is not given, so job.Repo never contains a slash.
 func githubSubmitArgs(issue, repo, title string) (meshapi.SubmitArgs, string, error) {
-	m := issueRefRE.FindStringSubmatch(issue)
-	if m == nil {
-		return meshapi.SubmitArgs{}, socket.CodeBadRequest, fmt.Errorf("invalid --issue %q (want owner/repo#N)", issue)
-	}
-	ownerRepo, number := m[1], m[2]
-
-	out, err := ghIssueView(ownerRepo, number)
+	ref, err := nlparser.ParseIssueRef(issue)
 	if err != nil {
+		return meshapi.SubmitArgs{}, socket.CodeBadRequest, fmt.Errorf("invalid --issue %q (want https://github.com/owner/repo/issues/N or owner/repo#N)", issue)
+	}
+
+	out, ghErr := ghIssueView(ref.OwnerRepo(), fmt.Sprint(ref.Number))
+	if ghErr != nil {
 		// gh missing or unauthenticated: typed unavailable (reuses the
 		// socket-unavailable exit mapping — exit 1, typed in --json).
-		return meshapi.SubmitArgs{}, socket.CodeUnavailable, fmt.Errorf("github ingest unavailable: %v", err)
+		return meshapi.SubmitArgs{}, socket.CodeUnavailable, fmt.Errorf("github ingest unavailable: %v", ghErr)
 	}
 
 	if title == "" {
@@ -126,10 +124,13 @@ func githubSubmitArgs(issue, repo, title string) (meshapi.SubmitArgs, string, er
 		title = issue
 	}
 	if repo == "" {
-		repo = ownerRepo
+		// Normalize to the last path segment so job.Repo satisfies ValidRepo
+		// (no slashes). SourceRef still records the full owner/repo#N form.
+		repo = nlparser.NormalizeRepo(ref.OwnerRepo())
 	}
+	sourceRef := ref.OwnerRepo() + "#" + fmt.Sprint(ref.Number)
 	return meshapi.SubmitArgs{
-		Repo: repo, Source: job.SourceGitHub, SourceRef: issue,
+		Repo: repo, Source: job.SourceGitHub, SourceRef: sourceRef,
 		Title: title, Body: out.Body,
 	}, socket.CodeOK, nil
 }

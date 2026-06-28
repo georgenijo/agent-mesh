@@ -95,11 +95,39 @@ func TestBuildSubmitArgsGitHubSuccess(t *testing.T) {
 	if args.SourceRef != "octo/cat#42" {
 		t.Errorf("sourceRef = %q", args.SourceRef)
 	}
-	if args.Repo != "octo/cat" {
-		t.Errorf("repo = %q, want default owner/repo", args.Repo)
+	// Repo is normalized to the last path segment (no slash).
+	if args.Repo != "cat" {
+		t.Errorf("repo = %q, want normalized last segment %q", args.Repo, "cat")
 	}
 	if args.Title != "Fix the bug" || args.Body != "details here" {
 		t.Errorf("title/body = %q / %q", args.Title, args.Body)
+	}
+}
+
+func TestBuildSubmitArgsGitHubURL(t *testing.T) {
+	orig := ghIssueView
+	t.Cleanup(func() { ghIssueView = orig })
+	ghIssueView = func(ownerRepo, number string) (ghIssue, error) {
+		if ownerRepo != "octo/cat" || number != "42" {
+			t.Fatalf("gh args = %q %q", ownerRepo, number)
+		}
+		return ghIssue{Title: "URL issue", Body: "body"}, nil
+	}
+	args, code, err := buildSubmitArgs(nil, "", "", "https://github.com/octo/cat/issues/42")
+	if err != nil || code != socket.CodeOK {
+		t.Fatalf("code=%q err=%v", code, err)
+	}
+	if args.Source != job.SourceGitHub {
+		t.Errorf("source = %q, want github", args.Source)
+	}
+	if args.SourceRef != "octo/cat#42" {
+		t.Errorf("sourceRef = %q, want octo/cat#42", args.SourceRef)
+	}
+	if args.Repo != "cat" {
+		t.Errorf("repo = %q, want cat", args.Repo)
+	}
+	if args.Title != "URL issue" {
+		t.Errorf("title = %q", args.Title)
 	}
 }
 

@@ -86,6 +86,7 @@ const state = {
   workers: [],          // newest last; bounded ring from the server
   triages: [],          // newest last; bounded ring from the server
   fleet: null,          // null until first KindFleet observed; {state, code, spentUSD, budgetUSD, ts}
+  cost: null,           // null until first /api/cost fetch or 'cost' SSE frame; {spentUSD, budgetUSD?, byModel?}
   jobsSnapshotted: false,   // first authoritative jobs frame has arrived
   tasksSnapshotted: false,  // first authoritative tasks frame has arrived
   // Claude Code session telemetry (proxied GET /api/claude-sessions).
@@ -274,6 +275,14 @@ function onFleet(fleet) {
   scheduleRender();
 }
 
+// onCost stores the latest cost snapshot from /api/cost or the 'cost' SSE frame.
+// Shape: {spentUSD, budgetUSD?, byModel?}
+function onCost(data) {
+  if (!data || typeof data !== "object") return;
+  state.cost = data;
+  scheduleRender();
+}
+
 function onEnvelope(env) {
   if (!env || typeof env !== "object" || !env.kind) return;
   state.events.push(env);
@@ -377,6 +386,7 @@ function connect() {
     else if (msg.type === "workers") onWorkers(msg.workers);
     else if (msg.type === "triage") onTriage(msg.triages);
     else if (msg.type === "fleet") onFleet(msg.fleet);
+    else if (msg.type === "cost") onCost(msg.cost);
   };
 
   es.onerror = () => {
@@ -899,6 +909,59 @@ function renderFleet() {
   }
 }
 
+function renderCost() {
+  const win = byId("costWindow");
+  const pill = byId("costPill");
+  const metric = byId("costMetric");
+  if (!win) return;
+  if (!state.cost) {
+    if (pill) { pill.textContent = "—"; pill.className = "pill"; }
+    if (metric) metric.textContent = "—";
+    win.innerHTML = '<div class="empty">No cost data yet.<br>Populates from GET /api/cost and live \'cost\' SSE frames.</div>';
+    return;
+  }
+  const c = state.cost;
+  const spent = typeof c.spentUSD === "number" ? c.spentUSD : 0;
+  const budget = typeof c.budgetUSD === "number" ? c.budgetUSD : 0;
+  const byModel = c.byModel && typeof c.byModel === "object" ? c.byModel : {};
+
+  const spentFmt = "$" + spent.toFixed(4);
+  const budgetFmt = budget > 0 ? " / $" + budget.toFixed(2) : "";
+  const over = budget > 0 && spent >= budget;
+
+  if (metric) metric.textContent = spentFmt;
+  if (pill) {
+    pill.textContent = spentFmt + budgetFmt;
+    pill.className = "pill " + (over ? "rose" : budget > 0 ? "amber" : "");
+  }
+
+  const pct = budget > 0 ? Math.min(100, (spent / budget) * 100).toFixed(1) : 0;
+  const barHtml = budget > 0
+    ? '<div class="cost-bar-wrap"><div class="cost-bar' + (over ? " over" : "") + '" style="width:' + pct + '%"></div></div>'
+    : "";
+
+  const modelRows = Object.keys(byModel).length
+    ? '<div class="cost-models">' +
+      Object.entries(byModel)
+        .sort((a, b) => b[1] - a[1])
+        .map(([model, val]) =>
+          '<div class="cost-model-row">' +
+          '<span class="cost-model-name">' + esc(model) + '</span>' +
+          '<span class="cost-model-val">$' + val.toFixed(4) + '</span>' +
+          '</div>'
+        ).join("") +
+      '</div>'
+    : "";
+
+  win.innerHTML =
+    '<div class="cost-summary">' +
+    '<span class="cost-spent">' + esc(spentFmt) + '</span>' +
+    (budget > 0 ? '<span class="cost-budget">of $' + budget.toFixed(2) + (over ? " — over budget" : "") + '</span>' : '<span class="cost-budget">no cap</span>') +
+    '</div>' +
+    barHtml +
+    modelRows;
+}
+
 function renderJobs() {
   const list = byId("jobList");
   const pill = byId("jobsPill");
@@ -1134,6 +1197,19 @@ function startClaudeSessionsPoll() {
   setInterval(pollClaudeSessions, 3000);
 }
 
+// pollCost fetches the initial cost snapshot from GET /api/cost. Subsequent
+// updates arrive via the 'cost' SSE frame and are handled by onCost().
+async function pollCost() {
+  try {
+    const res = await fetch("/api/cost");
+    if (!res.ok) return; // endpoint not yet deployed; SSE will backfill
+    const data = await res.json();
+    onCost(data);
+  } catch (_err) {
+    // network / parse error — SSE frame will deliver data when available
+  }
+}
+
 function render() {
   renderSummary();
   renderAgents();
@@ -1144,6 +1220,7 @@ function render() {
   renderTickets();
   renderExperts();
   renderFleet();
+  renderCost();
   renderJobs();
   renderTasks();
   renderWorkers();
@@ -1221,6 +1298,7 @@ fitStage();
 window.addEventListener("resize", fitStage);
 setInterval(scheduleRender, 1000); // tick ages / roster staleness
 startClaudeSessionsPoll();
+pollCost();
 connect();
 
 /* ------------------------------------------------------------------------- *

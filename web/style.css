@@ -231,9 +231,69 @@ body {
 
 /* P3 lifecycle panels */
 .panel-fleet    { height: 80px; flex-shrink: 0; }
+.panel-cost     { flex-shrink: 0; }
 .panel-jobs     { flex: 2; }
 .panel-tasks    { flex: 2; }
 .panel-workers  { flex: 1; }
+
+/* Cost window */
+.cost-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px 2px;
+}
+.cost-spent {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--secondary);
+}
+.cost-budget {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--outline);
+}
+.cost-bar-wrap {
+  margin: 2px 10px 6px;
+  height: 4px;
+  background: var(--surface-high);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.cost-bar {
+  height: 100%;
+  background: var(--secondary-mid);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.cost-bar.over { background: #f66f7d; }
+.cost-models {
+  padding: 0 0 2px;
+}
+.cost-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 10px;
+  gap: 6px;
+}
+.cost-model-name {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--outline);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.cost-model-val {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--on-surface-dim);
+  flex-shrink: 0;
+}
 
 .panel-hdr {
   display: flex;

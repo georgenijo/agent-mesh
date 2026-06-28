@@ -73,6 +73,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAnswer(rest, stdout, stderr)
 	case "submit":
 		return runSubmit(rest, stdout, stderr)
+	case "work":
+		return runWork(rest, stdout, stderr)
 	case "expert":
 		return runExpert(rest, stdout, stderr)
 	case "ops":
@@ -123,6 +125,8 @@ commands:
 
   submit   "<task>" --repo R [--title T]   record a top-level job (open)
   submit   --issue owner/repo#N [--repo R] ingest a GitHub issue as a job
+  work     "<phrase>"   natural-language job control (requires MESH_GITHUB_REPO)
+           phrases: "work on issue N" | "issues N-M" | "all issues"
 
   expert serve --name <id> --role <role> [--caps a,b] [--repo R] [--model M]
           run a resident expert that auto-answers role-routed asks (foreground)

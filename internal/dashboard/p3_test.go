@@ -180,7 +180,7 @@ func TestSSEP3TaskFrameOnEnvelope(t *testing.T) {
 	}
 
 	if err := collectP3Frames(t, sseResp, 3*time.Second, map[string]func(map[string]json.RawMessage) bool{
-		"tasks frame contains task": func(raw map[string]json.RawMessage) bool {
+		"tasks frame contains task with worker label": func(raw map[string]json.RawMessage) bool {
 			if frameType(raw) != "tasks" {
 				return false
 			}
@@ -189,7 +189,8 @@ func TestSSEP3TaskFrameOnEnvelope(t *testing.T) {
 				return false
 			}
 			for _, tk := range tasks {
-				if tk.ID == taskID && tk.State == envelope.TaskPending {
+				if tk.ID == taskID && tk.State == envelope.TaskPending &&
+					tk.Worker == taskWorkerName(taskID) {
 					return true
 				}
 			}

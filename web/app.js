@@ -949,14 +949,41 @@ function renderTasks() {
     pill.textContent = done + " done / " + rows.length;
     pill.className = "pill " + (running ? "amber" : done === rows.length ? "green" : "");
   }
-  list.innerHTML = rows.map((t) => {
-    const color = taskStateColor(t.state);
-    return '<div class="row" data-drill-task="' + esc(t.id) + '" style="border-left-color:' + color + '">' +
-      '<div class="row-top"><div class="row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div>' +
-      '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(t.state) + '</span></div>' +
-      '<div class="row-meta">' + esc(t.role) + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
+
+  // Group tasks by job, labelled with the job's human-readable title.
+  // Tasks within each group are sorted newest-first (inherited from rows sort above).
+  const groups = new Map(); // job id -> {label, tasks[]}
+  for (const t of rows) {
+    if (!groups.has(t.job)) {
+      const j = state.jobs.get(t.job);
+      const label = j ? j.title : (t.job ? t.job.slice(0, 8) + "…" : "unknown job");
+      groups.set(t.job, { label, tasks: [] });
+    }
+    groups.get(t.job).tasks.push(t);
+  }
+
+  let html = "";
+  for (const [, group] of groups) {
+    const grpRunning = group.tasks.some((t) => t.state === "running");
+    const grpDone = group.tasks.every((t) => t.state === "done");
+    const grpColor = grpRunning ? "#f4b942" : grpDone ? "#38ffa3" : "#8a98aa";
+    html += '<div class="task-group">' +
+      '<div class="task-group-hdr" style="border-left-color:' + grpColor + '">' +
+      '<span class="task-group-label">' + esc(group.label) + '</span>' +
+      '<span class="task-group-count">' + group.tasks.length + (group.tasks.length === 1 ? " task" : " tasks") + '</span>' +
       '</div>';
-  }).join("");
+    for (const t of group.tasks) {
+      const color = taskStateColor(t.state);
+      const workerLabel = t.worker || "";
+      html += '<div class="row task-row" data-drill-task="' + esc(t.id) + '" style="border-left-color:' + color + '">' +
+        '<div class="row-top"><div class="row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div>' +
+        '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(t.state) + '</span></div>' +
+        '<div class="row-meta">' + esc(t.role) + (workerLabel ? ' · ' + esc(workerLabel) : '') + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
+        '</div>';
+    }
+    html += '</div>';
+  }
+  list.innerHTML = html;
 }
 
 function renderWorkers() {

@@ -99,8 +99,11 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: mesh <command> [flags]
 
 commands:
-  up      [--dashboard-addr A] [--observe-addr A]
-          bring up coordinator + dashboard + observe; print URLs (idempotent)
+  up      [--config FILE] [--dashboard-addr A] [--observe-addr A]
+          [--planner-cli CMD] [--worker-cli CMD] [--review-role ROLE]
+          [--repos-dir DIR] [--budget USD] [--auto-experts on|off]
+          [--planner-model M] [--worker-model M] [--jobs-addr A] [--github-repo owner/repo]
+          bring up coordinator + dashboard + observe, arm the fleet, print dashboard URL (idempotent)
   join    --name <id> --role <role> [--caps a,b,c] [--repo R] [--model M]
           register this agent on the mesh (autostarts its sidecar)
   leave   deregister and stop this agent's sidecar

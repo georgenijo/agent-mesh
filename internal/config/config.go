@@ -48,7 +48,7 @@ const (
 	EnvReviewRole            = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
-	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"    // expert self-terminates after this period with no ask/review activity (#105); 0 = never
+	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:

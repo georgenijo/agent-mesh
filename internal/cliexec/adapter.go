@@ -195,8 +195,9 @@ func (a ClaudeAdapter) Capabilities() Capabilities {
 }
 
 // Invoke runs one headless claude invocation and returns its stdout bytes.
-// The child is killed on ctx cancellation; WaitDelay (default 3s) bounds a
-// grandchild that holds the stdout pipe after the parent dies.
+// On ctx cancellation the child's entire process group is killed (see
+// setupProcessGroup, #122) so claude's own subprocesses don't leak; WaitDelay
+// (default 3s) still bounds a straggler that holds the stdout pipe.
 func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOptions) ([]byte, error) {
 	bin := a.Binary
 	if bin == "" {
@@ -237,6 +238,10 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 		cmd.Env = opts.Env
 	}
 	cmd.WaitDelay = wd
+	// Reap the whole process tree on cancel, not just the direct child — the
+	// claude CLI spawns its own subprocesses that would otherwise orphan and
+	// leak (#122). No-op on Windows. See setupProcessGroup.
+	setupProcessGroup(cmd)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

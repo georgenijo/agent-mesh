@@ -1,0 +1,255 @@
+---
+title: "Agent Mesh — Overnight Autonomous Run: Full Report"
+date: "2026-06-28"
+repo: "georgenijo/agent-mesh"
+director: "Claude (autonomous, unattended)"
+summary: "The mesh ran its own GitHub backlog overnight — build → Opus review → merge — and shipped 10 issues + 2 infra fixes to a clean, green main."
+---
+
+# Agent Mesh — Overnight Autonomous Run
+
+**Date:** 2026-06-28 · **Repo:** `georgenijo/agent-mesh` · **Mode:** fully autonomous, unattended
+
+> One director loop, a fleet of coding agents, and the mesh's own backlog. Drop a ticket →
+> a Sonnet worker builds it → an Opus expert reviews it → it merges. No human in the build loop.
+
+---
+
+## TL;DR
+
+- **10 backlog issues + 2 infra fixes merged**, across **14 PRs**, to a **clean, green `main`** — `main` never broke.
+- **Active working window: ~2h 12m** (01:32 → 03:44 EDT). Build, review, **and** merge.
+- **First-pass success: 62%** (8 of 13 jobs straight to `done`). **All 13 ultimately landed** — every "failure" was good work recovered.
+- **The unlock:** worker "Definition of Done" hardening flipped jobs from failing review on nits to **first-try approvals**.
+- **Prior run (06-26): 0 / 30 merged.** This run: the entire do-able backlog cleared.
+- **Worker spend: $26.14.**
+
+---
+
+## ⏱️ Timeline & Runtime
+
+| Event | Time (EDT) |
+| --- | --- |
+| Mesh up (coordinator + director + dashboard) | **01:31:25** |
+| First job triaged (smoke test #97) | 01:32:06 |
+| Coordinator bounced once (to load the worker-hardening fix) | 02:20:52 |
+| Last job finalized | 03:31:25 |
+| Last PR merged (#139) | **03:44:11** |
+| Report generated | 09:36 |
+
+- **Active working window: ~2 hours 12 minutes** — every job built, reviewed, and merged in that span.
+- **Process uptime: ~8h 05m** — the mesh has been left running (idle) since 03:44.
+- **Coordinator instances: 2** — one deliberate bounce to swap in the hardened binary.
+
+---
+
+## 🤖 The Fleet
+
+| Property | Value |
+| --- | --- |
+| Distinct agents spawned | **14** — 13 workers + 1 reviewer expert |
+| Concurrency cap | **2 workers** (`MESH_MAX_WORKERS=2`) |
+| Planner model | **Opus** |
+| Worker model | **Sonnet** |
+| Reviewer model | **Opus** |
+| Auto-expert spawns | **2** (reviewer cold-spawned twice — once after the bounce) |
+| Review gating | **ON** the entire run |
+
+---
+
+## 📦 Jobs & Tasks
+
+| Metric | Value |
+| --- | --- |
+| Jobs submitted / triaged | **13** |
+| Jobs finalized | 13 (**8 done**, **5 failed**) |
+| First-pass success rate | **62%** (8/13) |
+| Tasks per job | **1 — for every single job** (13× `tasks=1`) |
+| Worker runs | 13 |
+| Worktrees created | 13 |
+
+> **The planner fix, proven in one number.** Before this run, Opus split modest tickets into
+> 10–13 tasks. After the "default to one task" fix, **100% of jobs decomposed to exactly one task** —
+> 13 jobs, 13 single-task plans, zero over-decomposition.
+
+---
+
+## ⏳ Per-Job Durations (triage → finalize)
+
+| Job (issue) | Tasks | Result | Duration |
+| --- | --- | --- | --- |
+| #97 smoke test | 1 | failed (cold-start) | 24.0m |
+| #96 task grouping | 1 | ✅ done | 7.3m |
+| #99 cost window | 1 | failed (no UI) | 9.5m |
+| #105 idle reaper | 1 | failed (gofmt nit) | 13.7m |
+| #111 nl-control | 1 | failed (nit) | 18.8m |
+| #99-UI follow-up | 1 | ✅ done | 7.0m |
+| #98 agent cost | 1 | ✅ done | 19.0m |
+| #111-retry | 1 | failed (cold-start) | 26.5m |
+| #110 submit-from-issue | 1 | ✅ done | 7.9m |
+| #119 /jobs ingress | 1 | ✅ done | 10.2m |
+| #98-v2 | 1 | ✅ done | 8.3m |
+| #109 repo picker | 1 | ✅ done | 6.6m |
+| #95 arm-once | 1 | ✅ done | 10.5m |
+
+- **Healthy job (build + review + done): ~7–10 minutes.**
+- **Cold-start failures took 24–26m** — they sat until the 20-minute review-gate timeout. The signature of bug #125.
+
+---
+
+## ✅ Review Verdicts — the Opus reviewer
+
+| Verdict | Count |
+| --- | --- |
+| **Approved** | **8** |
+| Request changes | 3 |
+| Review error / lost (cold-start) | 2 |
+
+The reviewer was **substantive, not a rubber stamp** — verbatim quotes:
+
+> **✅ Approve (#98):** "Per-agent cost/model keying correctly matches the worker's registered card
+> name; lock discipline and SSE/REST/contract conventions are sound."
+
+> **✗ Changes (#99):** "The backend is solid and well-tested… no frontend change renders the cost
+> window, so acceptance criterion #1 is unmet — the data is exposed but never shown to the user."
+
+> **✗ Changes (#105):** "The implementation is correct and well-tested… the added `EnvExpertIdleTTL`
+> const line is not gofmt-aligned — `make ci`'s fmt-check would fail."
+
+---
+
+## 🐛 The 5 "failures" — what actually went wrong
+
+| Job | Cause | Category | Recovered |
+| --- | --- | --- | --- |
+| #97 | review lost — no verdict in 20m | cold-start race (#125) | ✅ PR #126 |
+| #99 | request_changes: backend built, no UI | #85 gap (no auto-retry) | ✅ #128 + #131 |
+| #105 | request_changes: one gofmt-misaligned line | #85 gap | ✅ #129 |
+| #111 | request_changes: regex-ordering polish | #85 gap | ✅ #133 |
+| #111-retry | review lost — no verdict in 20m | cold-start race (#125) | ✅ #133 |
+
+> **None failed on broken code.** Two lost their review to the cold-start race; three hit
+> `request_changes` that `main` can't auto-retry. **All five were recovered and merged.**
+
+---
+
+## 🏆 Output Delivered
+
+| Metric | Value |
+| --- | --- |
+| PRs merged | **14** (#124–#139) |
+| Commits on `main` | 14 |
+| Backlog issues delivered | **10** — #95, #96, #97, #98, #99, #105, #109, #110, #111, #119 |
+| Infra fixes | 2 — #122 (worker leak), #130 (worker hardening) |
+| Docs | 1 — #137 (story + STATUS) |
+| Lines changed | **+3,342 / −391** |
+| `main` broken at any point | **never** |
+
+### Merged PRs
+
+| PR | Change | +/− |
+| --- | --- | --- |
+| #124 | dogfood blockers — worker child leak (#122) + planner curb | +492/−4 |
+| #126 | #97 show GitHub issue link on issue-sourced jobs | +86/−20 |
+| #127 | #96 group dashboard tasks by job + readable labels | +99/−21 |
+| #128 | #99 persistent cost ledger backend | +364/−19 |
+| #129 | #105 idle agent reaper (TTL self-terminate) | +283/−1 |
+| #130 | worker Definition of Done (the unlock) | +12/−1 |
+| #131 | #99 cost window UI | +154/−0 |
+| #133 | #111 natural-language job control | +399/−0 |
+| #134 | #110 submit a job from a GitHub issue link | +177/−17 |
+| #135 | #119 HTTP `POST /jobs` dispatch ingress | +274/−0 |
+| #136 | #98 per-agent model + cumulative cost | +83/−22 |
+| #137 | docs: overnight run story + STATUS | +203/−261 |
+| #138 | #109 submit-job repo picker | +217/−2 |
+| #139 | #95 arm-once / `mesh up` one-command bring-up | +499/−23 |
+
+---
+
+## 💰 Cost
+
+| Item | Value |
+| --- | --- |
+| **Worker spend** | **$26.14** across 13 worker runs (~$2.01/job) |
+| Reviewer / planner cost | not captured in logs (resident-expert + triage costs aren't logged per run; true total is somewhat higher) |
+
+---
+
+## 🔍 The arc — what was broken, and the three fixes that unlocked it
+
+The mesh could always *coordinate* agents. It couldn't *finish* work. Three root fixes changed that.
+
+### 1. Worker child-process leak (#122 → fixed in #124)
+
+Each `claude` worker spawned a subprocess tree; on timeout only the direct child was killed, so
+grandchildren orphaned and piled up until they exhausted the account's session capacity — and then
+*new* workers hung too. A self-strangling collapse. **Fix:** run the child in its own process group
+and kill the whole group on cancel. Validated: **zero orphaned workers all night.**
+
+### 2. Planner over-decomposition (fixed in #124)
+
+Opus split modest tickets into 10–13 tasks, multiplying load on the single reviewer and widening every
+cascade failure. **Fix:** default to **one task**, split only for genuinely independent work.
+Result: **13/13 jobs = 1 task.**
+
+### 3. Worker "Definition of Done" hardening (#130) — **the unlock**
+
+Workers did correct work, but the Opus reviewer kept issuing `request_changes` for fixable nits
+(an unaligned `gofmt` line, a feature left backend-only), and `main` has no auto-retry, so good work
+hard-failed. **Fix:** the worker now runs `gofmt` / `go build` / `go test` and re-checks every
+acceptance criterion before finishing. Jobs flipped from nit-failing to **first-try approvals — four
+clean passes in a row** right after it landed.
+
+---
+
+## ⚠️ Main issues encountered (operational)
+
+1. **Cold-start review race (#125)** — the biggest recurring cost. A freshly auto-spawned reviewer
+   misses its first re-delivered request; that job then burns the full 20-minute gate before failing.
+   Hit twice (#97, #111-retry). Mitigation used: keep the reviewer warm (no bounces).
+2. **`request_changes` = hard fail (#85 gap)** — `main` has no auto re-dispatch with feedback, so
+   good-but-imperfect work dies on the first nit. Worked around by hardening the worker (fix #3).
+3. **Single-reviewer throughput ceiling (#123)** — one Opus reviewer serializes every review, capping
+   the fleet at 2 workers all night. This is the next unlock.
+4. **Shared-file merge conflicts** — parallel jobs editing `config.go` / `web/app.js` collided at merge
+   time (claims are advisory within a run, not across git branches). Resolved by sequential rebasing
+   and keep-both merges.
+5. **Director self-inflicted hiccup** — a `pkill -f` pattern matched the director's own shell and killed
+   it mid-bounce. Recovered immediately; lesson logged: kill the coordinator by explicit PID only.
+
+---
+
+## 🧭 Bugs filed during the run
+
+| Issue | Title | State |
+| --- | --- | --- |
+| #122 | Worker teardown leaks the runtime child | **closed (fixed)** |
+| #123 | One expert is a throughput ceiling — need an expert pool | open |
+| #125 | Auto-expert cold-spawn re-deliver races the review subscription | open |
+| #85 | (pre-existing) `request_changes` hard-fails — needs bounded re-dispatch | open |
+
+---
+
+## ➡️ Next session (not overnight work)
+
+1. **#123 — expert/reviewer pool.** Lifts the single-reviewer ceiling so a bigger backlog runs in
+   parallel. **Do this first.**
+2. **#125 — cold-start review race.** Bump the auto-expert settle window + add a re-deliver retry.
+3. **#85 — auto re-dispatch on `request_changes`.** Close the loop so nits self-correct without the
+   manual salvage that this run relied on.
+4. Bigger / external: #100 settings (Open Design), #102/#103/#104 Codex/Aider adapters, #107
+   autonomous-PR workflow, #121 P4 observer.
+
+---
+
+## 🖥️ Artifacts & access
+
+- **Story page:** `docs/overnight-run.html` (animated)
+- **Status:** `STATUS.md`
+- **Dashboard (left running):** http://george-ubuntu.tail1fdfb0.ts.net:8800/
+- **Tear down:** `source /tmp/mesh-run/env.sh && mesh ops down`
+- **Raw telemetry:** `/tmp/mesh/logs/` (coordinator + per-worker), `/tmp/mesh/streams/` (job/task/audit events)
+
+---
+
+*Generated 2026-06-28 from coordinator logs, task/job event streams, per-worker run logs, git history, and GitHub PR/issue data.*

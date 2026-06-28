@@ -21,6 +21,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
+	"github.com/georgenijo/agent-mesh/internal/cost"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/scheduler"
 	"github.com/georgenijo/agent-mesh/internal/triage"
@@ -140,7 +141,7 @@ func (c *Coordinator) Start() error {
 	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{
 		StreamDir:      c.cfg.StreamsDir(),
 		PersistDir:     c.cfg.BucketsDir(),
-		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts},
+		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts, envelope.BucketCostLedger},
 		Logger:         c.log,
 	})
 	if err := c.srv.Start(); err != nil {
@@ -209,6 +210,7 @@ func (c *Coordinator) Start() error {
 			MaxParallel: c.cfg.MaxWorkers,
 			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
 			Log:         c.log,
+			CostLedger:  cost.New(cli),
 		}
 		// Review gating (#80): opt-in via MESH_REVIEW_ROLE, same posture as
 		// the planner/worker knobs — unset means a worker success transitions

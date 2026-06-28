@@ -246,6 +246,7 @@ func TestContractStrings(t *testing.T) {
 		{"BucketTickets", BucketTickets, "tickets"},
 		{"BucketJobs", BucketJobs, "jobs"},
 		{"BucketTasks", BucketTasks, "tasks"},
+		{"BucketCostLedger", BucketCostLedger, "cost-ledger"},
 		{"StreamAudit", StreamAudit, "audit"},
 		{"StreamTickets", StreamTickets, "ticket-events"},
 		{"StreamJobs", StreamJobs, "job-events"},

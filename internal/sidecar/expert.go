@@ -50,6 +50,11 @@ type ExpertOptions struct {
 	// blackboard. When it is signalled, the loop re-primes from the durable
 	// record on its next tick. It is created with NewResyncSignal.
 	Resync *ResyncSignal
+	// IdleTTL is the idle reaper window (#105): when > 0, the expert exits
+	// cleanly and deregisters if no ask or review has been handled for this
+	// long. 0 disables the reaper (the expert runs until context cancellation
+	// or a signal). Config knob: MESH_EXPERT_IDLE_TTL.
+	IdleTTL time.Duration
 }
 
 // ResyncSignal is a concurrency-safe one-shot flag the runtime layer raises to
@@ -130,6 +135,10 @@ func (s *Sidecar) ServeExpertWithMemory(ctx context.Context, fn ExpertFunc, poll
 		}
 	}
 
+	// Seed the idle clock so the reaper measures from serve-start, not from
+	// the zero Unix epoch (which would fire immediately on the first tick).
+	s.expertLastActivity.Store(time.Now().UnixNano())
+
 	mem := &expertMemory{opts: opts, repo: repo, primed: false}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
@@ -144,6 +153,17 @@ func (s *Sidecar) ServeExpertWithMemory(ctx context.Context, fn ExpertFunc, poll
 		case <-ticker.C:
 			s.syncMemory(ctx, mem)
 			s.drainInbox(ctx, fn, skip)
+			if opts.IdleTTL > 0 {
+				lastNano := s.expertLastActivity.Load()
+				if time.Since(time.Unix(0, lastNano)) > opts.IdleTTL {
+					s.log.Info("expert: idle TTL exceeded, leaving mesh", "ttl", opts.IdleTTL)
+					s.Leave("expert idle timeout")
+					// Close Done() so cmd/meshd's main goroutine unblocks and
+					// can clean up the runtime proxy (same path as the leave verb).
+					s.doneOnce.Do(func() { close(s.done) })
+					return nil
+				}
+			}
 		}
 	}
 }
@@ -201,6 +221,12 @@ func (s *Sidecar) syncMemory(ctx context.Context, mem *expertMemory) {
 		"repo", mem.repo, "notes", primer.Included, "total", primer.Total, "highSeq", primer.HighWater)
 }
 
+// touchExpertActivity records the current time as the last expert activity for
+// the idle reaper (#105). Safe to call from any goroutine.
+func (s *Sidecar) touchExpertActivity() {
+	s.expertLastActivity.Store(time.Now().UnixNano())
+}
+
 // drainInbox answers every currently-accepted, not-yet-skipped ticket once.
 func (s *Sidecar) drainInbox(ctx context.Context, fn ExpertFunc, skip map[string]bool) {
 	id, joined := s.joinedID()
@@ -221,6 +247,8 @@ func (s *Sidecar) drainInbox(ctx context.Context, fn ExpertFunc, skip map[string
 		if skip[rec.Ticket] {
 			continue
 		}
+		// Any non-skipped ticket we attempt counts as activity for the idle reaper.
+		s.touchExpertActivity()
 		res, err := fn(ctx, rec.Q, rec.Ctx)
 		if err != nil {
 			// ctx cancellation is shutdown, not a poison ticket — let the next

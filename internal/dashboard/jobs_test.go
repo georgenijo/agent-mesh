@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -319,5 +320,94 @@ func TestCreateJobPublishesJobEvent(t *testing.T) {
 		// KindJob envelope arrived on the SSE stream.
 	case <-time.After(3 * time.Second):
 		t.Fatal("KindJob envelope never appeared on SSE stream after job create")
+	}
+}
+
+// TestListReposEmpty pins the /api/repos response when ReposDir is not
+// configured: the endpoint returns 200 with an empty repos array (never null).
+func TestListReposEmpty(t *testing.T) {
+	_, _, d := startStack(t)
+	base := "http://" + d.Addr()
+
+	resp, err := http.Get(base + "/api/repos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/repos: status %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Repos []repoEntry `json:"repos"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Repos == nil {
+		t.Fatal("repos field is null; want empty array")
+	}
+	if len(body.Repos) != 0 {
+		t.Fatalf("expected 0 repos, got %d", len(body.Repos))
+	}
+}
+
+// TestListReposDetectsGitDirs pins the /api/repos detection logic: only
+// immediate subdirectories with a .git entry are returned; non-git dirs and
+// regular files are ignored.
+func TestListReposDetectsGitDirs(t *testing.T) {
+	cfg, _, d := startStack(t)
+	base := "http://" + d.Addr()
+
+	// Build a temporary repos directory with two git repos and one plain dir.
+	reposDir := filepath.Join(cfg.MeshDir, "test-repos")
+	if err := os.MkdirAll(reposDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		gitDir := filepath.Join(reposDir, name, ".git")
+		if err := os.MkdirAll(gitDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Plain directory without .git — must not appear in the list.
+	if err := os.MkdirAll(filepath.Join(reposDir, "notgit"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject the repos dir into the dashboard config and call the handler
+	// directly without restarting (the handler reads d.cfg.ReposDir).
+	d.cfg.ReposDir = reposDir
+
+	resp, err := http.Get(base + "/api/repos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/repos: status %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Repos []repoEntry `json:"repos"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Repos) != 2 {
+		t.Fatalf("expected 2 repos, got %d: %v", len(body.Repos), body.Repos)
+	}
+	names := make(map[string]bool)
+	for _, r := range body.Repos {
+		names[r.Name] = true
+		if r.Path == "" {
+			t.Errorf("repo %q has empty path", r.Name)
+		}
+	}
+	for _, want := range []string{"alpha", "beta"} {
+		if !names[want] {
+			t.Errorf("expected repo %q in list, got %v", want, body.Repos)
+		}
+	}
+	if names["notgit"] {
+		t.Error("non-git directory 'notgit' should not appear in repos list")
 	}
 }

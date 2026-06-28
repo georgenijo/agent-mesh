@@ -161,6 +161,34 @@ func TestAppHandlesP3FrameTypes(t *testing.T) {
 	}
 }
 
+// TestJobFormHasRepoPicker pins the UI contract for issue #109: the submit-job
+// form must include a <select> element for the repo picker (not a free-text
+// input), and jobform.js must fetch /api/repos to populate it.
+func TestJobFormHasRepoPicker(t *testing.T) {
+	data, err := fs.ReadFile(Assets, "index.html")
+	if err != nil {
+		t.Fatalf("Assets missing index.html: %v", err)
+	}
+	html := string(data)
+	if !strings.Contains(html, `id="jfRepo"`) {
+		t.Fatal("index.html is missing the jfRepo element")
+	}
+	// The repo element must be a <select> (picker), not a free-text <input>.
+	// Check for select element with id="jfRepo".
+	if !strings.Contains(html, `<select`) || !strings.Contains(html, `id="jfRepo"`) {
+		t.Fatal("index.html must use a <select> for jfRepo, not a free-text <input>")
+	}
+
+	jsData, err := fs.ReadFile(Assets, "jobform.js")
+	if err != nil {
+		t.Fatalf("Assets missing jobform.js: %v", err)
+	}
+	js := string(jsData)
+	if !strings.Contains(js, `"/api/repos"`) {
+		t.Fatal("jobform.js does not fetch /api/repos to populate the repo picker")
+	}
+}
+
 // TestIndexHasP3Panels pins that index.html contains the DOM elements the P3
 // render functions write to: jobList, taskList, workerList, fleetStatus.
 func TestIndexHasP3Panels(t *testing.T) {

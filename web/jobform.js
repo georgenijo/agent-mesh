@@ -40,9 +40,58 @@ const bodyEl   = document.getElementById("jfBody");
 const submitEl = document.getElementById("jfSubmit");
 const statusEl = document.getElementById("jfStatus");
 
+// Populate the repo <select> from GET /api/repos. Called when the form opens
+// so the list is always fresh. On error or empty list a disabled placeholder
+// option makes the failure visible without blocking the rest of the form.
+function loadRepos() {
+  if (!repoEl) return;
+  fetch("/api/repos")
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(data => {
+      const repos = (data && data.repos) || [];
+      // Clear existing options.
+      repoEl.innerHTML = "";
+      if (repos.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.disabled = true;
+        opt.selected = true;
+        opt.textContent = "No repos found (MESH_REPOS_DIR not configured)";
+        repoEl.appendChild(opt);
+        return;
+      }
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      placeholder.textContent = "Select a repo…";
+      repoEl.appendChild(placeholder);
+      repos.forEach(function(r) {
+        const opt = document.createElement("option");
+        opt.value = r.name;
+        opt.textContent = r.name;
+        repoEl.appendChild(opt);
+      });
+      // Auto-select the only option when there is exactly one repo.
+      if (repos.length === 1) {
+        repoEl.value = repos[0].name;
+      }
+    })
+    .catch(function() {
+      repoEl.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.disabled = true;
+      opt.selected = true;
+      opt.textContent = "Failed to load repos";
+      repoEl.appendChild(opt);
+    });
+}
+
 function openForm() {
   if (!overlay) return;
   overlay.hidden = false;
+  loadRepos();
   if (repoEl) repoEl.focus();
 }
 
@@ -91,7 +140,7 @@ if (form) {
     const title = (titleEl && titleEl.value.trim()) || "";
     const body  = (bodyEl  && bodyEl.value.trim())  || "";
 
-    if (!repo)  { setStatus("Repo is required.", "err"); repoEl && repoEl.focus(); return; }
+    if (!repo)  { setStatus("Please select a repo.", "err"); repoEl && repoEl.focus(); return; }
     if (!title) { setStatus("Title is required.", "err"); titleEl && titleEl.focus(); return; }
 
     if (!writeToken) {

@@ -1,208 +1,211 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Mesh — The Overnight Run</title>
+<title>Agent Mesh — Overnight Autonomous Run, 2026-06-28</title>
 <style>
   :root{
-    --bg:#0a0e14; --panel:#121826; --ink:#e6edf3; --dim:#8b98a9;
-    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --acc:#58a6ff; --pur:#bc8cff;
-    --line:#222c3c;
+    --bg:#0b0e14; --panel:#131823; --ink:#e6edf3; --dim:#9aa7b8; --line:#222b3a;
+    --green:#3fb950; --red:#f85149; --amber:#d29922; --blue:#58a6ff; --violet:#bc8cff;
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
-  body{margin:0;background:radial-gradient(1200px 800px at 70% -10%,#15203a 0%,var(--bg) 55%);
-    color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  .wrap{max-width:960px;margin:0 auto;padding:0 22px}
-  header{padding:90px 0 50px;text-align:center}
-  h1{font-size:clamp(34px,6vw,62px);margin:0 0 10px;letter-spacing:-1.5px;
-    background:linear-gradient(90deg,#fff,#8ab4ff 60%,#bc8cff);-webkit-background-clip:text;
-    background-clip:text;color:transparent}
-  .sub{color:var(--dim);font-size:18px;max-width:640px;margin:0 auto}
-  .tag{display:inline-block;margin-top:18px;padding:6px 14px;border:1px solid var(--line);
-    border-radius:999px;color:var(--dim);font-size:13px;background:#0d1320}
-  h2{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--acc);margin:60px 0 18px}
-  .reveal{opacity:0;transform:translateY(24px);transition:.7s cubic-bezier(.2,.7,.2,1)}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:0 22px}
+  header{padding:90px 0 50px;text-align:center;
+    background:radial-gradient(1100px 420px at 50% -120px,rgba(88,166,255,.16),transparent)}
+  h1{font-size:40px;line-height:1.12;margin:0 0 12px;letter-spacing:-.5px}
+  .sub{color:var(--dim);font-size:18px;margin:0 auto;max-width:620px}
+  .tag{display:inline-block;margin-bottom:22px;padding:5px 13px;border:1px solid var(--line);
+    border-radius:999px;color:var(--violet);font-size:13px;letter-spacing:.6px;text-transform:uppercase}
+  section{padding:46px 0;border-top:1px solid var(--line)}
+  h2{font-size:13px;letter-spacing:1.6px;text-transform:uppercase;color:var(--dim);margin:0 0 26px;font-weight:600}
+  .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s ease,transform .7s ease}
   .reveal.in{opacity:1;transform:none}
 
-  /* pipeline */
-  .flow{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
-    background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px 18px}
-  .node{flex:1;min-width:120px;text-align:center;padding:14px 8px;border-radius:12px;
-    background:#0d1320;border:1px solid var(--line);position:relative}
-  .node b{display:block;font-size:15px}
-  .node span{font-size:12px;color:var(--dim)}
-  .node .dot{width:9px;height:9px;border-radius:50%;margin:0 auto 8px;
-    box-shadow:0 0 0 0 currentColor;animation:pulse 2.4s infinite}
-  .arrow{color:var(--dim);font-size:22px;flex:0 0 auto}
-  .n1{color:var(--pur)} .n2{color:var(--acc)} .n3{color:var(--warn)} .n4{color:var(--ok)}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 currentColor;opacity:1}70%{box-shadow:0 0 0 10px transparent;opacity:.7}100%{opacity:1}}
+  .scoreboard{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 18px;text-align:center}
+  .stat .n{font-size:40px;font-weight:700;letter-spacing:-1px}
+  .stat .l{color:var(--dim);font-size:13px;margin-top:4px}
+  .green{color:var(--green)} .red{color:var(--red)} .blue{color:var(--blue)} .amber{color:var(--amber)}
 
-  /* timeline */
-  .tl{position:relative;margin-left:8px;padding-left:30px;border-left:2px solid var(--line)}
-  .ev{position:relative;margin:0 0 22px;background:var(--panel);border:1px solid var(--line);
-    border-radius:14px;padding:18px 20px}
-  .ev::before{content:"";position:absolute;left:-39px;top:22px;width:14px;height:14px;border-radius:50%;
-    background:var(--bg);border:3px solid var(--acc)}
-  .ev.bad::before{border-color:var(--bad)} .ev.fix::before{border-color:var(--ok)}
-  .ev .t{font-size:12px;color:var(--dim);letter-spacing:1px}
-  .ev h3{margin:4px 0 6px;font-size:19px}
-  .ev p{margin:0;color:#c7d2de}
-  .pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:999px;margin-left:8px;vertical-align:middle}
-  .pill.bad{background:#2a1416;color:var(--bad);border:1px solid #4d1f22}
-  .pill.fix{background:#0f2417;color:var(--ok);border:1px solid #1f4d2f}
+  .ba{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:18px;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px}
+  .ba .big{font-size:30px;font-weight:700}
+  .ba .cap{color:var(--dim);font-size:13px;margin-top:4px}
+  .arrow{color:var(--violet);font-size:28px}
 
-  /* scoreboard */
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;text-align:center}
-  .stat .v{font-size:34px;font-weight:700;letter-spacing:-1px}
-  .stat .l{font-size:12px;color:var(--dim);margin-top:4px;text-transform:uppercase;letter-spacing:1px}
-  .v.bad{color:var(--bad)} .v.ok{color:var(--ok)} .v.acc{color:var(--acc)} .v.warn{color:var(--warn)}
+  .step{display:flex;gap:16px;padding:18px 0;border-bottom:1px solid var(--line)}
+  .step:last-child{border-bottom:0}
+  .dot{flex:0 0 30px;height:30px;border-radius:50%;background:#0d1117;border:1px solid var(--line);
+    display:grid;place-items:center;color:var(--violet);font-size:14px;font-weight:700}
+  .step h3{margin:2px 0 5px;font-size:17px}
+  .step p{margin:0;color:var(--dim);font-size:15px}
 
-  /* bug cards */
-  .bug{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--bad);
-    border-radius:12px;padding:16px 18px;margin-bottom:12px}
-  .bug.hi{border-left-color:var(--warn)} .bug.lo{border-left-color:var(--ok)}
-  .bug b{font-size:16px} .bug .sev{float:right;font-size:11px;color:var(--dim);letter-spacing:1px}
-  .bug p{margin:6px 0 0;color:#c7d2de;font-size:14.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:14px}
+  .card h3{margin:0 0 6px;font-size:17px}
+  .card .meta{color:var(--dim);font-size:13px;margin-bottom:10px}
+  blockquote{margin:0;padding:12px 16px;border-left:3px solid var(--blue);background:#0d1117;
+    border-radius:0 8px 8px 0;color:#c9d4e0;font-size:14.5px}
+  blockquote.rc{border-left-color:var(--amber)}
 
-  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .col{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
-  .col h4{margin:0 0 10px} .col.ok h4{color:var(--ok)} .col.no h4{color:var(--bad)}
-  .col ul{margin:0;padding-left:18px;color:#c7d2de} .col li{margin:6px 0;font-size:14.5px}
-  @media(max-width:680px){.two{grid-template-columns:1fr}}
-  footer{color:var(--dim);text-align:center;padding:50px 0 80px;font-size:14px}
-  code{background:#0d1320;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:14.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:12px;letter-spacing:.6px;text-transform:uppercase}
+  td.s{color:var(--green);font-weight:600}
+
+  .bug{display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}
+  .bug:last-child{border-bottom:0}
+  .bug .id{flex:0 0 54px;color:var(--violet);font-weight:700;font-size:14px}
+  .bug .d{font-size:14.5px}
+  .bug .d b{color:var(--ink)} .bug .d span{color:var(--dim)}
+  .fixed{color:var(--green);font-size:12px;border:1px solid var(--green);border-radius:999px;padding:1px 7px;margin-left:6px}
+
+  footer{padding:50px 0 80px;text-align:center;color:var(--dim);font-size:14px}
+  code{background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13px}
+  a{color:var(--blue)}
 </style>
 </head>
 <body>
 <header>
   <div class="wrap">
-    <h1>The Overnight Run</h1>
-    <p class="sub">One autonomous director, a fleet of coding agents, and Agent Mesh's own backlog —
-      from 2:58am to 5:48am. This is the honest replay.</p>
-    <div class="tag">2026-06-26 · unattended · the mesh dogfooding the mesh</div>
+    <div class="tag">Agent Mesh · Dogfood Run</div>
+    <h1>The night the mesh started<br>finishing its own work.</h1>
+    <p class="sub">2026-06-28 · an autonomous director ran the mesh against its own GitHub backlog:
+      drop a ticket → a worker builds it → an Opus expert reviews it → it merges. Unattended.</p>
   </div>
 </header>
 
 <div class="wrap">
 
   <section class="reveal">
-    <h2>The pipeline we were testing</h2>
-    <div class="flow">
-      <div class="node"><div class="dot n1"></div><b class="n1">Planner</b><span>opus · splits an issue into a task DAG</span></div>
+    <h2>The result</h2>
+    <div class="scoreboard">
+      <div class="stat"><div class="n green">9</div><div class="l">issues built, reviewed &amp; merged</div></div>
+      <div class="stat"><div class="n blue">10</div><div class="l">PRs merged to <code>main</code></div></div>
+      <div class="stat"><div class="n">100%</div><div class="l"><code>main</code> green throughout</div></div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2>Before / after</h2>
+    <div class="ba">
+      <div><div class="big red">0 / 30</div><div class="cap">prior run (06-26): jobs merged</div></div>
       <div class="arrow">→</div>
-      <div class="node"><div class="dot n2"></div><b class="n2">Workers</b><span>sonnet · one git worktree each</span></div>
-      <div class="arrow">→</div>
-      <div class="node"><div class="dot n3"></div><b class="n3">Expert</b><span>opus · answers when a worker is stuck</span></div>
-      <div class="arrow">→</div>
-      <div class="node"><div class="dot n4"></div><b class="n4">Reviewer</b><span>opus · approve = merge</span></div>
+      <div><div class="big green">9 merged</div><div class="cap">this run (06-28): autonomous, reviewed</div></div>
     </div>
+    <p style="color:var(--dim);font-size:14.5px;margin-top:14px">
+      Two nights earlier the same fleet merged <b>nothing</b> — it could coordinate agents but collapsed
+      before finishing real work. That run produced a bug report, not code. This run closed the loop.</p>
   </section>
 
   <section class="reveal">
-    <h2>How the night actually went</h2>
-    <div class="tl">
-      <div class="ev fix"><div class="t">02:58 · LAUNCH</div><h3>Fleet up, backlog in <span class="pill fix">stable</span></h3>
-        <p>Coordinator, dashboard, review gating, auto-experts — all green. The control plane never wobbled all night.</p></div>
+    <h2>What was broken — and the three fixes that unlocked it</h2>
 
-      <div class="ev bad"><div class="t">RUN 1 · COLLAPSE</div><h3>Reviews ran on the wrong model <span class="pill bad">bug</span></h3>
-        <p><code>MESH_EXPERT_MODEL</code> was a silent no-op — reviewers ran the account default, not opus. And one
-        <code>request_changes</code> on a foundational task cascade-cancelled whole jobs.</p></div>
+    <div class="step"><div class="dot">1</div><div>
+      <h3>The worker leaked its own children <span class="fixed">fixed · #122</span></h3>
+      <p>Each <code>claude</code> worker spawned a subprocess tree; on timeout only the direct child was killed,
+         so grandchildren orphaned and piled up until they exhausted the account's session capacity and new
+         workers hung too — a self-strangling collapse. Fix: run the child in its own process group and kill
+         the whole group on cancel.</p></div></div>
 
-      <div class="ev fix"><div class="t">~03:30 · HAND-FIX</div><h3>Shipped the expert-model fix + <code>#85</code> <span class="pill fix">fixed</span></h3>
-        <p>Plumbed the expert model through; built <strong>#85</strong> so <code>request_changes</code> re-dispatches
-        <em>with feedback</em> instead of sinking the job. Tested, pushed.</p></div>
+    <div class="step"><div class="dot">2</div><div>
+      <h3>The planner over-decomposed</h3>
+      <p>Opus split modest tickets into 10–13 tasks, multiplying load on the single reviewer and widening every
+         cascade failure. Fix: the planner now defaults to <b>one task</b> and only splits for genuinely
+         independent work.</p></div></div>
 
-      <div class="ev bad"><div class="t">RUN 2 · COLLAPSE</div><h3>One reviewer, eight workers <span class="pill bad">bottleneck</span></h3>
-        <p>A single opus reviewer serialized every review at 45–110s each. With 8 workers the queue blew past the
-        5-minute gate — <strong>15 reviews timed out</strong> → cascade. Throughput ceiling, not bad code.</p></div>
-
-      <div class="ev fix"><div class="t">~04:28 · RE-TUNE</div><h3>Throughput-matched the fleet <span class="pill fix">tuned</span></h3>
-        <p>Capped workers to the reviewer's rate, widened the gate to 20m, and added cost logging so spend
-        survives an unlimited budget.</p></div>
-
-      <div class="ev bad"><div class="t">RUN 3a · COLLAPSE</div><h3>Every issue-job died at spawn <span class="pill bad">bug</span></h3>
-        <p><code>--issue owner/repo#N</code> stored the full slug as the repo; the worker rejects the slash as a
-        path-traversal guard. <strong>Workers never started.</strong> Worked around with <code>--repo agent-mesh</code>.</p></div>
-
-      <div class="ev bad"><div class="t">RUN 3b · THE DEEP ONE</div><h3>The fleet was strangling itself <span class="pill bad">critical</span></h3>
-        <p>Worker teardown never killed its <code>claude</code> child. <strong>29 zombie sessions</strong> piled up and
-        exhausted the account's concurrency, so new workers hung and timed out — spawning more zombies. A perfect loop.</p></div>
-
-      <div class="ev fix"><div class="t">05:21 · CLEANUP + FINAL TEST</div><h3>Cleared the zombies, serialized to one <span class="pill fix">isolated</span></h3>
-        <p>Surgically killed only the fleet zombies (left the human's own sessions alone), dropped to a single worker.
-        The cleanest possible shot at one green job.</p></div>
-
-      <div class="ev bad"><div class="t">05:48 · VERDICT</div><h3>Still no clean end-to-end job <span class="pill bad">0 merges</span></h3>
-        <p>Even serialized, the worker turn couldn't complete. Stopped tuning. The night's value isn't merged code —
-        it's the bug list below.</p></div>
-    </div>
+    <div class="step"><div class="dot">3</div><div>
+      <h3>Workers shipped good code that failed review on nits <span class="fixed">fixed · #130</span></h3>
+      <p>This was <b>the unlock</b>. Workers did correct work but the Opus reviewer kept issuing
+         <i>request_changes</i> for fixable details — an unaligned <code>gofmt</code> line, a feature left
+         backend-only — and <code>main</code> had no auto-retry, so good work hard-failed. Fix: a
+         <b>Definition of Done</b> — the worker now runs <code>gofmt</code> / <code>go build</code> /
+         <code>go test</code> and re-checks every acceptance criterion before finishing. Jobs flipped from
+         nit-failing to first-try approvals: <b>four clean passes in a row</b> right after it landed.</p></div></div>
   </section>
 
   <section class="reveal">
-    <h2>The scoreboard (no spin)</h2>
-    <div class="grid">
-      <div class="stat"><div class="v bad">0 / 30</div><div class="l">jobs done</div></div>
-      <div class="stat"><div class="v bad">0</div><div class="l">PRs merged</div></div>
-      <div class="stat"><div class="v acc">271</div><div class="l">tasks · 213 cancelled</div></div>
-      <div class="stat"><div class="v ok">6 / 8</div><div class="l">asks round-tripped</div></div>
-      <div class="stat"><div class="v ok">3</div><div class="l">bugs hand-fixed</div></div>
-      <div class="stat"><div class="v warn">$0.00</div><div class="l">cost (subscription)</div></div>
-      <div class="stat"><div class="v ok">0</div><div class="l">coordinator crashes</div></div>
-      <div class="stat"><div class="v acc">6</div><div class="l">real bugs found</div></div>
+    <h2>The review is real — not a rubber stamp</h2>
+
+    <div class="card">
+      <h3>✓ Approved — #98 per-agent cost</h3>
+      <div class="meta">Opus reviewer · first-try approve</div>
+      <blockquote>"Per-agent cost/model keying correctly matches the worker's registered card name; lock
+        discipline and SSE/REST/contract conventions are sound."</blockquote>
     </div>
+
+    <div class="card">
+      <h3>✗ Changes requested — #99 cost window</h3>
+      <div class="meta">Opus reviewer · caught an incomplete feature</div>
+      <blockquote class="rc">"The backend is solid and well-tested… <b>However, no frontend change renders the
+        cost window, so acceptance criterion #1 is unmet</b> — the data is exposed but never shown to the user."</blockquote>
+    </div>
+
+    <div class="card">
+      <h3>✗ Changes requested — #105 idle reaper</h3>
+      <div class="meta">Opus reviewer · caught a one-line formatting nit</div>
+      <blockquote class="rc">"The implementation is correct and well-tested… <b>However, the added
+        <code>EnvExpertIdleTTL</code> const line is not gofmt-aligned</b> — <code>make ci</code>'s fmt-check
+        would fail."</blockquote>
+    </div>
+    <p style="color:var(--dim);font-size:14.5px">An incomplete feature and a single misaligned line — both
+      caught. That precision is exactly why fix #3 mattered.</p>
   </section>
 
   <section class="reveal">
-    <h2>What dogfooding surfaced</h2>
-    <div class="bug"><span class="sev">CRITICAL</span><b>1 · Worker leaks its <code>claude</code> child</b>
-      <p>Teardown doesn't kill the runtime process on timeout. Zombies accumulate until the account's concurrency is
-      exhausted and long runs strangle themselves. Fix first — nothing else matters until this is closed.</p></div>
-    <div class="bug"><span class="sev">CRITICAL · ARCH</span><b>2 · One expert is a fleet-wide throughput ceiling</b>
-      <p>A single reviewer serializes every review and every ask. The highest-leverage change is a reviewer/expert
-      <em>pool</em>, or binding worker concurrency to review throughput.</p></div>
-    <div class="bug hi"><span class="sev">HIGH</span><b>3 · Issue ingestion stores the wrong repo</b>
-      <p><code>job.repo</code> keeps the full <code>owner/repo</code> slug; the worker rejects the slash. Normalize to
-      the last path segment.</p></div>
-    <div class="bug hi"><span class="sev">HIGH</span><b>4 · Review gate + cascade-cancel is brittle</b>
-      <p><code>#85</code> softens it, but one reject still sinks a whole multi-task job. Consider per-task isolation.</p></div>
-    <div class="bug lo"><span class="sev">MEDIUM</span><b>5 · Planner over-decomposes</b>
-      <p>10–13 tasks for modest features multiplies load on the single expert. Give decomposition a budget.</p></div>
-    <div class="bug lo"><span class="sev">LOW · FIXED</span><b>6 · Cost unobservable at unlimited budget</b>
-      <p>Now logged per accrual. (Values are $0 — this is a subscription account, not a missing metric.)</p></div>
+    <h2>Merged this run</h2>
+    <table>
+      <tr><th>Issue</th><th>What shipped</th><th>PR</th><th>Status</th></tr>
+      <tr><td>#96</td><td>Group dashboard tasks by job + readable labels</td><td>#127</td><td class="s">merged</td></tr>
+      <tr><td>#97</td><td>Show GitHub issue link on issue-sourced jobs</td><td>#126</td><td class="s">merged</td></tr>
+      <tr><td>#98</td><td>Per-agent model + cumulative cost in dashboard</td><td>#136</td><td class="s">merged</td></tr>
+      <tr><td>#99</td><td>Persistent cost window — ledger + API + UI</td><td>#128, #131</td><td class="s">merged</td></tr>
+      <tr><td>#105</td><td>Idle agent reaper (self-terminate on TTL)</td><td>#129</td><td class="s">merged</td></tr>
+      <tr><td>#110</td><td>Submit a job from a GitHub issue link</td><td>#134</td><td class="s">merged</td></tr>
+      <tr><td>#111</td><td>Natural-language job control (issue N / range / all)</td><td>#133</td><td class="s">merged</td></tr>
+      <tr><td>#119</td><td>HTTP <code>POST /jobs</code> dispatch ingress</td><td>#135</td><td class="s">merged</td></tr>
+      <tr><td>—</td><td>Infra: worker-leak fix + planner curb; worker Definition-of-Done</td><td>#124, #130</td><td class="s">merged</td></tr>
+    </table>
+    <p style="color:var(--dim);font-size:13.5px;margin-top:12px">≈ $22.82 in worker spend across 11 runs ·
+      planner Opus · workers Sonnet · reviewer Opus · review gating ON the whole run.</p>
   </section>
 
   <section class="reveal">
-    <h2>The verdict</h2>
-    <div class="two">
-      <div class="col ok"><h4>✓ What worked</h4>
-        <ul>
-          <li>Presence & registry — heartbeats, eviction, zero crashes across 5+ bounces</li>
-          <li>Ask/answer — 6/8 full round-trips, exactly-one-responder routing, real cross-agent conflict avoidance</li>
-          <li>Triage — valid DAGs every time</li>
-          <li>Three real fixes authored, tested, pushed (<code>#85</code> + expert-model + cost)</li>
-        </ul></div>
-      <div class="col no"><h4>✕ What didn't</h4>
-        <ul>
-          <li>Worker → review → merge never completed a job under real load</li>
-          <li>The fleet leaked itself into a concurrency deadlock</li>
-          <li>Not "set and forget" — needed heavy director intervention</li>
-          <li>Zero autonomous merges</li>
-        </ul></div>
-    </div>
+    <h2>Bugs the run surfaced</h2>
+    <div class="bug"><div class="id">#122</div><div class="d"><b>Worker child-process leak<span class="fixed">fixed</span></b>
+      <span>— grandchild processes orphaned on timeout. Fixed via process-group kill.</span></div></div>
+    <div class="bug"><div class="id">#123</div><div class="d"><b>Single-reviewer throughput ceiling</b>
+      <span>— one Opus reviewer serializes every review; needs an expert pool to scale past ~2 workers.</span></div></div>
+    <div class="bug"><div class="id">#125</div><div class="d"><b>Cold-start review race</b>
+      <span>— a freshly auto-spawned reviewer can miss the re-delivered first request. Warm reviewers are unaffected.</span></div></div>
+    <div class="bug"><div class="id">#85</div><div class="d"><b>No auto re-dispatch on <i>request_changes</i></b>
+      <span>— on <code>main</code>, requested changes hard-fail instead of looping back with feedback. Worked around by hardening the worker so it ships review-clean.</span></div></div>
+  </section>
+
+  <section class="reveal">
+    <h2>Honest notes</h2>
+    <div class="step"><div class="dot">·</div><div><h3>Cold-start cost two reviews</h3>
+      <p>Each time the reviewer spawned cold, its very first review could be lost to #125. Keeping the reviewer
+         warm (no coordinator bounces) made every subsequent review land.</p></div></div>
+    <div class="step"><div class="dot">·</div><div><h3>Dashboard jobs collided on <code>web/app.js</code></h3>
+      <p>Parallel UI jobs edit the same file and conflict at merge time — claims are advisory within a run, not
+         across git branches. Resolved by sequencing UI work and keep-both rebases.</p></div></div>
+    <div class="step"><div class="dot">·</div><div><h3>Throughput stayed at 2 workers</h3>
+      <p>The single reviewer (#123) is the ceiling. The fix list is clear: an expert pool is the next unlock.</p></div></div>
   </section>
 
   <footer>
-    The mesh couldn't build itself tonight — but it told us exactly why, in six specific, fixable ways.<br>
-    Fix the child-process leak, add an expert pool, and run this again. Full report in <code>STATUS.md</code>.
+    Agent Mesh · autonomous dogfood run · 2026-06-28<br>
+    drop a ticket → worker builds → Opus reviews → merge.
   </footer>
 </div>
 
 <script>
-  const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in')}),{threshold:.12});
-  document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+  const obs=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in')}),{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
 </script>
 </body>
 </html>

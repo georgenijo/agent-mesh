@@ -294,6 +294,15 @@ body {
   color: var(--on-surface-dim);
   flex-shrink: 0;
 }
+.cost-section-hdr {
+  padding: 4px 10px 0;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--outline);
+  opacity: .6;
+}
 
 .panel-hdr {
   display: flex;

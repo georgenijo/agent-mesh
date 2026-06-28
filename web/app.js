@@ -716,7 +716,11 @@ function renderAgents() {
   list.innerHTML = state.agents.map((agent) => {
     const card = agent.card || {};
     const pillClass = agent.state === "live" ? "green" : agent.state === "away" ? "amber" : "rose";
-    const meta = [card.role || "-", card.repo || "", "seen " + ageText(agent.lastSeen) + " ago"].filter(Boolean).join(" · ");
+    const agentName = card.name || card.id || "";
+    const agentCost = (state.cost && state.cost.byAgent && agentName) ? (state.cost.byAgent[agentName] || 0) : 0;
+    const costTag = agentCost > 0 ? ' · <span style="color:#ffb31f">$' + agentCost.toFixed(4) + '</span>' : '';
+    const modelTag = card.model ? ' · <span style="color:#7d8da0">' + esc(card.model) + '</span>' : '';
+    const metaParts = [card.role || "-", card.repo || "", "seen " + ageText(agent.lastSeen) + " ago"].filter(Boolean);
     const session = sessionForMeshAgent(agent);
     const sessionMeta = session
       ? '<div class="row-insight">' +
@@ -728,7 +732,7 @@ function renderAgents() {
     return '<div class="row" data-drill-agent="' + esc(card.id || card.name || "") + '" style="border-left-color:' + (agent.state === "live" ? "rgba(56,255,163,.6)" : "rgba(255,179,31,.6)") + '">' +
       '<div class="row-top"><div class="row-title">' + esc(card.name || card.id || "unknown") + '</div>' +
       '<span class="pill ' + pillClass + '">' + esc(agent.state || "-") + "</span></div>" +
-      '<div class="row-meta">' + esc(meta) + "</div>" +
+      '<div class="row-meta">' + esc(metaParts.join(" · ")) + modelTag + costTag + "</div>" +
       (agent.lastStatus ? '<div class="row-body">' + esc(agent.lastStatus) + "</div>" : "") +
       sessionMeta +
       "</div>";
@@ -924,6 +928,7 @@ function renderCost() {
   const spent = typeof c.spentUSD === "number" ? c.spentUSD : 0;
   const budget = typeof c.budgetUSD === "number" ? c.budgetUSD : 0;
   const byModel = c.byModel && typeof c.byModel === "object" ? c.byModel : {};
+  const byAgent = c.byAgent && typeof c.byAgent === "object" ? c.byAgent : {};
 
   const spentFmt = "$" + spent.toFixed(4);
   const budgetFmt = budget > 0 ? " / $" + budget.toFixed(2) : "";
@@ -953,13 +958,29 @@ function renderCost() {
       '</div>'
     : "";
 
+  const agentRows = Object.keys(byAgent).length
+    ? '<div class="cost-models">' +
+      Object.entries(byAgent)
+        .sort((a, b) => b[1] - a[1])
+        .map(([agent, val]) => {
+          const ag = state.agents.find((a) => { const c = a.card || {}; return (c.name || c.id) === agent; });
+          const model = ag && ag.card ? (ag.card.model || "") : "";
+          return '<div class="cost-model-row">' +
+            '<span class="cost-model-name">' + esc(agent) + (model ? ' <span style="color:#7d8da0;font-size:11px">· ' + esc(model) + '</span>' : '') + '</span>' +
+            '<span class="cost-model-val">$' + val.toFixed(4) + '</span>' +
+            '</div>';
+        }).join("") +
+      '</div>'
+    : "";
+
   win.innerHTML =
     '<div class="cost-summary">' +
     '<span class="cost-spent">' + esc(spentFmt) + '</span>' +
     (budget > 0 ? '<span class="cost-budget">of $' + budget.toFixed(2) + (over ? " — over budget" : "") + '</span>' : '<span class="cost-budget">no cap</span>') +
     '</div>' +
     barHtml +
-    modelRows;
+    (modelRows ? '<div class="cost-section-hdr">by model</div>' + modelRows : "") +
+    (agentRows ? '<div class="cost-section-hdr">by agent</div>' + agentRows : "");
 }
 
 function renderJobs() {
@@ -1038,10 +1059,15 @@ function renderTasks() {
     for (const t of group.tasks) {
       const color = taskStateColor(t.state);
       const workerLabel = t.worker || "";
+      const ag = workerLabel ? state.agents.find((a) => { const ac = a.card || {}; return (ac.name || ac.id) === workerLabel; }) : null;
+      const model = ag && ag.card ? (ag.card.model || "") : "";
+      const agentCost = (state.cost && state.cost.byAgent && workerLabel) ? (state.cost.byAgent[workerLabel] || 0) : 0;
+      const costTag = agentCost > 0 ? ' · <span style="color:#ffb31f">$' + agentCost.toFixed(4) + '</span>' : '';
+      const modelTag = model ? ' · <span style="color:#7d8da0">' + esc(model) + '</span>' : '';
       html += '<div class="row task-row" data-drill-task="' + esc(t.id) + '" style="border-left-color:' + color + '">' +
         '<div class="row-top"><div class="row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div>' +
         '<span class="pill" style="border-color:' + color + ';color:' + color + '">' + esc(t.state) + '</span></div>' +
-        '<div class="row-meta">' + esc(t.role) + (workerLabel ? ' · ' + esc(workerLabel) : '') + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
+        '<div class="row-meta">' + esc(t.role) + (workerLabel ? ' · ' + esc(workerLabel) : '') + modelTag + costTag + ' · ' + esc(ageText(t.ts)) + ' ago</div>' +
         '</div>';
     }
     html += '</div>';

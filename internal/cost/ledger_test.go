@@ -43,19 +43,22 @@ func TestLedgerLoadEmpty(t *testing.T) {
 	if len(snap.ByModel) != 0 {
 		t.Errorf("ByModel = %v, want empty", snap.ByModel)
 	}
+	if len(snap.ByAgent) != 0 {
+		t.Errorf("ByAgent = %v, want empty", snap.ByAgent)
+	}
 }
 
 func TestLedgerAccrual(t *testing.T) {
 	cli := newTestBus(t)
 	l := cost.New(cli)
 
-	if err := l.Add(0.10, "sonnet"); err != nil {
+	if err := l.Add(0.10, "sonnet", "w-aaa"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := l.Add(0.25, "sonnet"); err != nil {
+	if err := l.Add(0.25, "sonnet", "w-aaa"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := l.Add(0.05, "opus"); err != nil {
+	if err := l.Add(0.05, "opus", "w-bbb"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -72,6 +75,12 @@ func TestLedgerAccrual(t *testing.T) {
 	}
 	if snap.ByModel["opus"]-0.05 > 1e-9 || snap.ByModel["opus"]-0.05 < -1e-9 {
 		t.Errorf("ByModel[opus] = %v, want 0.05", snap.ByModel["opus"])
+	}
+	if snap.ByAgent["w-aaa"]-0.35 > 1e-9 || snap.ByAgent["w-aaa"]-0.35 < -1e-9 {
+		t.Errorf("ByAgent[w-aaa] = %v, want 0.35", snap.ByAgent["w-aaa"])
+	}
+	if snap.ByAgent["w-bbb"]-0.05 > 1e-9 || snap.ByAgent["w-bbb"]-0.05 < -1e-9 {
+		t.Errorf("ByAgent[w-bbb] = %v, want 0.05", snap.ByAgent["w-bbb"])
 	}
 }
 
@@ -95,7 +104,7 @@ func TestLedgerPersistence(t *testing.T) {
 		t.Fatalf("dial srv1: %v", err)
 	}
 	l1 := cost.New(cli1)
-	if err := l1.Add(1.50, "sonnet"); err != nil {
+	if err := l1.Add(1.50, "sonnet", "w-ccc"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	cli1.Close()
@@ -127,12 +136,15 @@ func TestLedgerPersistence(t *testing.T) {
 	if snap.ByModel["sonnet"]-1.50 > 1e-9 || snap.ByModel["sonnet"]-1.50 < -1e-9 {
 		t.Errorf("ByModel[sonnet] after restart = %v, want 1.50", snap.ByModel["sonnet"])
 	}
+	if snap.ByAgent["w-ccc"]-1.50 > 1e-9 || snap.ByAgent["w-ccc"]-1.50 < -1e-9 {
+		t.Errorf("ByAgent[w-ccc] after restart = %v, want 1.50", snap.ByAgent["w-ccc"])
+	}
 }
 
 func TestLedgerNoModelDoesNotPanic(t *testing.T) {
 	cli := newTestBus(t)
 	l := cost.New(cli)
-	if err := l.Add(0.01, ""); err != nil {
+	if err := l.Add(0.01, "", ""); err != nil {
 		t.Fatalf("Add with empty model: %v", err)
 	}
 	snap, err := l.Load()

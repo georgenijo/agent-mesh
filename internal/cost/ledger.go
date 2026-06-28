@@ -17,6 +17,7 @@ const ledgerKey = "total"
 type Snapshot struct {
 	SpentUSD float64            `json:"spentUSD"`
 	ByModel  map[string]float64 `json:"byModel,omitempty"`
+	ByAgent  map[string]float64 `json:"byAgent,omitempty"`
 }
 
 // Ledger reads and writes cost totals to the coordinator-owned KV bucket.
@@ -38,11 +39,12 @@ func (l *Ledger) Load() (Snapshot, error) {
 	return snap, err
 }
 
-// Add atomically adds delta to the cumulative total and credits model (when
-// non-empty) in the per-model breakdown. It retries up to 5 times on CAS
-// conflicts; in practice, the scheduler's single loop goroutine is the only
-// writer so contention is near-zero.
-func (l *Ledger) Add(delta float64, model string) error {
+// Add atomically adds delta to the cumulative total, credits model (when
+// non-empty) in the per-model breakdown, and credits agent (when non-empty)
+// in the per-agent breakdown. It retries up to 5 times on CAS conflicts; in
+// practice, the scheduler's single loop goroutine is the only writer so
+// contention is near-zero.
+func (l *Ledger) Add(delta float64, model, agent string) error {
 	const maxRetries = 5
 	for i := 0; i < maxRetries; i++ {
 		snap, rev, err := l.load()
@@ -55,6 +57,12 @@ func (l *Ledger) Add(delta float64, model string) error {
 				snap.ByModel = make(map[string]float64)
 			}
 			snap.ByModel[model] += delta
+		}
+		if agent != "" {
+			if snap.ByAgent == nil {
+				snap.ByAgent = make(map[string]float64)
+			}
+			snap.ByAgent[agent] += delta
 		}
 		_, err = l.cli.KVPut(envelope.BucketCostLedger, ledgerKey, snap,
 			bus.PutOptions{CAS: bus.Rev(rev)})

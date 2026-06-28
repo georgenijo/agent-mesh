@@ -44,6 +44,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/claim"
 	"github.com/georgenijo/agent-mesh/internal/config"
+	"github.com/georgenijo/agent-mesh/internal/cost"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/job"
 	"github.com/georgenijo/agent-mesh/internal/observe"
@@ -116,6 +117,15 @@ type fleetSnap struct {
 	SpentUSD  float64                 `json:"spentUSD,omitempty"`
 	BudgetUSD float64                 `json:"budgetUSD,omitempty"`
 	TS        time.Time               `json:"ts"`
+}
+
+// costSnap carries the persistent cost window as carried in the "cost" SSE
+// frame and GET /api/cost: cumulative spend, configured budget, and per-model
+// breakdown. Populated from the durable cost-ledger KV bucket.
+type costSnap struct {
+	SpentUSD  float64            `json:"spentUSD"`
+	BudgetUSD float64            `json:"budgetUSD,omitempty"`
+	ByModel   map[string]float64 `json:"byModel,omitempty"`
 }
 
 // claimLogEntry is one observed claim lifecycle event for the history panel.
@@ -244,6 +254,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
 	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
+	mux.HandleFunc("GET /api/cost", d.serveCost)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
@@ -596,6 +607,7 @@ func (d *Dashboard) rosterLoop() {
 			d.broadcast(msg)
 			d.tickClaims()
 			d.tickNotes(roster)
+			d.tickCost()
 		}
 	}
 }
@@ -636,6 +648,44 @@ func (d *Dashboard) tickClaims() {
 	if msg, err := json.Marshal(map[string]any{"type": "claims", "claims": held}); err == nil {
 		d.broadcast(msg)
 	}
+}
+
+// tickCost reads the persistent cost ledger and pushes a "cost" SSE frame to
+// all connected browsers. Budget is read from config so the panel shows the
+// effective cap even before any cost has accrued.
+func (d *Dashboard) tickCost() {
+	ledger := cost.New(d.bus)
+	snap, err := ledger.Load()
+	if err != nil {
+		return
+	}
+	cs := costSnap{
+		SpentUSD:  snap.SpentUSD,
+		BudgetUSD: d.cfg.BudgetUSD,
+		ByModel:   snap.ByModel,
+	}
+	if msg, err := json.Marshal(map[string]any{"type": "cost", "cost": cs}); err == nil {
+		d.broadcast(msg)
+	}
+}
+
+// serveCost returns the persistent cost window: cumulative spend, configured
+// budget (MESH_BUDGET_USD), and per-model breakdown. Read-only, same posture
+// as /api/roster — the cost-ledger KV bucket is the one authority.
+func (d *Dashboard) serveCost(w http.ResponseWriter, _ *http.Request) {
+	ledger := cost.New(d.bus)
+	snap, err := ledger.Load()
+	if err != nil {
+		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	cs := costSnap{
+		SpentUSD:  snap.SpentUSD,
+		BudgetUSD: d.cfg.BudgetUSD,
+		ByModel:   snap.ByModel,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cs) //nolint:errcheck
 }
 
 // tickNotes tails every visible repo's blackboard stream and broadcasts new
@@ -1287,6 +1337,17 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 		if msg, err := json.Marshal(map[string]any{"type": "fleet", "fleet": *fleetSnap}); err == nil {
 			fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
 			flusher.Flush()
+		}
+	}
+
+	// Initial cost snapshot so the cost panel renders immediately on connect.
+	if ledger := cost.New(d.bus); ledger != nil {
+		if snap, err := ledger.Load(); err == nil {
+			cs := costSnap{SpentUSD: snap.SpentUSD, BudgetUSD: d.cfg.BudgetUSD, ByModel: snap.ByModel}
+			if msg, err := json.Marshal(map[string]any{"type": "cost", "cost": cs}); err == nil {
+				fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+				flusher.Flush()
+			}
 		}
 	}
 

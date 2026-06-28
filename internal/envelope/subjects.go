@@ -98,6 +98,10 @@ const (
 	BucketJobs           = "jobs"
 	BucketTasks          = "tasks"
 	BucketTriageAttempts = "triage-attempts"
+	// BucketCostLedger persists cumulative spend and per-model cost breakdowns
+	// across coordinator restarts. The scheduler is its sole writer; the
+	// dashboard reads it via GET /api/cost.
+	BucketCostLedger = "cost-ledger"
 )
 
 // Streams (bounded).

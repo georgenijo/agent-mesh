@@ -43,6 +43,7 @@ type Result struct {
 	CostUSD   float64                  // the run's total_cost_usd (reported even for failed runs)
 	SessionID string                   // runtime session, for traceability
 	Branch    string                   // worker output branch holding the committed work (success only); the scheduler records it on the task so dependents inherit it
+	Model     string                   // model name used for this run (for per-model cost breakdown); empty = unknown
 }
 
 // Succeeded reports a typed success.

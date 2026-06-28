@@ -99,7 +99,7 @@ func (w *cliWorker) Run(ctx context.Context) (Result, error) {
 	if ev.Result == nil {
 		return Result{}, fmt.Errorf("worker stdout is %q, not a result envelope", ev.Type)
 	}
-	res := Result{CostUSD: ev.Result.TotalCostUSD, SessionID: ev.Result.SessionID}
+	res := Result{CostUSD: ev.Result.TotalCostUSD, SessionID: ev.Result.SessionID, Model: w.d.Model}
 	switch {
 	case ev.Result.Succeeded():
 		res.Summary = ev.Result.Result

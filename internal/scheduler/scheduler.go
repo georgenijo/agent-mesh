@@ -17,18 +17,24 @@
 // never failed. The meter is in-memory per coordinator lifetime; restarting
 // the coordinator (e.g. after the monthly credit refresh) is the reset.
 // rate_limited results back off and retry; they never fail the task.
+//
+// Persistent cost ledger: when Options.CostLedger is non-nil, the scheduler
+// loads the previously accumulated spend on startup (so s.spent survives a
+// restart when the ledger's bucket is persisted) and records each run's cost
+// back to the ledger after every outcome. The dashboard reads the ledger via
+// GET /api/cost. Without a ledger, behaviour is unchanged (in-memory only).
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
-	"context"
-
 	"github.com/georgenijo/agent-mesh/internal/bus"
+	"github.com/georgenijo/agent-mesh/internal/cost"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/job"
 	"github.com/georgenijo/agent-mesh/internal/task"
@@ -59,6 +65,13 @@ type Options struct {
 	// reject, and every review error fail the task, never silently pass it.
 	// Review cost accrues against the same budget meter as worker runs.
 	Reviewer Reviewer
+
+	// CostLedger persists cumulative spend and per-model breakdown across
+	// coordinator restarts. When set, the scheduler loads any prior spent
+	// total from the ledger on startup (so s.spent picks up where the last
+	// coordinator left off) and records each run's cost back to the ledger
+	// after every outcome. Nil = in-memory-only (pre-#99 behaviour).
+	CostLedger *cost.Ledger
 }
 
 // outcome is one finished worker run, delivered from a worker goroutine to
@@ -86,10 +99,12 @@ type Scheduler struct {
 	results chan outcome
 	reviews chan reviewOutcome
 
+	costLedger *cost.Ledger // nil = in-memory-only
+
 	// Loop-goroutine-only state.
 	inflight map[string]string    // task id → job id, workers in flight this lifetime
 	retryAt  map[string]time.Time // task id → earliest re-dispatch (rate-limit backoff)
-	spent    float64              // accumulated CostUSD this coordinator lifetime
+	spent    float64              // accumulated CostUSD this coordinator lifetime (seeded from ledger on startup)
 	paused   bool                 // fleet paused: nothing new spawns until restart
 
 	ctx     context.Context // cancels in-flight workers on Stop
@@ -117,20 +132,34 @@ func New(cli *bus.Client, opts Options) (*Scheduler, error) {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
+
+	// Seed spent from the persisted ledger so the budget meter is accurate
+	// after a restart and so the dashboard shows the running total.
+	var initialSpent float64
+	if opts.CostLedger != nil {
+		if snap, err := opts.CostLedger.Load(); err != nil {
+			opts.Log.Warn("scheduler: load cost ledger failed; starting from 0", "err", err)
+		} else {
+			initialSpent = snap.SpentUSD
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		opts:     opts,
-		cli:      cli,
-		log:      opts.Log,
-		jobs:     job.NewStore(cli),
-		tasks:    task.NewStore(cli),
-		results:  make(chan outcome),
-		reviews:  make(chan reviewOutcome),
-		inflight: make(map[string]string),
-		retryAt:  make(map[string]time.Time),
-		ctx:      ctx,
-		cancel:   cancel,
-		stop:     make(chan struct{}),
+		opts:       opts,
+		cli:        cli,
+		log:        opts.Log,
+		jobs:       job.NewStore(cli),
+		tasks:      task.NewStore(cli),
+		results:    make(chan outcome),
+		reviews:    make(chan reviewOutcome),
+		costLedger: opts.CostLedger,
+		inflight:   make(map[string]string),
+		retryAt:    make(map[string]time.Time),
+		spent:      initialSpent,
+		ctx:        ctx,
+		cancel:     cancel,
+		stop:       make(chan struct{}),
 	}, nil
 }
 
@@ -375,6 +404,11 @@ func (s *Scheduler) handleOutcome(o outcome) {
 		res = Result{Code: code, Summary: o.err.Error(), CostUSD: o.res.CostUSD}
 	}
 	s.spent += res.CostUSD
+	if s.costLedger != nil && res.CostUSD != 0 {
+		if err := s.costLedger.Add(res.CostUSD, res.Model); err != nil {
+			s.log.Warn("scheduler: persist cost ledger failed", "err", err)
+		}
+	}
 	s.publishWorker(o.task, res)
 
 	switch {
@@ -485,6 +519,11 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 	delete(s.inflight, o.task.ID)
 	dec := o.dec
 	s.spent += dec.CostUSD
+	if s.costLedger != nil && dec.CostUSD != 0 {
+		if err := s.costLedger.Add(dec.CostUSD, ""); err != nil {
+			s.log.Warn("scheduler: persist review cost ledger failed", "err", err)
+		}
+	}
 
 	switch {
 	case dec.NoDiff:

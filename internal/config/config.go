@@ -49,6 +49,7 @@ const (
 	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
 	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
+	EnvJobsAddr              = "MESH_JOBS_ADDR"           // HTTP ingress for POST /jobs (#119); empty (default) = disabled
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -215,6 +216,13 @@ type Config struct {
 	// cleanly and deregisters, so the coordinator forgets it and re-spawns on
 	// demand. 0 disables the reaper (the expert runs until signalled).
 	ExpertIdleTTL time.Duration
+
+	// JobsAddr is the listen address for the HTTP POST /jobs dispatch ingress
+	// (#119). Empty (the default) disables the listener entirely — the
+	// ingress only starts when explicitly configured, on the same opt-in
+	// posture as PlannerCLI/WorkerCLI: an autostarted coordinator must never
+	// open extra network ports unless the operator set this.
+	JobsAddr string
 }
 
 // Load resolves config from the environment with defaults.
@@ -361,6 +369,7 @@ func Load() (Config, error) {
 		cfg.ExpertIdleTTL = dur // 0 = disabled (reaper never fires)
 	}
 	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off
+	cfg.JobsAddr = os.Getenv(EnvJobsAddr)     // empty = ingress disabled
 	cfg.ReposDir = os.Getenv(EnvReposDir)     // empty = worker driver refuses to construct
 	if cfg.ReposDir != "" {
 		absRepos, err := filepath.Abs(cfg.ReposDir)

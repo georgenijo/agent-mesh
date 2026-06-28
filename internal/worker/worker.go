@@ -502,7 +502,18 @@ func (w *worker) buildPrompt() string {
 		b.WriteString("\n" + primer + "\n")
 	}
 
-	b.WriteString("\nDo the work, then reply with a concise summary of what you did.")
+	// Definition of done. Your diff WILL be reviewed by an expert and rejected
+	// (the whole job fails) for gofmt nits, build/test breakage, or unmet
+	// acceptance criteria — the most common rejection causes observed in
+	// dogfooding. Self-verify before you finish; a few shell commands now beats
+	// a rejected diff later.
+	b.WriteString("\n\nDEFINITION OF DONE — verify ALL of these before you reply, and fix anything that fails:\n")
+	b.WriteString("1. Formatting: run `gofmt -w .` in the repo. The tree MUST be gofmt-clean (CI's fmt-check fails otherwise) — this includes aligned const/var blocks, not just your new lines.\n")
+	b.WriteString("2. Build: `go build ./...` must pass.\n")
+	b.WriteString("3. Tests: `go test ./...` must pass for every package you touched; add or update tests when you change behavior.\n")
+	b.WriteString("4. Acceptance: re-read EVERY acceptance criterion above and confirm each is fully met — including any user-facing/UI/frontend part. Do not ship a feature backend-only when the criteria call for it to be visible.\n")
+	b.WriteString("5. Scope: keep the change focused on this task; do not leave debug prints or unrelated edits.\n")
+	b.WriteString("\nWhen all five pass, commit your work and reply with a concise summary (note what you ran to verify).")
 	return b.String()
 }
 

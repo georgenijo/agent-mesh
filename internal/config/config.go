@@ -50,6 +50,7 @@ const (
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
 	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
 	EnvJobsAddr              = "MESH_JOBS_ADDR"           // HTTP ingress for POST /jobs (#119); empty (default) = disabled
+	EnvGitHubRepo            = "MESH_GITHUB_REPO"         // GitHub repo (owner/repo) for NL job control (`mesh work`); empty = mesh work disabled
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -223,6 +224,10 @@ type Config struct {
 	// posture as PlannerCLI/WorkerCLI: an autostarted coordinator must never
 	// open extra network ports unless the operator set this.
 	JobsAddr string
+	// GitHubRepo is the owner/repo string used by `mesh work` to resolve
+	// natural-language issue references against GitHub. Empty means `mesh work`
+	// is not configured and will return a clear error.
+	GitHubRepo string
 }
 
 // Load resolves config from the environment with defaults.
@@ -370,6 +375,7 @@ func Load() (Config, error) {
 	}
 	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off
 	cfg.JobsAddr = os.Getenv(EnvJobsAddr)     // empty = ingress disabled
+	cfg.GitHubRepo = os.Getenv(EnvGitHubRepo) // empty = mesh work disabled
 	cfg.ReposDir = os.Getenv(EnvReposDir)     // empty = worker driver refuses to construct
 	if cfg.ReposDir != "" {
 		absRepos, err := filepath.Abs(cfg.ReposDir)

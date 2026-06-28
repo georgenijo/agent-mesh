@@ -59,6 +59,11 @@
       <span class="tm-label">Tasks</span>
       <span class="tm-val tm-cyan" id="taskMetric">0</span>
     </div>
+    <div class="tm-div"></div>
+    <div class="tm">
+      <span class="tm-label">Spent</span>
+      <span class="tm-val tm-amber" id="costMetric">—</span>
+    </div>
   </div>
 
   <div class="topbar-right">
@@ -202,6 +207,17 @@
       </div>
       <div class="panel-body">
         <div id="fleetStatus" class="list"></div>
+      </div>
+    </div>
+
+    <!-- Cost window: populated from GET /api/cost + 'cost' SSE frame -->
+    <div class="panel panel-cost">
+      <div class="panel-hdr">
+        <span class="panel-title">COST</span>
+        <span id="costPill" class="pill">—</span>
+      </div>
+      <div class="panel-body">
+        <div id="costWindow" class="list"></div>
       </div>
     </div>
 

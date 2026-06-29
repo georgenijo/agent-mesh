@@ -1312,6 +1312,85 @@ function buildLegend() {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Settings overlay (#100). Read-only view of GET /api/settings.
+ * Values are grouped into Workers & Models, Budget & Cost, Review,
+ * Repos, Access. A note reminds the user that changes need a restart.
+ * ------------------------------------------------------------------------- */
+(function settingsUI() {
+  var overlay = byId("settingsOverlay");
+  var body    = byId("settingsBody");
+  var openBtn = byId("settingsBtn");
+  var closeBtn = byId("settingsClose");
+
+  function row(label, value) {
+    var v = (value === null || value === undefined || value === "") ? '<em style="color:var(--outline)">—</em>' : esc(String(value));
+    return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:1rem;padding:0.2rem 0;border-bottom:1px solid var(--outline-dim)">' +
+      '<span style="font-size:0.72rem;font-family:var(--font-mono);color:var(--on-surface-dim);text-transform:uppercase;letter-spacing:0.05em">' + esc(label) + '</span>' +
+      '<span style="font-family:var(--font-mono);font-size:0.8rem;color:var(--primary-mid);text-align:right">' + v + '</span>' +
+      '</div>';
+  }
+
+  function group(title, rows) {
+    return '<div style="margin-bottom:1rem">' +
+      '<div style="font-size:0.65rem;font-family:var(--font-mono);letter-spacing:0.1em;text-transform:uppercase;color:var(--outline);margin-bottom:0.4rem;padding-bottom:0.2rem;border-bottom:1px solid var(--outline-dim)">' + esc(title) + '</div>' +
+      rows.join("") +
+      '</div>';
+  }
+
+  function renderSettings(s) {
+    var sections = [
+      group("Workers & Models", [
+        row("Worker CLI",        s.workerCLI),
+        row("Worker Model",      s.workerModel),
+        row("Planner CLI",       s.plannerCLI),
+        row("Planner Model",     s.plannerModel),
+        row("Max Workers",       s.maxWorkers),
+        row("Worker Timeout",    s.workerTimeout),
+        row("Triage Timeout",    s.triageTimeout),
+      ]),
+      group("Budget & Cost", [
+        row("Budget USD",        s.budgetUSD > 0 ? "$" + s.budgetUSD.toFixed(2) : "unlimited"),
+      ]),
+      group("Review", [
+        row("Review Role",       s.reviewRole),
+        row("Review Timeout",    s.reviewTimeout),
+        row("Review Pool Size",  s.reviewPoolSize),
+        row("Review Retries",    s.reviewRetries),
+      ]),
+      group("Repos", [
+        row("Repos Dir",         s.reposDir),
+      ]),
+      group("Access", [
+        row("Dashboard Addr",    s.dashboardAddr),
+        row("Observe Addr",      s.observeAddr),
+        row("Auto-Experts",      s.autoExperts ? "on" : "off"),
+        row("Expert Idle TTL",   s.expertIdleTTL),
+      ]),
+    ];
+    body.innerHTML = sections.join("") +
+      '<p style="font-size:0.7rem;color:var(--outline);margin-top:0.75rem;text-align:center">' +
+      'Read-only — changes require a coordinator restart.' +
+      '</p>';
+  }
+
+  function openSettings() {
+    body.innerHTML = '<p style="font-size:0.75rem;color:var(--outline)">Loading…</p>';
+    overlay.hidden = false;
+    fetch("/api/settings")
+      .then(function(r) { return r.json(); })
+      .then(renderSettings)
+      .catch(function() {
+        body.innerHTML = '<p style="color:var(--error);font-size:0.8rem">Failed to load settings.</p>';
+      });
+  }
+
+  openBtn.addEventListener("click", openSettings);
+  closeBtn.addEventListener("click", function() { overlay.hidden = true; });
+  overlay.addEventListener("click", function(e) { if (e.target === overlay) overlay.hidden = true; });
+  document.addEventListener("keydown", function(e) { if (e.key === "Escape") overlay.hidden = true; });
+})();
+
+/* ------------------------------------------------------------------------- *
  * Boot.
  * ------------------------------------------------------------------------- */
 

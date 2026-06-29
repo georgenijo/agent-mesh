@@ -67,6 +67,7 @@
   </div>
 
   <div class="topbar-right">
+    <button type="button" class="jf-fab" id="settingsBtn" aria-haspopup="dialog" style="background:var(--surface-high);color:var(--on-surface-dim);margin-right:0.4rem">⚙ Settings</button>
     <button type="button" class="jf-fab" id="submitJobBtn" aria-haspopup="dialog">+ Submit Job</button>
     <span id="presencePill" class="pill">0 agents</span>
     <div class="conn-badge">
@@ -262,6 +263,19 @@
 <div class="offscreen" aria-hidden="true">
   <div id="ptab-experts"><div id="expertList" class="list"></div></div>
   <span id="expertsPill" class="pill"></span>
+</div>
+
+<!-- ══════ Settings overlay (read-only, #100) ══════ -->
+<div id="settingsOverlay" class="jf-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="settingsTitle">
+  <div class="jf-sheet" style="width:min(560px,95vw)">
+    <div class="jf-hdr">
+      <span id="settingsTitle" class="jf-title">COORDINATOR SETTINGS</span>
+      <button type="button" class="jf-close" id="settingsClose" aria-label="Close">&#x2715;</button>
+    </div>
+    <div class="jf-body" id="settingsBody">
+      <p style="font-size:0.75rem;color:var(--outline)">Loading…</p>
+    </div>
+  </div>
 </div>
 
 <!-- ══════ P4: Job Submit Form + Jobs Panel ══════ -->

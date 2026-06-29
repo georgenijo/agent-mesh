@@ -102,6 +102,11 @@ const (
 	// across coordinator restarts. The scheduler is its sole writer; the
 	// dashboard reads it via GET /api/cost.
 	BucketCostLedger = "cost-ledger"
+	// BucketExpertReady is the readiness signal bucket (#125): an expert writes
+	// its name here after ServeReviews has activated its review subscription.
+	// The coordinator's auto-expert spawner waits for this key before
+	// re-delivering buffered review requests, replacing the fixed settle delay.
+	BucketExpertReady = "expert-ready"
 )
 
 // Streams (bounded).

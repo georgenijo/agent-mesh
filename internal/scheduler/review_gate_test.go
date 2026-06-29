@@ -36,6 +36,31 @@ func (r *fakeReviewer) calls() int {
 	return len(r.targets)
 }
 
+// seqReviewer cycles through a fixed sequence of decisions, then repeats the
+// last one. Safe for concurrent use.
+type seqReviewer struct {
+	mu   sync.Mutex
+	decs []ReviewDecision
+	n    int
+}
+
+func (r *seqReviewer) Review(_ context.Context, _ ReviewTarget) (ReviewDecision, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	idx := r.n
+	if idx >= len(r.decs) {
+		idx = len(r.decs) - 1
+	}
+	r.n++
+	return r.decs[idx], nil
+}
+
+func (r *seqReviewer) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.n
+}
+
 func singlePlan() task.Plan {
 	return task.Plan{Version: 1, Nodes: []task.Node{
 		{ID: "A", Title: "A", Role: "builder"},
@@ -85,18 +110,105 @@ func TestReviewRejectFailsTaskAndCancelsDependents(t *testing.T) {
 	}
 }
 
-// request_changes → the task fails (typed, with the verdict in the reason);
-// re-dispatch-with-feedback is the documented deferral, never a silent done.
-func TestReviewRequestChangesFailsTask(t *testing.T) {
+// request_changes with ReviewRetries=0 → the task fails immediately; this
+// confirms the opt-out / zero-retry path and that re-dispatch never fires.
+func TestReviewRequestChangesFailsTaskWhenRetriesZero(t *testing.T) {
 	f := newFixture(t)
 	j, byNode := f.triagedJob(t, singlePlan())
 
 	rev := &fakeReviewer{dec: ReviewDecision{Verdict: envelope.ReviewRequestChanges, Notes: "missing tests"}}
-	startScheduler(t, f.cli, newFakeDriver(), func(o *Options) { o.Reviewer = rev })
+	startScheduler(t, f.cli, newFakeDriver(), func(o *Options) {
+		o.Reviewer = rev
+		o.ReviewRetries = 0 // no re-dispatch; fail immediately
+	})
 
 	f.waitJob(t, j.ID, envelope.JobFailed)
 	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskFailed {
 		t.Fatalf("task A = %s, want failed", got)
+	}
+	// Exactly one worker run and one review call — no re-dispatch.
+	if got := rev.calls(); got != 1 {
+		t.Fatalf("reviewer called %d times, want 1 (no retry with ReviewRetries=0)", got)
+	}
+}
+
+// request_changes with retries remaining re-dispatches the task carrying the
+// reviewer's feedback; a subsequent approve drives it to done (#85).
+func TestReviewRequestChangesRedispatchesWithFeedback(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	const reviewerNotes = "missing tests"
+
+	// Reviewer: first call → request_changes, second call → approve.
+	rev := &seqReviewer{decs: []ReviewDecision{
+		{Verdict: envelope.ReviewRequestChanges, Notes: reviewerNotes},
+		{Verdict: envelope.ReviewApprove, Notes: "looks good now"},
+	}}
+
+	// Worker records the review feedback it received on its second attempt.
+	var mu sync.Mutex
+	var feedbackOnRetry string
+	d := newFakeDriver()
+	d.behave = func(rec task.Record, attempt int) (Result, error) {
+		if attempt == 2 {
+			mu.Lock()
+			feedbackOnRetry = rec.ReviewFeedback
+			mu.Unlock()
+		}
+		return Result{Summary: "done"}, nil
+	}
+
+	startScheduler(t, f.cli, d, func(o *Options) {
+		o.Reviewer = rev
+		o.ReviewRetries = 2
+	})
+
+	f.waitJob(t, j.ID, envelope.JobDone)
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskDone {
+		t.Fatalf("task A = %s, want done", got)
+	}
+	// Reviewer called twice: once for request_changes, once for approve.
+	if got := rev.callCount(); got != 2 {
+		t.Fatalf("reviewer called %d times, want 2 (one request_changes, one approve)", got)
+	}
+	// Worker ran twice: initial + one re-dispatch.
+	if got := d.attemptCount("A"); got != 2 {
+		t.Fatalf("worker ran %d times, want 2 (initial + one re-dispatch)", got)
+	}
+	// The re-dispatched worker received the reviewer's feedback.
+	mu.Lock()
+	fb := feedbackOnRetry
+	mu.Unlock()
+	if fb != reviewerNotes {
+		t.Fatalf("re-dispatched worker feedback = %q, want %q", fb, reviewerNotes)
+	}
+}
+
+// Persistent request_changes exhausts retries and fails the task only after
+// MESH_REVIEW_RETRIES re-dispatches (#85).
+func TestReviewRetriesExhaustedFailsTask(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	const retries = 2
+	// Reviewer always returns request_changes.
+	rev := &fakeReviewer{dec: ReviewDecision{Verdict: envelope.ReviewRequestChanges, Notes: "still wrong"}}
+
+	startScheduler(t, f.cli, newFakeDriver(), func(o *Options) {
+		o.Reviewer = rev
+		o.ReviewRetries = retries
+	})
+
+	f.waitJob(t, j.ID, envelope.JobFailed)
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskFailed {
+		t.Fatalf("task A = %s, want failed", got)
+	}
+	// Worker ran retries+1 times (initial + retries re-dispatches) before the
+	// task was finally failed.
+	if got := rev.calls(); got != retries+1 {
+		t.Fatalf("reviewer called %d times, want %d (initial + %d retries)",
+			got, retries+1, retries)
 	}
 }
 

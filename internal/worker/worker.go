@@ -165,9 +165,23 @@ func (d *Driver) Spawn(ctx context.Context, rec task.Record) (scheduler.Worker, 
 	if err != nil {
 		return nil, err
 	}
-	dir, branch, err := d.addWorktree(ctx, repoPath, rec.ID)
-	if err != nil {
-		return nil, err
+	// On re-dispatch after request_changes, rec.Branch is already set (the
+	// first successful run committed onto it). Check out the existing branch so
+	// prior commits survive and the reviewer sees a cumulative diff (#85).
+	var dir, branch string
+	if rec.Branch != "" {
+		var werr error
+		dir, werr = d.addWorktreeFromBranch(ctx, repoPath, rec.ID, rec.Branch)
+		if werr != nil {
+			return nil, werr
+		}
+		branch = rec.Branch
+	} else {
+		var werr error
+		dir, branch, werr = d.addWorktree(ctx, repoPath, rec.ID)
+		if werr != nil {
+			return nil, werr
+		}
 	}
 	// Carry dependency work forward: merge each done dependency's output branch
 	// into this worktree before the worker starts, so a `dependsOn` edge means
@@ -251,6 +265,34 @@ func (d *Driver) addWorktree(ctx context.Context, repoPath, taskID string) (stri
 		return dir, branch, nil
 	}
 	return "", "", fmt.Errorf("worker: no free worktree slot for task %s after %d probes", taskID, maxWorktreeProbes)
+}
+
+// addWorktreeFromBranch creates a worktree for an existing branch — used on
+// re-dispatch after request_changes (#85) so prior commits survive on the same
+// branch instead of starting from the repo base. Unlike addWorktree it uses
+// `git worktree add <dir> <branch>` (no -b flag).
+func (d *Driver) addWorktreeFromBranch(ctx context.Context, repoPath, taskID, branch string) (string, error) {
+	base := d.cfg.WorkersDir()
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", fmt.Errorf("worker: create workers dir: %w", err)
+	}
+	d.gitMu.Lock()
+	defer d.gitMu.Unlock()
+	for n := 1; n <= maxWorktreeProbes; n++ {
+		name := taskID
+		if n > 1 {
+			name = fmt.Sprintf("%s-%d", taskID, n)
+		}
+		dir := filepath.Join(base, name)
+		if _, err := os.Stat(dir); err == nil {
+			continue // a previous attempt's preserved worktree
+		}
+		if _, err := gitOut(ctx, repoPath, "worktree", "add", dir, branch); err != nil {
+			return "", fmt.Errorf("worker: git worktree add (existing branch %s): %w", branch, err)
+		}
+		return dir, nil
+	}
+	return "", fmt.Errorf("worker: no free worktree slot for task %s after %d probes", taskID, maxWorktreeProbes)
 }
 
 // mergeDeps merges the output branch of each done dependency into the fresh
@@ -455,10 +497,15 @@ func (w *worker) commitAndDescribe(ctx context.Context) (string, error) {
 
 // buildPrompt renders the worker's full instruction set: role prompt, task
 // instructions, repo/worktree context, mesh CLI access, and a compacted
-// blackboard primer (the durable per-repo decision history).
+// blackboard primer (the durable per-repo decision history). On re-dispatch
+// after a request_changes review, the reviewer's notes are injected so the
+// worker addresses the feedback in its next attempt (#85).
 func (w *worker) buildPrompt() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are an autonomous %s worker agent executing one task of a larger job.\n\n", w.rec.Role)
+	if w.rec.ReviewFeedback != "" {
+		fmt.Fprintf(&b, "A reviewer requested changes on your previous attempt: %s. Address them and re-verify.\n\n", w.rec.ReviewFeedback)
+	}
 	fmt.Fprintf(&b, "Job: %s\n", w.jrec.Title)
 	fmt.Fprintf(&b, "Task: %s\n", w.rec.Title)
 	if w.rec.Description != "" {

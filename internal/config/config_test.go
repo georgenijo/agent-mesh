@@ -362,3 +362,42 @@ func TestLoadAuditFanoutKnob(t *testing.T) {
 		t.Fatal("Load accepted MESH_AUDIT_FANOUT=maybe")
 	}
 }
+
+func TestLoadReviewRetriesKnob(t *testing.T) {
+	t.Setenv(EnvMeshDir, t.TempDir())
+
+	// Default: 2.
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReviewRetries != DefaultReviewRetries {
+		t.Fatalf("ReviewRetries default = %d, want %d", cfg.ReviewRetries, DefaultReviewRetries)
+	}
+
+	// Explicit value.
+	t.Setenv(EnvReviewRetries, "5")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReviewRetries != 5 {
+		t.Fatalf("ReviewRetries = %d, want 5", cfg.ReviewRetries)
+	}
+
+	// Zero is valid (fail immediately on request_changes).
+	t.Setenv(EnvReviewRetries, "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReviewRetries != 0 {
+		t.Fatalf("ReviewRetries = %d, want 0", cfg.ReviewRetries)
+	}
+
+	// Negative is invalid.
+	t.Setenv(EnvReviewRetries, "-1")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted MESH_REVIEW_RETRIES=-1")
+	}
+}

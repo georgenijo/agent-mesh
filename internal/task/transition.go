@@ -41,6 +41,50 @@ func CanTransition(from, to envelope.TaskState) bool {
 	return false
 }
 
+// Redispatch atomically decrements the retry counter, stores reviewer feedback,
+// and resets a running task back to pending — ready for re-dispatch on the
+// scheduler's next sweep (#85). It bypasses the legality table because
+// running→pending is only valid through this path (re-dispatch after
+// request_changes), keeping the general Transition path clean. The caller
+// (scheduler loop goroutine, the single writer) guarantees the task is
+// currently running.
+func (s Store) Redispatch(id, feedback string, retriesLeft int) (Record, error) {
+	kv, found, err := s.cli.KVGet(envelope.BucketTasks, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if !found {
+		return Record{}, fmt.Errorf("%w: %s", ErrNoSuchTask, id)
+	}
+	var rec Record
+	if err := json.Unmarshal(kv.Value, &rec); err != nil {
+		return Record{}, fmt.Errorf("%w: %s: %v", ErrBadRecord, id, err)
+	}
+	if rec.State != envelope.TaskRunning {
+		return Record{}, fmt.Errorf("%w: task %s is %s, not running", ErrBadTransition, id, rec.State)
+	}
+	rec.State = envelope.TaskPending
+	rec.ReviewFeedback = feedback
+	rec.RetriesLeft = retriesLeft
+	if _, err := s.cli.KVPut(envelope.BucketTasks, id, rec, bus.PutOptions{CAS: bus.Rev(kv.Rev)}); err != nil {
+		if errors.Is(err, bus.ErrCASLost) {
+			return Record{}, ErrCASLost
+		}
+		return Record{}, err
+	}
+	ev := Event{
+		ID:     id,
+		Job:    rec.Job,
+		From:   envelope.TaskRunning,
+		To:     envelope.TaskPending,
+		By:     "scheduler",
+		At:     s.now(),
+		Reason: "review requested changes; re-dispatching",
+	}
+	s.cli.StreamAppend(envelope.StreamTasks, ev) //nolint:errcheck
+	return rec, nil
+}
+
 // Transition moves a task from one state to the next under revision CAS: the
 // record is re-read, the from-state and table legality are checked, and the
 // write is guarded by the read revision — a concurrent writer loses exactly

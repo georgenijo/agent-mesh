@@ -58,6 +58,10 @@ const (
 	WorkerBillingError WorkerErrorCode = "billing_error"
 	// WorkerInternal: recording the outcome failed (store/bus error, lost CAS).
 	WorkerInternal WorkerErrorCode = "internal"
+	// WorkerEscalated: the worker declared the task too ambiguous to complete
+	// correctly and escalated it instead of guessing. The task transitions to
+	// TaskEscalated (never failed/retried) and awaits human input.
+	WorkerEscalated WorkerErrorCode = "escalated"
 )
 
 var workerErrorCodes = map[WorkerErrorCode]bool{
@@ -66,6 +70,7 @@ var workerErrorCodes = map[WorkerErrorCode]bool{
 	WorkerRateLimited:  true,
 	WorkerBillingError: true,
 	WorkerInternal:     true,
+	WorkerEscalated:    true,
 }
 
 // ValidWorkerErrorCode reports whether c is a recognized worker error code.

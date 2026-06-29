@@ -45,6 +45,11 @@ func TestGateOfMapsPersistedStatesAndDeps(t *testing.T) {
 		{"one failed dep blocks even when others are done",
 			mk("t", envelope.TaskPending, "a", "b"),
 			[]task.Record{mk("a", envelope.TaskDone), mk("b", envelope.TaskFailed)}, GateBlocked},
+		{"escalated maps to escalated",
+			mk("t", envelope.TaskEscalated), nil, GateEscalated},
+		{"pending behind an escalated dep is blocked",
+			mk("t", envelope.TaskPending, "a"),
+			[]task.Record{mk("a", envelope.TaskEscalated)}, GateBlocked},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -113,6 +113,12 @@ const (
 	TaskDone      TaskState = "done"      // completed successfully
 	TaskFailed    TaskState = "failed"    // terminal failure
 	TaskCancelled TaskState = "cancelled" // withdrawn (e.g. job cancelled)
+	// TaskEscalated is a terminal state meaning the task is paused awaiting
+	// human input. A worker declares this when the task is too ambiguous to
+	// complete correctly. Distinct from done (work not complete) and failed
+	// (not an error — intentional pause). The scheduler never re-dispatches
+	// an escalated task.
+	TaskEscalated TaskState = "escalated"
 )
 
 var taskStates = map[TaskState]bool{
@@ -121,6 +127,7 @@ var taskStates = map[TaskState]bool{
 	TaskDone:      true,
 	TaskFailed:    true,
 	TaskCancelled: true,
+	TaskEscalated: true,
 }
 
 // ValidTaskState reports whether s is a recognized task state.

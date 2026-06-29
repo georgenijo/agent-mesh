@@ -73,6 +73,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAnswer(rest, stdout, stderr)
 	case "submit":
 		return runSubmit(rest, stdout, stderr)
+	case "escalate":
+		return runEscalate(rest, stdout, stderr)
 	case "work":
 		return runWork(rest, stdout, stderr)
 	case "expert":
@@ -130,6 +132,9 @@ commands:
   submit   --issue owner/repo#N [--repo R] ingest a GitHub issue as a job
   work     "<phrase>"   natural-language job control (requires MESH_GITHUB_REPO)
            phrases: "work on issue N" | "issues N-M" | "all issues"
+  escalate "<question>"   signal that this task is too ambiguous to complete
+           without human input; records the question and pauses the task
+           (only valid inside a worker-spawned child; reads MESH_ESCALATION_FILE)
 
   expert serve --name <id> --role <role> [--caps a,b] [--repo R] [--model M]
           run a resident expert that auto-answers role-routed asks (foreground)

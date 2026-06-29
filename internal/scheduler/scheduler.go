@@ -446,6 +446,10 @@ func (s *Scheduler) handleOutcome(o outcome) {
 		// Pause the fleet, never fail: the task stays persisted running and
 		// the next lifetime (after the operator resets) resumes it.
 		s.pause(envelope.FleetBillingError, truncate(res.Summary, 512))
+	case res.Code == envelope.WorkerEscalated:
+		// Worker declared the task too ambiguous to complete without human
+		// input. Transition to TaskEscalated (never failed, never retried).
+		s.escalateTask(o.task.ID, truncate(res.Summary, 512))
 	default:
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
 			truncate(fmt.Sprintf("%s: %s", res.Code, res.Summary), 512))
@@ -690,6 +694,18 @@ func (s *Scheduler) transitionTask(id string, from, to envelope.TaskState, reaso
 	s.publishTask(updated)
 }
 
+// escalateTask moves a running task to TaskEscalated with the worker's reason
+// recorded. The task is never retried or failed — it awaits human input.
+func (s *Scheduler) escalateTask(id, reason string) {
+	updated, err := s.tasks.Escalate(id, reason, schedulerID)
+	if err != nil {
+		s.log.Warn("scheduler: task escalate failed", "task", id, "err", err)
+		return
+	}
+	s.publishTask(updated)
+	s.log.Info("scheduler: task escalated", "task", id, "reason", reason)
+}
+
 // checkBudgetBeforeSpawn reports whether spawning is allowed, pausing the
 // fleet when the cap is already reached.
 func (s *Scheduler) checkBudgetBeforeSpawn() bool {
@@ -781,7 +797,7 @@ func anyFailed(recs []task.Record) bool {
 func allTerminal(byID map[string]task.Record) bool {
 	for _, r := range byID {
 		switch r.State {
-		case envelope.TaskDone, envelope.TaskFailed, envelope.TaskCancelled:
+		case envelope.TaskDone, envelope.TaskFailed, envelope.TaskCancelled, envelope.TaskEscalated:
 		default:
 			return false
 		}

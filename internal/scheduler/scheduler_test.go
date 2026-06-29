@@ -521,6 +521,89 @@ func TestResumesOrphanedRunningTaskAcrossLifetimes(t *testing.T) {
 	}
 }
 
+// A worker that returns WorkerEscalated drives its task to TaskEscalated (not
+// done/failed), records the reason, and the scheduler does NOT retry it.
+func TestWorkerEscalatedTransitionsTaskAndRecordsReason(t *testing.T) {
+	f := newFixture(t)
+	const escalationReason = "no concrete acceptance criteria: what does 'make it nicer' mean?"
+	plan := task.Plan{Version: 1, Nodes: []task.Node{{ID: "A", Title: "A", Role: "builder"}}}
+	j, byNode := f.triagedJob(t, plan)
+
+	d := newFakeDriver()
+	d.behave = func(task.Record, int) (Result, error) {
+		return Result{Code: envelope.WorkerEscalated, Summary: escalationReason}, nil
+	}
+	startScheduler(t, f.cli, d, nil)
+
+	waitFor(t, 5*time.Second, "A reaches escalated", func() bool {
+		return f.taskState(t, byNode["A"].ID) == envelope.TaskEscalated
+	})
+
+	// Task must be escalated, not done/failed.
+	if st := f.taskState(t, byNode["A"].ID); st != envelope.TaskEscalated {
+		t.Fatalf("A state = %s, want escalated", st)
+	}
+
+	// Escalation reason must be recorded on the task record.
+	rec, found, err := f.tasks.Get(byNode["A"].ID)
+	if err != nil || !found {
+		t.Fatalf("get task: found=%v err=%v", found, err)
+	}
+	if rec.EscalationReason != escalationReason {
+		t.Fatalf("EscalationReason = %q, want %q", rec.EscalationReason, escalationReason)
+	}
+
+	// Scheduler must treat escalated as terminal: only one attempt, no retry.
+	time.Sleep(60 * time.Millisecond) // several would-be sweeps
+	if n := d.attemptCount("A"); n != 1 {
+		t.Fatalf("A attempts = %d, want 1 (no retry on escalated)", n)
+	}
+	if n := d.teardownCount("A"); n != 1 {
+		t.Fatalf("A teardowns = %d, want 1", n)
+	}
+
+	// Job should reach a terminal state (failed — not all tasks done).
+	f.waitJob(t, j.ID, envelope.JobFailed)
+}
+
+// An escalated task blocks its dependents (they cannot proceed without the
+// escalated task's output) and does NOT doom unrelated sibling tasks.
+func TestEscalatedTaskBlocksDependentsNotSiblings(t *testing.T) {
+	f := newFixture(t)
+	// Linear chain A → B; C is independent of both.
+	plan := task.Plan{Version: 1, Nodes: []task.Node{
+		{ID: "A", Title: "A", Role: "builder"},
+		{ID: "B", Title: "B", Role: "builder", DependsOn: []string{"A"}},
+		{ID: "C", Title: "C", Role: "builder"},
+	}}
+	_, byNode := f.triagedJob(t, plan)
+
+	d := newFakeDriver()
+	d.behave = func(rec task.Record, _ int) (Result, error) {
+		if rec.Node == "A" {
+			return Result{Code: envelope.WorkerEscalated, Summary: "ambiguous"}, nil
+		}
+		return Result{Summary: "done"}, nil
+	}
+	startScheduler(t, f.cli, d, nil)
+
+	waitFor(t, 5*time.Second, "A escalated", func() bool {
+		return f.taskState(t, byNode["A"].ID) == envelope.TaskEscalated
+	})
+	// B depends on A; A escalated → B must be cancelled, not run.
+	waitFor(t, 5*time.Second, "B cancelled (blocked by escalated dep)", func() bool {
+		return f.taskState(t, byNode["B"].ID) == envelope.TaskCancelled
+	})
+	// C is independent; escalation of A must not cancel C.
+	waitFor(t, 5*time.Second, "C done (unaffected by A escalation)", func() bool {
+		return f.taskState(t, byNode["C"].ID) == envelope.TaskDone
+	})
+
+	if n := d.attemptCount("B"); n != 0 {
+		t.Fatalf("B attempts = %d, want 0 (blocked by escalated dep)", n)
+	}
+}
+
 // A spawn failure is a typed spawn_failed outcome — task failed, no teardown
 // (nothing was spawned), dependents skipped.
 func TestSpawnFailureFailsTaskTyped(t *testing.T) {

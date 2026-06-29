@@ -391,10 +391,13 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 
 	// Build the mesh env: the child's `mesh` calls must land on THIS worker's
 	// sidecar. os/exec uses the last duplicate, so appending overrides any
-	// ambient MESH_DIR / MESH_SOCKET values.
+	// ambient MESH_DIR / MESH_SOCKET values. MESH_ESCALATION_FILE is the path
+	// the child writes to via `mesh escalate "<question>"`.
+	escalationFile := filepath.Join(w.dir, ".mesh_escalation")
 	env := append(os.Environ(),
 		config.EnvMeshDir+"="+w.d.cfg.MeshDir,
 		config.EnvAgentSocket+"="+w.sockPath,
+		config.EnvEscalationFile+"="+escalationFile,
 	)
 
 	invokeOpts := cliexec.InvokeOptions{
@@ -416,6 +419,23 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 	if err != nil {
 		return scheduler.Result{}, fmt.Errorf("worker: %w", err)
 	}
+
+	// Check for escalation BEFORE normal result processing: if the child called
+	// `mesh escalate "<question>"` it wrote the question to the escalation file.
+	// This takes precedence over the CLI's exit status / result envelope.
+	if question, eerr := os.ReadFile(escalationFile); eerr == nil && len(question) > 0 {
+		reason := strings.TrimSpace(string(question))
+		if reason == "" {
+			reason = "worker escalated (no reason given)"
+		}
+		return scheduler.Result{
+			Code:    envelope.WorkerEscalated,
+			Summary: reason,
+			Model:   w.d.cfg.WorkerModel,
+			Agent:   workerName(w.rec.ID),
+		}, nil
+	}
+
 	if len(out) > scheduler.MaxWorkerResultBytes {
 		return scheduler.Result{}, fmt.Errorf("worker stdout %d bytes exceeds %d", len(out), scheduler.MaxWorkerResultBytes)
 	}
@@ -542,6 +562,12 @@ func (w *worker) buildPrompt() string {
 	}
 	b.WriteString("- `mesh note \"<decision>\"` — record a durable decision (a convention you chose,\n")
 	b.WriteString("  a tradeoff you made) so the next worker and the reviewer see your reasoning.\n")
+	b.WriteString("- `mesh escalate \"<specific question>\"` — use this when the task is genuinely\n")
+	b.WriteString("  too ambiguous to complete correctly without human input: no clear acceptance\n")
+	b.WriteString("  criteria, subjective goals with no concrete spec (\"make it nicer/cleaner/\n")
+	b.WriteString("  smarter\" with nothing measurable), or conflicting requirements you cannot\n")
+	b.WriteString("  resolve. Write a specific, answerable question. DO NOT guess for ambiguous\n")
+	b.WriteString("  tasks — escalate with a precise question instead.\n")
 
 	if primer, err := w.sc.BuildPrimer(w.jrec.Repo, 0); err != nil {
 		w.d.log.Warn("worker: blackboard primer failed; continuing without", "task", w.rec.ID, "err", err)

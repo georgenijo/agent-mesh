@@ -53,6 +53,11 @@ const (
 	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
 	EnvJobsAddr              = "MESH_JOBS_ADDR"           // HTTP ingress for POST /jobs (#119); empty (default) = disabled
 	EnvGitHubRepo            = "MESH_GITHUB_REPO"         // GitHub repo (owner/repo) for NL job control (`mesh work`); empty = mesh work disabled
+	// EnvEscalationFile is the path the worker child can write an escalation
+	// question to (via `mesh escalate "<question>"`). The worker runtime sets
+	// this in the child's env; `mesh escalate` reads it and writes the question.
+	// Empty outside of a worker-spawned child context.
+	EnvEscalationFile = "MESH_ESCALATION_FILE"
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:

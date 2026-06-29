@@ -73,6 +73,10 @@ type Record struct {
 	// because a reviewer may return request_changes with empty notes — which
 	// would otherwise re-initialize the budget every round (unbounded retries).
 	Redispatched bool `json:"redispatched,omitempty"`
+	// EscalationReason is the worker's specific question or explanation of why
+	// the task could not be completed without human input (#141). Set when the
+	// task transitions to TaskEscalated; empty for all other states.
+	EscalationReason string `json:"escalationReason,omitempty"`
 }
 
 // Event records one task transition, appended to the task-events stream.

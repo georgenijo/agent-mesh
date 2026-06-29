@@ -49,6 +49,7 @@ func TestCanTransitionTable(t *testing.T) {
 		{envelope.TaskRunning, envelope.TaskDone},
 		{envelope.TaskRunning, envelope.TaskFailed},
 		{envelope.TaskRunning, envelope.TaskCancelled},
+		{envelope.TaskRunning, envelope.TaskEscalated},
 	}
 	for _, tc := range legal {
 		if !CanTransition(tc.from, tc.to) {
@@ -56,17 +57,62 @@ func TestCanTransitionTable(t *testing.T) {
 		}
 	}
 	illegal := []struct{ from, to envelope.TaskState }{
-		{envelope.TaskPending, envelope.TaskDone}, // never skip running
+		{envelope.TaskPending, envelope.TaskDone},      // never skip running
+		{envelope.TaskPending, envelope.TaskEscalated}, // only valid from running
 		{envelope.TaskDone, envelope.TaskRunning},
 		{envelope.TaskDone, envelope.TaskFailed},
 		{envelope.TaskFailed, envelope.TaskRunning},
 		{envelope.TaskCancelled, envelope.TaskRunning},
 		{envelope.TaskRunning, envelope.TaskPending},
+		{envelope.TaskEscalated, envelope.TaskRunning}, // escalated is terminal
 	}
 	for _, tc := range illegal {
 		if CanTransition(tc.from, tc.to) {
 			t.Errorf("CanTransition(%s, %s) = true, want false", tc.from, tc.to)
 		}
+	}
+}
+
+func TestEscalateMovesRecordAndRecordsReason(t *testing.T) {
+	s, _ := transitionFixture(t)
+	rec := mintTask(t, s)
+
+	// Advance to running first.
+	if _, err := s.Transition(rec.ID, envelope.TaskPending, envelope.TaskRunning, "coordinator", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	const reason = "what does 'make it nicer' mean concretely? no acceptance criteria given"
+	moved, err := s.Escalate(rec.ID, reason, "coordinator")
+	if err != nil {
+		t.Fatalf("Escalate: %v", err)
+	}
+	if moved.State != envelope.TaskEscalated {
+		t.Fatalf("state = %s, want escalated", moved.State)
+	}
+	if moved.EscalationReason != reason {
+		t.Fatalf("EscalationReason = %q, want %q", moved.EscalationReason, reason)
+	}
+
+	// Persisted record must reflect the escalation.
+	got, found, err := s.Get(rec.ID)
+	if err != nil || !found {
+		t.Fatalf("get: found=%v err=%v", found, err)
+	}
+	if got.State != envelope.TaskEscalated {
+		t.Fatalf("persisted state = %s, want escalated", got.State)
+	}
+	if got.EscalationReason != reason {
+		t.Fatalf("persisted EscalationReason = %q, want %q", got.EscalationReason, reason)
+	}
+}
+
+func TestEscalateRejectsNonRunningTask(t *testing.T) {
+	s, _ := transitionFixture(t)
+	rec := mintTask(t, s) // pending
+
+	if _, err := s.Escalate(rec.ID, "ambiguous", "coordinator"); !errors.Is(err, ErrBadTransition) {
+		t.Fatalf("Escalate(pending) err = %v, want ErrBadTransition", err)
 	}
 }
 

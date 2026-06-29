@@ -25,10 +25,10 @@ var (
 // pending→running is the scheduler dispatch; pending→failed covers a dispatch
 // that could never start; pending→cancelled is the skip of a dependent whose
 // dependency failed (or a doomed job's fail-fast). Terminal states (done,
-// failed, cancelled) have no successors.
+// failed, cancelled, escalated) have no successors.
 var transitions = map[envelope.TaskState][]envelope.TaskState{
 	envelope.TaskPending: {envelope.TaskRunning, envelope.TaskFailed, envelope.TaskCancelled},
-	envelope.TaskRunning: {envelope.TaskDone, envelope.TaskFailed, envelope.TaskCancelled},
+	envelope.TaskRunning: {envelope.TaskDone, envelope.TaskFailed, envelope.TaskCancelled, envelope.TaskEscalated},
 }
 
 // CanTransition reports whether from→to is a legal task transition.
@@ -81,6 +81,47 @@ func (s Store) Redispatch(id, feedback string, retriesLeft int) (Record, error) 
 		By:     "scheduler",
 		At:     s.now(),
 		Reason: "review requested changes; re-dispatching",
+	}
+	s.cli.StreamAppend(envelope.StreamTasks, ev) //nolint:errcheck
+	return rec, nil
+}
+
+// Escalate transitions a running task to TaskEscalated and records the
+// escalation reason/question. It uses the general Transition table (running→
+// escalated is legal) and additionally writes EscalationReason onto the record
+// so the scheduler and human operators can see why the task was paused. The
+// caller (scheduler loop goroutine) guarantees the task is currently running.
+func (s Store) Escalate(id, reason, by string) (Record, error) {
+	kv, found, err := s.cli.KVGet(envelope.BucketTasks, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if !found {
+		return Record{}, fmt.Errorf("%w: %s", ErrNoSuchTask, id)
+	}
+	var rec Record
+	if err := json.Unmarshal(kv.Value, &rec); err != nil {
+		return Record{}, fmt.Errorf("%w: %s: %v", ErrBadRecord, id, err)
+	}
+	if rec.State != envelope.TaskRunning {
+		return Record{}, fmt.Errorf("%w: task %s is %s, not running", ErrBadTransition, id, rec.State)
+	}
+	rec.State = envelope.TaskEscalated
+	rec.EscalationReason = reason
+	if _, err := s.cli.KVPut(envelope.BucketTasks, id, rec, bus.PutOptions{CAS: bus.Rev(kv.Rev)}); err != nil {
+		if errors.Is(err, bus.ErrCASLost) {
+			return Record{}, ErrCASLost
+		}
+		return Record{}, err
+	}
+	ev := Event{
+		ID:     id,
+		Job:    rec.Job,
+		From:   envelope.TaskRunning,
+		To:     envelope.TaskEscalated,
+		By:     by,
+		At:     s.now(),
+		Reason: reason,
 	}
 	s.cli.StreamAppend(envelope.StreamTasks, ev) //nolint:errcheck
 	return rec, nil

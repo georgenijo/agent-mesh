@@ -47,6 +47,7 @@ const (
 	EnvAuditFanout           = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
 	EnvReviewRole            = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
+	EnvReviewPoolSize        = "MESH_REVIEW_POOL_SIZE"    // number of resident reviewer experts the fleet maintains for MESH_REVIEW_ROLE (#123); default 1
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
 	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
 	EnvJobsAddr              = "MESH_JOBS_ADDR"           // HTTP ingress for POST /jobs (#119); empty (default) = disabled
@@ -113,6 +114,12 @@ const (
 	// one resident-expert LLM turn (5–60s observed), so this is generous;
 	// past it the gate treats the review as lost — never as an approval.
 	DefaultReviewTimeout = 5 * time.Minute
+
+	// DefaultReviewPoolSize is the number of resident reviewer experts the
+	// fleet maintains for MESH_REVIEW_ROLE (#123). Pool size 1 preserves the
+	// current single-reviewer behaviour; a larger pool allows N concurrent
+	// review turns instead of serialising on one expert.
+	DefaultReviewPoolSize = 1
 
 	// DefaultExpertIdleTTL is how long an auto-spawned expert may sit idle
 	// (no ask or review handled) before it self-terminates (#105). Five
@@ -182,6 +189,11 @@ type Config struct {
 	ReviewRole string
 	// ReviewTimeout bounds one review round trip (request → verdict event).
 	ReviewTimeout time.Duration
+	// ReviewPoolSize is the number of resident reviewer experts the fleet
+	// maintains for ReviewRole (#123). Default 1 (single reviewer, pre-#123
+	// behaviour). A larger pool lets N worker diffs be reviewed concurrently
+	// instead of serialising on one expert turn.
+	ReviewPoolSize int
 
 	// AutoExperts arms autonomous on-demand expert spawning (#117): when on,
 	// the coordinator watches role-addressed asks (and #80 review requests) and
@@ -248,6 +260,7 @@ func Load() (Config, error) {
 		WorkerTimeout:     DefaultWorkerTimeout,
 		MaxWorkers:        DefaultMaxWorkers,
 		ReviewTimeout:     DefaultReviewTimeout,
+		ReviewPoolSize:    DefaultReviewPoolSize,
 		KeepWorktrees:     KeepWorktreesOnFailure,
 		AuditFanout:       true,
 		ExpertIdleTTL:     DefaultExpertIdleTTL,
@@ -374,6 +387,13 @@ func Load() (Config, error) {
 		cfg.ExpertIdleTTL = dur // 0 = disabled (reaper never fires)
 	}
 	cfg.ReviewRole = os.Getenv(EnvReviewRole) // empty = review gating off
+	if raw := os.Getenv(EnvReviewPoolSize); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvReviewPoolSize, raw)
+		}
+		cfg.ReviewPoolSize = n
+	}
 	cfg.JobsAddr = os.Getenv(EnvJobsAddr)     // empty = ingress disabled
 	cfg.GitHubRepo = os.Getenv(EnvGitHubRepo) // empty = mesh work disabled
 	cfg.ReposDir = os.Getenv(EnvReposDir)     // empty = worker driver refuses to construct

@@ -56,16 +56,23 @@ const (
 )
 
 // expertSpawner owns autonomous expert lifecycle for one coordinator: the
-// trigger subscriptions, the per-role spawn state, and teardown of the children
-// it launched.
+// trigger subscriptions, the per-expert spawn state, and teardown of the
+// children it launched.
+//
+// Pool support (#123): for the review role, up to cfg.ReviewPoolSize resident
+// experts are maintained so multiple diffs can be reviewed concurrently. The
+// spawner keeps one entry per expert (keyed by name, unique across the pool),
+// which allows multiple entries for the same role.
 type expertSpawner struct {
 	cli   *bus.Client
 	cfg   config.Config
 	log   *slog.Logger
 	meshd string // resolved meshd binary path (the daemon we re-exec in expert mode)
 
-	mu      sync.Mutex
-	roles   map[string]*roleExpert
+	mu sync.Mutex
+	// experts is keyed by expert name (unique per instance) rather than role,
+	// so the pool can hold N entries for the same role.
+	experts map[string]*roleExpert
 	seq     int // monotonic suffix so a re-spawn never collides with an away ghost
 	stopped bool
 	subs    []*bus.Subscription
@@ -90,11 +97,11 @@ func newExpertSpawner(cli *bus.Client, cfg config.Config, log *slog.Logger) (*ex
 		return nil, err
 	}
 	return &expertSpawner{
-		cli:   cli,
-		cfg:   cfg,
-		log:   log,
-		meshd: meshd,
-		roles: map[string]*roleExpert{},
+		cli:     cli,
+		cfg:     cfg,
+		log:     log,
+		meshd:   meshd,
+		experts: map[string]*roleExpert{},
 	}, nil
 }
 
@@ -135,6 +142,52 @@ func (e *expertSpawner) handle(env envelope.Envelope) {
 		return
 	}
 
+	// For the review pool (#123): check whether the pool is at full capacity
+	// (live + in-flight ≥ target) before falling through to the live-owner check.
+	target := e.targetForRole(role)
+	if target > 1 {
+		// Pool role: react to the trigger by ensuring the full pool is spawned.
+		// If the pool is already at capacity (live or spawning), nothing to do.
+		e.mu.Lock()
+		if e.stopped {
+			e.mu.Unlock()
+			return
+		}
+		active := e.activeCountForRole(role)
+		if active >= target {
+			// Pool is full; if any member is live, the request will be delivered
+			// normally. If all are still spawning, buffer in any pending member.
+			if anyLive := e.anyLiveForRole(role); anyLive {
+				e.mu.Unlock()
+				return
+			}
+			if first := e.firstPendingForRole(role); first != nil {
+				first.pending = append(first.pending, env)
+			}
+			e.mu.Unlock()
+			return
+		}
+		// Pool is below target: spawn enough to fill it. The first new expert
+		// gets the buffered trigger; extras are pre-emptive (no pending).
+		firstNew := true
+		for active < target {
+			e.seq++
+			var pending []envelope.Envelope
+			if firstNew {
+				pending = []envelope.Envelope{env}
+				firstNew = false
+			}
+			re := &roleExpert{role: role, name: expertName(role, e.seq), pending: pending}
+			e.experts[re.name] = re
+			e.wg.Add(1)
+			go e.spawnAndServe(re)
+			active++
+		}
+		e.mu.Unlock()
+		return
+	}
+
+	// Single-expert path (target == 1, the pre-#123 behaviour).
 	if e.hasLiveOwner(role) {
 		return // a live agent already fills this role; normal delivery handles it
 	}
@@ -144,11 +197,12 @@ func (e *expertSpawner) handle(env envelope.Envelope) {
 		e.mu.Unlock()
 		return
 	}
-	re := e.roles[role]
+	// Find an existing entry for this role (there can be at most one for target=1).
+	re := e.firstForRole(role)
 	if re == nil {
 		e.seq++
 		re = &roleExpert{role: role, name: expertName(role, e.seq), pending: []envelope.Envelope{env}}
-		e.roles[role] = re
+		e.experts[re.name] = re
 		e.wg.Add(1)
 		go e.spawnAndServe(re)
 		e.mu.Unlock()
@@ -166,7 +220,7 @@ func (e *expertSpawner) handle(env envelope.Envelope) {
 	e.mu.Unlock()
 }
 
-// spawnAndServe launches the expert, waits for it to become a live role owner,
+// spawnAndServe launches the expert, waits for it to become a live agent,
 // then re-delivers everything buffered during the cold start.
 func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 	defer e.wg.Done()
@@ -174,7 +228,7 @@ func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 	proc, err := e.launch(re.role, re.name)
 	if err != nil {
 		e.log.Warn("auto-expert: launch failed", "role", re.role, "name", re.name, "err", err)
-		e.forget(re.role) // let a later ask retry the spawn
+		e.forgetByName(re.name) // let a later trigger retry the spawn
 		return
 	}
 	e.mu.Lock()
@@ -187,13 +241,15 @@ func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 		if e.stopping() {
 			return
 		}
-		if e.hasLiveOwner(re.role) {
+		// Wait for THIS specific expert to register as live (not just any agent
+		// for the role, since the pool may have multiple experts coming up).
+		if e.hasLiveAgent(re.name) {
 			break
 		}
 		if time.Now().After(deadline) {
 			e.log.Warn("auto-expert: never became live; pending asks will expire",
 				"role", re.role, "name", re.name)
-			e.forget(re.role)
+			e.forgetByName(re.name)
 			return
 		}
 		time.Sleep(autoExpertPollInterval)
@@ -271,9 +327,79 @@ func (e *expertSpawner) hasLiveOwner(role string) bool {
 	return false
 }
 
-func (e *expertSpawner) forget(role string) {
+// hasLiveAgent reports whether the registry has a live entry for the named agent.
+func (e *expertSpawner) hasLiveAgent(name string) bool {
+	kvs, err := e.cli.KVList(envelope.BucketRegistry)
+	if err != nil {
+		return false
+	}
+	for _, kv := range kvs {
+		var rec agentcard.RegistryRecord
+		if err := json.Unmarshal(kv.Value, &rec); err != nil {
+			continue
+		}
+		if rec.State == agentcard.PresenceLive && rec.Card.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// targetForRole returns the desired number of experts for role. For the
+// review role this is cfg.ReviewPoolSize; for all other roles it is 1.
+func (e *expertSpawner) targetForRole(role string) int {
+	if role == e.cfg.ReviewRole && e.cfg.ReviewPoolSize > 1 {
+		return e.cfg.ReviewPoolSize
+	}
+	return 1
+}
+
+// activeCountForRole counts entries in the experts map for role (must hold mu).
+func (e *expertSpawner) activeCountForRole(role string) int {
+	count := 0
+	for _, re := range e.experts {
+		if re.role == role {
+			count++
+		}
+	}
+	return count
+}
+
+// anyLiveForRole reports whether any expert entry for role is marked live
+// (must hold mu).
+func (e *expertSpawner) anyLiveForRole(role string) bool {
+	for _, re := range e.experts {
+		if re.role == role && re.live {
+			return true
+		}
+	}
+	return false
+}
+
+// firstForRole returns the first expert entry for role, or nil (must hold mu).
+func (e *expertSpawner) firstForRole(role string) *roleExpert {
+	for _, re := range e.experts {
+		if re.role == role {
+			return re
+		}
+	}
+	return nil
+}
+
+// firstPendingForRole returns the first non-live expert entry for role, or nil
+// (must hold mu).
+func (e *expertSpawner) firstPendingForRole(role string) *roleExpert {
+	for _, re := range e.experts {
+		if re.role == role && !re.live {
+			return re
+		}
+	}
+	return nil
+}
+
+func (e *expertSpawner) forgetByName(name string) {
 	e.mu.Lock()
-	delete(e.roles, role)
+	delete(e.experts, name)
 	e.mu.Unlock()
 }
 
@@ -298,7 +424,7 @@ func (e *expertSpawner) stop() {
 	subs := e.subs
 	e.subs = nil
 	var procs []*os.Process
-	for _, re := range e.roles {
+	for _, re := range e.experts {
 		if re.proc != nil {
 			procs = append(procs, re.proc)
 		}

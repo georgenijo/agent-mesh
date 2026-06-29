@@ -32,6 +32,16 @@ func SubjectReviewRequest(role string) string { return "mesh.review-req." + role
 // PatternReviewRequests matches every review-request envelope.
 const PatternReviewRequests = "mesh.review-req.>"
 
+// SubjectReviewRequestDirect names the per-expert direct review-request subject
+// (#123): when the reviewer pool has more than one member, the BusReviewer
+// publishes to this subject instead of the shared role subject so exactly one
+// expert in the pool receives each request (round-robin, no fanout).
+// The expert subscribes to BOTH SubjectReviewRequest(role) (pool size 1 /
+// fallback) and SubjectReviewRequestDirect(role, name) (direct slot).
+func SubjectReviewRequestDirect(role, expert string) string {
+	return "mesh.review-req." + role + "." + expert
+}
+
 // MaxReviewRequestDiffBytes caps the diff text one review request carries on
 // the wire. It mirrors the runtime layer's own per-prompt diff cap, and keeps
 // the payload comfortably under MaxPayloadBytes; the publisher truncates with

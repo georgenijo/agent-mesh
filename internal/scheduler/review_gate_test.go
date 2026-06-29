@@ -212,6 +212,33 @@ func TestReviewRetriesExhaustedFailsTask(t *testing.T) {
 	}
 }
 
+// Regression (#85): request_changes with EMPTY notes must still be bounded.
+// The retry budget must not be inferred from ReviewFeedback emptiness — if it
+// were, empty notes would re-initialize the budget every round and loop forever.
+func TestReviewRetriesExhaustedWithEmptyNotes(t *testing.T) {
+	f := newFixture(t)
+	j, byNode := f.triagedJob(t, singlePlan())
+
+	const retries = 2
+	// Reviewer always returns request_changes with NO notes (the trap case).
+	rev := &fakeReviewer{dec: ReviewDecision{Verdict: envelope.ReviewRequestChanges, Notes: ""}}
+
+	startScheduler(t, f.cli, newFakeDriver(), func(o *Options) {
+		o.Reviewer = rev
+		o.ReviewRetries = retries
+	})
+
+	// If the counter looped unboundedly this would never reach JobFailed.
+	f.waitJob(t, j.ID, envelope.JobFailed)
+	if got := f.taskState(t, byNode["A"].ID); got != envelope.TaskFailed {
+		t.Fatalf("task A = %s, want failed", got)
+	}
+	if got := rev.calls(); got != retries+1 {
+		t.Fatalf("reviewer called %d times, want %d — empty notes must stay bounded",
+			got, retries+1)
+	}
+}
+
 // Every ReviewError code is a typed non-success: the task fails, never done.
 func TestReviewErrorNeverApproves(t *testing.T) {
 	for _, code := range []envelope.ReviewErrorCode{

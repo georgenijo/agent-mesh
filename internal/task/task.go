@@ -67,6 +67,12 @@ type Record struct {
 	// verdict (#85). Injected into the worker prompt on re-dispatch so the
 	// worker addresses the reviewer's concerns. Empty until first re-dispatch.
 	ReviewFeedback string `json:"reviewFeedback,omitempty"`
+	// Redispatched is set the first time the task is re-dispatched after a
+	// request_changes (#85). It is the authoritative "has been re-dispatched"
+	// flag: retry accounting must not infer this from ReviewFeedback emptiness,
+	// because a reviewer may return request_changes with empty notes — which
+	// would otherwise re-initialize the budget every round (unbounded retries).
+	Redispatched bool `json:"redispatched,omitempty"`
 }
 
 // Event records one task transition, appended to the task-events stream.

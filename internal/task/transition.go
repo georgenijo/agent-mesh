@@ -66,6 +66,7 @@ func (s Store) Redispatch(id, feedback string, retriesLeft int) (Record, error) 
 	rec.State = envelope.TaskPending
 	rec.ReviewFeedback = feedback
 	rec.RetriesLeft = retriesLeft
+	rec.Redispatched = true
 	if _, err := s.cli.KVPut(envelope.BucketTasks, id, rec, bus.PutOptions{CAS: bus.Rev(kv.Rev)}); err != nil {
 		if errors.Is(err, bus.ErrCASLost) {
 			return Record{}, ErrCASLost

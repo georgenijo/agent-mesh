@@ -568,10 +568,12 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 // on the existing branch so prior commits accumulate. When retries are
 // exhausted the task fails with a typed reason. Loop goroutine only.
 func (s *Scheduler) handleRequestChanges(o reviewOutcome, dec ReviewDecision) {
-	// Determine retries available. ReviewFeedback is empty on the first
-	// request_changes (never re-dispatched before), so we initialise from the
-	// scheduler config. On subsequent request_changes the persisted RetriesLeft
-	// is the authority (it was decremented by the previous Redispatch call).
+	// Determine retries available. The Redispatched flag (not ReviewFeedback
+	// emptiness) is the authority for "first request_changes": a reviewer may
+	// return request_changes with empty notes, which would otherwise re-init the
+	// budget every round and loop unboundedly. On the first request_changes we
+	// initialise from the scheduler config; on subsequent ones the persisted
+	// RetriesLeft is the authority (decremented by the previous Redispatch call).
 	currentRec, found, err := s.tasks.Get(o.task.ID)
 	if err != nil || !found {
 		// Cannot read the record: fail safe (never silent approve).
@@ -583,7 +585,7 @@ func (s *Scheduler) handleRequestChanges(o reviewOutcome, dec ReviewDecision) {
 	}
 
 	var available int
-	if currentRec.ReviewFeedback == "" {
+	if !currentRec.Redispatched {
 		// First request_changes for this task: budget is the scheduler config.
 		available = s.opts.ReviewRetries
 	} else {

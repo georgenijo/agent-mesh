@@ -259,6 +259,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
 	mux.HandleFunc("GET /api/cost", d.serveCost)
 	mux.HandleFunc("GET /api/repos", d.serveListRepos)
+	mux.HandleFunc("GET /api/settings", d.serveSettings)
 	mountWebUI(mux)
 
 	ln, err := observe.ListenWithFallback(d.addr, d.log)
@@ -1302,6 +1303,56 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// settingsPayload is the response body for GET /api/settings.
+// All durations are rendered as Go duration strings (e.g. "10m0s").
+// Secret values (tokens, credentials) are never included.
+type settingsPayload struct {
+	WorkerCLI      string  `json:"workerCLI"`
+	WorkerModel    string  `json:"workerModel"`
+	PlannerCLI     string  `json:"plannerCLI"`
+	PlannerModel   string  `json:"plannerModel"`
+	MaxWorkers     int     `json:"maxWorkers"`
+	WorkerTimeout  string  `json:"workerTimeout"`
+	TriageTimeout  string  `json:"triageTimeout"`
+	ReviewTimeout  string  `json:"reviewTimeout"`
+	BudgetUSD      float64 `json:"budgetUSD"`
+	ReviewRole     string  `json:"reviewRole"`
+	ReviewPoolSize int     `json:"reviewPoolSize"`
+	ReviewRetries  int     `json:"reviewRetries"`
+	ReposDir       string  `json:"reposDir"`
+	DashboardAddr  string  `json:"dashboardAddr"`
+	ObserveAddr    string  `json:"observeAddr"`
+	AutoExperts    bool    `json:"autoExperts"`
+	ExpertIdleTTL  string  `json:"expertIdleTTL"`
+}
+
+// serveSettings returns the current resolved non-secret coordinator config as
+// JSON. Read-only — changes require a coordinator restart.
+func (d *Dashboard) serveSettings(w http.ResponseWriter, _ *http.Request) {
+	c := d.cfg
+	p := settingsPayload{
+		WorkerCLI:      c.WorkerCLI,
+		WorkerModel:    c.WorkerModel,
+		PlannerCLI:     c.PlannerCLI,
+		PlannerModel:   c.PlannerModel,
+		MaxWorkers:     c.MaxWorkers,
+		WorkerTimeout:  c.WorkerTimeout.String(),
+		TriageTimeout:  c.TriageTimeout.String(),
+		ReviewTimeout:  c.ReviewTimeout.String(),
+		BudgetUSD:      c.BudgetUSD,
+		ReviewRole:     c.ReviewRole,
+		ReviewPoolSize: c.ReviewPoolSize,
+		ReviewRetries:  c.ReviewRetries,
+		ReposDir:       c.ReposDir,
+		DashboardAddr:  d.Addr(),
+		ObserveAddr:    c.ObserveAddr,
+		AutoExperts:    c.AutoExperts,
+		ExpertIdleTTL:  c.ExpertIdleTTL.String(),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(p) //nolint:errcheck
 }
 
 // WriteToken exposes the bearer token for tests and the write-token API

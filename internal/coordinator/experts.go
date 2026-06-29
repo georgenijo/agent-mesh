@@ -46,13 +46,16 @@ const (
 	// asker's ticket simply TTL-expires unanswered — honest, never a fake answer.
 	// Generous: spawn + runtime child start + first register is seconds.
 	autoExpertSpawnWait = 30 * time.Second
-	// autoExpertPollInterval is the registry poll cadence while waiting for live.
+	// autoExpertPollInterval is the registry poll cadence while waiting for live
+	// and for the review-subscription readiness signal.
 	autoExpertPollInterval = 250 * time.Millisecond
-	// autoExpertSettle covers the window between an agent registering (live) and
-	// activating its ask subscription — sidecar.Start registers first, then
-	// subscribes. We observe "live" by polling (already well past the
-	// sub-millisecond gap) and settle a touch more before re-delivering.
-	autoExpertSettle = 500 * time.Millisecond
+	// autoExpertReadyWait bounds how long we wait for the expert to signal that
+	// its review subscription is active (BucketExpertReady/<name> written by
+	// ServeReviews). This replaces the old fixed 500ms settle: the expert writes
+	// the key only after its subscription is established, so re-delivery is safe
+	// the moment the key appears (#125). On timeout we re-deliver anyway (the
+	// poll found live; the subscription window is likely just wider than expected).
+	autoExpertReadyWait = 10 * time.Second
 )
 
 // expertSpawner owns autonomous expert lifecycle for one coordinator: the
@@ -68,6 +71,10 @@ type expertSpawner struct {
 	cfg   config.Config
 	log   *slog.Logger
 	meshd string // resolved meshd binary path (the daemon we re-exec in expert mode)
+
+	// launchFunc starts a meshd --mode expert child. Defaults to e.launch;
+	// replaced in tests to avoid real process spawning.
+	launchFunc func(role, name string) (*os.Process, error)
 
 	mu sync.Mutex
 	// experts is keyed by expert name (unique per instance) rather than role,
@@ -96,13 +103,15 @@ func newExpertSpawner(cli *bus.Client, cfg config.Config, log *slog.Logger) (*ex
 	if err != nil {
 		return nil, err
 	}
-	return &expertSpawner{
+	sp := &expertSpawner{
 		cli:     cli,
 		cfg:     cfg,
 		log:     log,
 		meshd:   meshd,
 		experts: map[string]*roleExpert{},
-	}, nil
+	}
+	sp.launchFunc = sp.launch
+	return sp, nil
 }
 
 // start subscribes to the two role-owner trigger subjects.
@@ -220,12 +229,16 @@ func (e *expertSpawner) handle(env envelope.Envelope) {
 	e.mu.Unlock()
 }
 
-// spawnAndServe launches the expert, waits for it to become a live agent,
-// then re-delivers everything buffered during the cold start.
+// spawnAndServe launches the expert, waits for it to become a live agent and
+// signal review-subscription readiness, then re-delivers everything buffered
+// during the cold start. The readiness poll replaces the old fixed settle delay
+// (#125): we wait for BucketExpertReady/<name> (written by ServeReviews after
+// its subscription is active) rather than sleeping a fixed interval that can
+// expire before the subscription is established.
 func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 	defer e.wg.Done()
 
-	proc, err := e.launch(re.role, re.name)
+	proc, err := e.launchFunc(re.role, re.name)
 	if err != nil {
 		e.log.Warn("auto-expert: launch failed", "role", re.role, "name", re.name, "err", err)
 		e.forgetByName(re.name) // let a later trigger retry the spawn
@@ -234,7 +247,9 @@ func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 	e.mu.Lock()
 	re.proc = proc
 	e.mu.Unlock()
-	e.log.Info("auto-expert: spawned", "role", re.role, "name", re.name, "pid", proc.Pid)
+	if proc != nil {
+		e.log.Info("auto-expert: spawned", "role", re.role, "name", re.name, "pid", proc.Pid)
+	}
 
 	deadline := time.Now().Add(autoExpertSpawnWait)
 	for {
@@ -254,7 +269,28 @@ func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 		}
 		time.Sleep(autoExpertPollInterval)
 	}
-	time.Sleep(autoExpertSettle)
+
+	// Wait for the expert's ServeReviews subscription to be active (#125).
+	// The expert writes BucketExpertReady/<name> after subscribing; we poll
+	// for it rather than sleeping a fixed delay that may be shorter than the
+	// runtime startup time. On timeout we re-deliver anyway — the subscription
+	// may already be active; at worst the re-delivered request is lost, which
+	// is the same outcome as before this fix, but now rare instead of common.
+	readyDeadline := time.Now().Add(autoExpertReadyWait)
+	for {
+		if e.stopping() {
+			return
+		}
+		if e.hasExpertReady(re.name) {
+			break
+		}
+		if time.Now().After(readyDeadline) {
+			e.log.Warn("auto-expert: review subscription not confirmed in time; re-delivering anyway",
+				"role", re.role, "name", re.name)
+			break
+		}
+		time.Sleep(autoExpertPollInterval)
+	}
 
 	e.mu.Lock()
 	re.live = true
@@ -343,6 +379,13 @@ func (e *expertSpawner) hasLiveAgent(name string) bool {
 		}
 	}
 	return false
+}
+
+// hasExpertReady reports whether the expert has written its review-readiness
+// marker (BucketExpertReady/<name>), meaning ServeReviews has subscribed (#125).
+func (e *expertSpawner) hasExpertReady(name string) bool {
+	_, found, err := e.cli.KVGet(envelope.BucketExpertReady, name)
+	return err == nil && found
 }
 
 // targetForRole returns the desired number of experts for role. For the

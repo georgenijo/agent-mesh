@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 )
 
@@ -187,6 +188,10 @@ func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
 		sub.Unsubscribe()
 		return err
 	}
+	// Signal to the coordinator that this expert's review subscription is now
+	// active (#125). The spawner waits for this key before re-delivering a
+	// buffered review request, replacing the fixed 500ms settle delay.
+	s.notifyReviewReady()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -197,6 +202,19 @@ func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
 	}()
 	s.log.Info("expert: serving review requests", "subject", subject, "directSubject", directSubject)
 	return nil
+}
+
+// notifyReviewReady writes a readiness marker to BucketExpertReady so the
+// coordinator knows this expert's review subscription is active. Best-effort:
+// a write failure is logged but does not affect subscription correctness.
+func (s *Sidecar) notifyReviewReady() {
+	id, _ := s.joinedID()
+	if id == "" {
+		return
+	}
+	if _, err := s.bus.KVPut(envelope.BucketExpertReady, id, "ready", bus.PutOptions{}); err != nil {
+		s.log.Warn("expert: notify review-ready failed", "name", id, "err", err)
+	}
 }
 
 // publishReview emits the typed verdict as a mesh.review.<task> observability

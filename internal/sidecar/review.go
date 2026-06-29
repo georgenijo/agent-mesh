@@ -133,6 +133,12 @@ func (s *Sidecar) Review(ctx context.Context, fn ReviewFunc, req ReviewRequest) 
 // goroutine — reviews are rare and the runtime proxy serializes turns anyway,
 // so queueing would only add state.
 //
+// When the reviewer pool has more than one member (#123), the BusReviewer
+// publishes to mesh.review-req.<role>.<name> (the direct slot subject) so each
+// request is handled by exactly one expert without fanout to all pool members.
+// ServeReviews therefore subscribes to BOTH the shared role subject (pool size 1
+// / fallback) and the per-name direct subject (pool routing).
+//
 // This is the inbound transport for the #27 review capability: requests are
 // NOT asks (no ticket, no inbox) — the request envelope is fire-and-forget and
 // the verdict event is the reply, correlated by task id.
@@ -140,8 +146,7 @@ func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
 	if fn == nil {
 		return errNilReviewFunc
 	}
-	subject := envelope.SubjectReviewRequest(s.card.Role)
-	sub, err := s.bus.Subscribe(subject, func(env envelope.Envelope) {
+	handler := func(env envelope.Envelope) {
 		if ctx.Err() != nil {
 			return
 		}
@@ -167,8 +172,19 @@ func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
 			// the unclassifiable-internal-fault surface, log only.
 			s.log.Warn("expert: review failed", "task", p.Task, "err", err)
 		}
-	})
+	}
+	subject := envelope.SubjectReviewRequest(s.card.Role)
+	sub, err := s.bus.Subscribe(subject, handler)
 	if err != nil {
+		return err
+	}
+	// Also subscribe to the per-name direct subject (#123 pool routing): when
+	// pool size > 1 the BusReviewer publishes here instead of the shared role
+	// subject so exactly one expert handles each request.
+	directSubject := envelope.SubjectReviewRequestDirect(s.card.Role, s.card.Name)
+	directSub, err := s.bus.Subscribe(directSubject, handler)
+	if err != nil {
+		sub.Unsubscribe()
 		return err
 	}
 	go func() {
@@ -177,8 +193,9 @@ func (s *Sidecar) ServeReviews(ctx context.Context, fn ReviewFunc) error {
 		case <-s.stop:
 		}
 		sub.Unsubscribe()
+		directSub.Unsubscribe()
 	}()
-	s.log.Info("expert: serving review requests", "subject", subject)
+	s.log.Info("expert: serving review requests", "subject", subject, "directSubject", directSubject)
 	return nil
 }
 

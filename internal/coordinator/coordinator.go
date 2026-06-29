@@ -226,6 +226,7 @@ func (c *Coordinator) Start() error {
 				Role:     c.cfg.ReviewRole,
 				ReposDir: c.cfg.ReposDir,
 				Timeout:  c.cfg.ReviewTimeout,
+				PoolSize: c.cfg.ReviewPoolSize,
 				Log:      c.log,
 			})
 			if err != nil {
@@ -245,7 +246,8 @@ func (c *Coordinator) Start() error {
 		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
 			"reposDir", c.cfg.ReposDir, "budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
 		if c.reviewer != nil {
-			c.log.Info("review gating enabled", "role", c.cfg.ReviewRole, "timeout", c.cfg.ReviewTimeout)
+			c.log.Info("review gating enabled", "role", c.cfg.ReviewRole,
+				"timeout", c.cfg.ReviewTimeout, "poolSize", c.cfg.ReviewPoolSize)
 		}
 	} else if c.cfg.ReviewRole != "" {
 		c.log.Warn("MESH_REVIEW_ROLE set but MESH_WORKER_CLI unset; review gating inactive")

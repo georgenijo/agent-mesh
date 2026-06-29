@@ -3,15 +3,19 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/georgenijo/agent-mesh/internal/agentcard"
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/task"
@@ -35,6 +39,14 @@ import (
 // object store even after its worktree is removed, so a review never needs
 // the (possibly already torn down) worktree.
 //
+// Pool routing (#123): when PoolSize > 1 the reviewer discovers live experts
+// serving the review role from the registry and round-robins each request to
+// that expert's direct slot subject (mesh.review-req.<role>.<expert-name>)
+// instead of the shared role subject. This keeps N reviews concurrent instead
+// of serialising on one expert. Each expert subscribes to BOTH subjects
+// (sidecar.ServeReviews). Pool size 1 is backward-compatible: the shared role
+// subject is used as before (no registry read, no direct routing).
+//
 // Failure posture — never fake success, never block forever:
 //   - missing/unparseable diff metadata, git failure, publish failure
 //     → a synthesized ReviewError verdict (internal), published as a
@@ -44,16 +56,13 @@ import (
 //     published the same way;
 //   - head == base → NoDiff (nothing to review; no request, no event — the
 //     KindWorker ok event already records the no-change success).
-//
-// Duplicate experts on one role both review and both publish; the first
-// verdict event wins and the rest are dropped (the waiter is gone). That
-// costs a duplicate turn, not correctness — running one expert per review
-// role is the documented operating shape.
 type BusReviewer struct {
 	cli      *bus.Client
 	role     string
 	reposDir string
 	timeout  time.Duration
+	poolSize int
+	poolSeq  atomic.Uint64 // monotonic counter for round-robin slot selection
 	log      *slog.Logger
 
 	mu      sync.Mutex
@@ -67,6 +76,10 @@ type ReviewerOptions struct {
 	ReposDir string        // job repo name → git checkout mapping (required; same as the worker driver's)
 	Timeout  time.Duration // wall-clock bound on one round trip (default config.DefaultReviewTimeout's value, 5m)
 	Log      *slog.Logger
+	// PoolSize is the number of resident reviewer experts for this role (#123).
+	// When > 1, Review() distributes requests across live experts via round-robin
+	// on the per-expert direct subject. Default 1 = shared role subject, unchanged.
+	PoolSize int
 }
 
 // NewBusReviewer validates the options and subscribes the verdict tap.
@@ -86,11 +99,16 @@ func NewBusReviewer(cli *bus.Client, opts ReviewerOptions) (*BusReviewer, error)
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
+	poolSize := opts.PoolSize
+	if poolSize <= 0 {
+		poolSize = 1
+	}
 	r := &BusReviewer{
 		cli:      cli,
 		role:     opts.Role,
 		reposDir: opts.ReposDir,
 		timeout:  opts.Timeout,
+		poolSize: poolSize,
 		log:      opts.Log,
 		waiters:  make(map[string]chan envelope.ReviewPayload),
 	}
@@ -182,8 +200,12 @@ func (r *BusReviewer) Review(ctx context.Context, target ReviewTarget) (ReviewDe
 		Instruction:  reviewInstruction(rec),
 		Diff:         truncateDiff(diff, envelope.MaxReviewRequestDiffBytes),
 	}
-	env, err := envelope.New(envelope.KindReviewRequest, schedulerID,
-		envelope.SubjectReviewRequest(r.role), &payload)
+	// Pool routing (#123): when pool size > 1, round-robin across live experts
+	// on their per-expert direct subjects so N reviews can proceed concurrently.
+	// When pool size is 1 (or no live experts are found), use the shared role
+	// subject for backward compatibility.
+	subject := r.routeSubject()
+	env, err := envelope.New(envelope.KindReviewRequest, schedulerID, subject, &payload)
 	if err == nil {
 		err = r.cli.Publish(env)
 	}
@@ -210,6 +232,43 @@ func (r *BusReviewer) Review(ctx context.Context, target ReviewTarget) (ReviewDe
 		return ReviewDecision{Verdict: envelope.ReviewError, Code: envelope.ReviewRuntimeLost,
 			Notes: ctx.Err().Error()}, nil
 	}
+}
+
+// routeSubject selects the publish subject for the next review request.
+// Pool size 1: shared role subject (backward compat). Pool size > 1: round-
+// robin across live experts' direct slot subjects; falls back to the role
+// subject if the registry read fails or returns no live experts.
+func (r *BusReviewer) routeSubject() string {
+	if r.poolSize <= 1 {
+		return envelope.SubjectReviewRequest(r.role)
+	}
+	experts := r.poolExperts()
+	if len(experts) == 0 {
+		return envelope.SubjectReviewRequest(r.role)
+	}
+	idx := r.poolSeq.Add(1) - 1
+	return envelope.SubjectReviewRequestDirect(r.role, experts[int(idx)%len(experts)])
+}
+
+// poolExperts reads the registry and returns the sorted names of live agents
+// serving the review role. Sorted so round-robin is deterministic across calls.
+func (r *BusReviewer) poolExperts() []string {
+	kvs, err := r.cli.KVList(envelope.BucketRegistry)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, kv := range kvs {
+		var rec agentcard.RegistryRecord
+		if err := json.Unmarshal(kv.Value, &rec); err != nil {
+			continue
+		}
+		if rec.State == agentcard.PresenceLive && rec.Card.Role == r.role {
+			names = append(names, rec.Card.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // synthesize builds a typed ReviewError decision for a review the expert never

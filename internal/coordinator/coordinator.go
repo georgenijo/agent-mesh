@@ -209,12 +209,13 @@ func (c *Coordinator) Start() error {
 			return fmt.Errorf("coordinator: worker driver: %w", err)
 		}
 		sopts := scheduler.Options{
-			Driver:      drv,
-			BudgetUSD:   c.cfg.BudgetUSD,
-			MaxParallel: c.cfg.MaxWorkers,
-			Interval:    sweepInterval(c.cfg.HeartbeatInterval),
-			Log:         c.log,
-			CostLedger:  cost.New(cli),
+			Driver:        drv,
+			BudgetUSD:     c.cfg.BudgetUSD,
+			MaxParallel:   c.cfg.MaxWorkers,
+			Interval:      sweepInterval(c.cfg.HeartbeatInterval),
+			Log:           c.log,
+			CostLedger:    cost.New(cli),
+			ReviewRetries: c.cfg.ReviewRetries,
 		}
 		// Review gating (#80): opt-in via MESH_REVIEW_ROLE, same posture as
 		// the planner/worker knobs — unset means a worker success transitions

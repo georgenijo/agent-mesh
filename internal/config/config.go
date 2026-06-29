@@ -48,6 +48,7 @@ const (
 	EnvReviewRole            = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout         = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
 	EnvReviewPoolSize        = "MESH_REVIEW_POOL_SIZE"    // number of resident reviewer experts the fleet maintains for MESH_REVIEW_ROLE (#123); default 1
+	EnvReviewRetries         = "MESH_REVIEW_RETRIES"      // max re-dispatch attempts when a reviewer returns request_changes (#85); default 2; 0 = fail immediately
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
 	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
 	EnvJobsAddr              = "MESH_JOBS_ADDR"           // HTTP ingress for POST /jobs (#119); empty (default) = disabled
@@ -120,6 +121,12 @@ const (
 	// current single-reviewer behaviour; a larger pool allows N concurrent
 	// review turns instead of serialising on one expert.
 	DefaultReviewPoolSize = 1
+
+	// DefaultReviewRetries is the number of re-dispatch attempts the scheduler
+	// makes when a reviewer returns request_changes (#85). Each retry continues
+	// on the task's existing branch and injects the reviewer's notes into the
+	// worker prompt. 0 = fail immediately on request_changes.
+	DefaultReviewRetries = 2
 
 	// DefaultExpertIdleTTL is how long an auto-spawned expert may sit idle
 	// (no ask or review handled) before it self-terminates (#105). Five
@@ -194,6 +201,11 @@ type Config struct {
 	// behaviour). A larger pool lets N worker diffs be reviewed concurrently
 	// instead of serialising on one expert turn.
 	ReviewPoolSize int
+	// ReviewRetries is the number of re-dispatch attempts the scheduler makes
+	// when a reviewer returns request_changes (#85). Each retry continues on
+	// the task's existing branch carrying prior commits, and injects the
+	// reviewer's notes into the worker prompt. 0 = fail immediately.
+	ReviewRetries int
 
 	// AutoExperts arms autonomous on-demand expert spawning (#117): when on,
 	// the coordinator watches role-addressed asks (and #80 review requests) and
@@ -261,6 +273,7 @@ func Load() (Config, error) {
 		MaxWorkers:        DefaultMaxWorkers,
 		ReviewTimeout:     DefaultReviewTimeout,
 		ReviewPoolSize:    DefaultReviewPoolSize,
+		ReviewRetries:     DefaultReviewRetries,
 		KeepWorktrees:     KeepWorktreesOnFailure,
 		AuditFanout:       true,
 		ExpertIdleTTL:     DefaultExpertIdleTTL,
@@ -393,6 +406,13 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvReviewPoolSize, raw)
 		}
 		cfg.ReviewPoolSize = n
+	}
+	if raw := os.Getenv(EnvReviewRetries); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a non-negative integer", EnvReviewRetries, raw)
+		}
+		cfg.ReviewRetries = n
 	}
 	cfg.JobsAddr = os.Getenv(EnvJobsAddr)     // empty = ingress disabled
 	cfg.GitHubRepo = os.Getenv(EnvGitHubRepo) // empty = mesh work disabled

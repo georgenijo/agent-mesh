@@ -56,6 +56,23 @@ type Record struct {
 	// the DAG carries code forward, not just execution order (#26). Empty until
 	// a worker succeeds (and stays empty for a task that committed nothing).
 	Branch string `json:"branch,omitempty"`
+	// RetriesLeft is the re-dispatch budget remaining for this task (#85).
+	// Decremented by the scheduler each time a reviewer returns request_changes
+	// and the task is re-dispatched. When it reaches zero the next
+	// request_changes verdict fails the task instead of re-dispatching.
+	// Zero value on first dispatch; initialized to MESH_REVIEW_RETRIES by the
+	// scheduler on the first request_changes verdict.
+	RetriesLeft int `json:"retriesLeft,omitempty"`
+	// ReviewFeedback carries the last reviewer's notes from a request_changes
+	// verdict (#85). Injected into the worker prompt on re-dispatch so the
+	// worker addresses the reviewer's concerns. Empty until first re-dispatch.
+	ReviewFeedback string `json:"reviewFeedback,omitempty"`
+	// Redispatched is set the first time the task is re-dispatched after a
+	// request_changes (#85). It is the authoritative "has been re-dispatched"
+	// flag: retry accounting must not infer this from ReviewFeedback emptiness,
+	// because a reviewer may return request_changes with empty notes — which
+	// would otherwise re-initialize the budget every round (unbounded retries).
+	Redispatched bool `json:"redispatched,omitempty"`
 }
 
 // Event records one task transition, appended to the task-events stream.

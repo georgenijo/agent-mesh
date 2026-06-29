@@ -66,6 +66,13 @@ type Options struct {
 	// Review cost accrues against the same budget meter as worker runs.
 	Reviewer Reviewer
 
+	// ReviewRetries is the maximum number of re-dispatch attempts the scheduler
+	// makes when a reviewer returns request_changes (#85). Each re-dispatch
+	// continues on the task's existing branch (carrying prior commits) and
+	// injects the reviewer's notes into the worker prompt. 0 = fail immediately
+	// on request_changes (pre-#85 behaviour). Default comes from config.
+	ReviewRetries int
+
 	// CostLedger persists cumulative spend and per-model breakdown across
 	// coordinator restarts. When set, the scheduler loads any prior spent
 	// total from the ledger on startup (so s.spent picks up where the last
@@ -455,8 +462,9 @@ func (s *Scheduler) handleOutcome(o outcome) {
 // reviewOutcome is one resolved review, delivered from a review goroutine to
 // the loop goroutine — the same single-writer discipline as worker outcomes.
 type reviewOutcome struct {
-	task task.Record
-	dec  ReviewDecision
+	task   task.Record
+	dec    ReviewDecision
+	branch string // worker output branch (from res.Branch), used on re-dispatch
 }
 
 // maybeStartReview routes a typed worker success to the reviewer. The task
@@ -479,13 +487,13 @@ func (s *Scheduler) maybeStartReview(rec task.Record, res Result) {
 	}
 	s.inflight[rec.ID] = rec.Job
 	s.workWG.Add(1)
-	go s.runReview(rec, repo, res.Summary)
+	go s.runReview(rec, repo, res.Summary, res.Branch)
 }
 
 // runReview runs on its own goroutine: one Reviewer round trip, then report
 // to the loop. A reviewer Go error (a fault it could not classify) maps to a
 // typed ReviewError — never an approval; a panicking reviewer likewise.
-func (s *Scheduler) runReview(rec task.Record, repo, summary string) {
+func (s *Scheduler) runReview(rec task.Record, repo, summary, branch string) {
 	defer s.workWG.Done()
 	var dec ReviewDecision
 	var err error
@@ -502,7 +510,7 @@ func (s *Scheduler) runReview(rec task.Record, repo, summary string) {
 			Notes: err.Error(), CostUSD: dec.CostUSD}
 	}
 	select {
-	case s.reviews <- reviewOutcome{task: rec, dec: dec}:
+	case s.reviews <- reviewOutcome{task: rec, dec: dec, branch: branch}:
 	case <-s.stop:
 		// Shutting down: drop the outcome. The task stays persisted running
 		// and the next coordinator lifetime re-runs and re-reviews it.
@@ -532,7 +540,9 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 	case dec.Verdict == envelope.ReviewApprove:
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskDone,
 			truncate("review approved: "+dec.Notes, 512))
-	case dec.Verdict == envelope.ReviewRequestChanges, dec.Verdict == envelope.ReviewReject:
+	case dec.Verdict == envelope.ReviewRequestChanges:
+		s.handleRequestChanges(o, dec)
+	case dec.Verdict == envelope.ReviewReject:
 		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
 			truncate(fmt.Sprintf("review %s: %s", dec.Verdict, dec.Notes), 512))
 	default:
@@ -550,6 +560,64 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 		s.pause(envelope.FleetBudgetExhausted,
 			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, s.opts.BudgetUSD))
 	}
+}
+
+// handleRequestChanges applies the bounded re-dispatch policy (#85) when a
+// reviewer returns request_changes. With retries remaining the task is reset
+// to pending carrying the reviewer's notes — the next sweep re-dispatches it
+// on the existing branch so prior commits accumulate. When retries are
+// exhausted the task fails with a typed reason. Loop goroutine only.
+func (s *Scheduler) handleRequestChanges(o reviewOutcome, dec ReviewDecision) {
+	// Determine retries available. The Redispatched flag (not ReviewFeedback
+	// emptiness) is the authority for "first request_changes": a reviewer may
+	// return request_changes with empty notes, which would otherwise re-init the
+	// budget every round and loop unboundedly. On the first request_changes we
+	// initialise from the scheduler config; on subsequent ones the persisted
+	// RetriesLeft is the authority (decremented by the previous Redispatch call).
+	currentRec, found, err := s.tasks.Get(o.task.ID)
+	if err != nil || !found {
+		// Cannot read the record: fail safe (never silent approve).
+		s.log.Warn("scheduler: read task for re-dispatch failed; failing task",
+			"task", o.task.ID, "err", err)
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
+			truncate(fmt.Sprintf("review request_changes: %s", dec.Notes), 512))
+		return
+	}
+
+	var available int
+	if !currentRec.Redispatched {
+		// First request_changes for this task: budget is the scheduler config.
+		available = s.opts.ReviewRetries
+	} else {
+		// Already re-dispatched before: use the persisted counter.
+		available = currentRec.RetriesLeft
+	}
+
+	if available <= 0 {
+		// Retries exhausted: fail the task.
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
+			truncate(fmt.Sprintf("review request_changes (retries exhausted): %s", dec.Notes), 512))
+		return
+	}
+
+	// Re-dispatch: persist feedback + decremented counter, reset to pending.
+	updated, err := s.tasks.Redispatch(o.task.ID, dec.Notes, available-1)
+	if err != nil {
+		s.log.Warn("scheduler: redispatch failed; failing task", "task", o.task.ID, "err", err)
+		s.transitionTask(o.task.ID, envelope.TaskRunning, envelope.TaskFailed,
+			truncate(fmt.Sprintf("review request_changes (redispatch error): %s", dec.Notes), 512))
+		return
+	}
+	// Carry the output branch onto the re-dispatched record so the worker's
+	// Spawn picks up the existing branch (prior commits must survive).
+	if o.branch != "" && updated.Branch == "" {
+		if err := s.tasks.SetBranch(o.task.ID, o.branch); err != nil {
+			s.log.Warn("scheduler: set branch on re-dispatch failed", "task", o.task.ID, "err", err)
+		}
+	}
+	s.publishTask(updated)
+	s.log.Info("scheduler: task re-dispatched after request_changes",
+		"task", o.task.ID, "retriesLeft", available-1)
 }
 
 // finalize moves a job whose every task is terminal into done or failed. A

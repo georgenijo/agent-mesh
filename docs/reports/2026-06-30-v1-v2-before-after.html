@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Mesh — V1 → V2: From a Spine You Drive to a Fleet That Drives Itself</title>
+<style>
+  :root {
+    --bg: #0c0f17;
+    --panel: #141925;
+    --panel-2: #1b2230;
+    --line: #2a3344;
+    --ink: #e7ecf3;
+    --muted: #97a3b6;
+    --before: #ff6b6b;
+    --before-bg: rgba(255,107,107,.08);
+    --before-line: rgba(255,107,107,.30);
+    --after: #36d399;
+    --after-bg: rgba(54,211,153,.08);
+    --after-line: rgba(54,211,153,.30);
+    --accent: #6aa7ff;
+    --gold: #f7c948;
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 48px 24px 96px; }
+
+  /* Header */
+  header.hero {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: radial-gradient(120% 140% at 0% 0%, #18203250 0%, var(--panel) 55%);
+    padding: 34px 34px 30px; margin-bottom: 28px;
+  }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 14px; letter-spacing: -.01em; }
+  h1 .arrow { color: var(--accent); }
+  .meta { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin: 0 0 18px; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  blockquote.lede {
+    margin: 0; padding: 14px 18px; border-left: 3px solid var(--accent);
+    background: var(--panel-2); border-radius: 0 8px 8px 0; color: #c7d2e2; font-size: 15px;
+  }
+
+  /* TL;DR cards */
+  .tldr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin: 22px 0 8px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    padding: 16px 16px 14px; }
+  .card.before { border-color: var(--before-line); background: var(--before-bg); }
+  .card.after  { border-color: var(--after-line);  background: var(--after-bg); }
+  .card.proof  { border-color: rgba(247,201,72,.3); background: rgba(247,201,72,.06); }
+  .card .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; margin: 0 0 6px; }
+  .card.before .tag { color: var(--before); }
+  .card.after  .tag { color: var(--after); }
+  .card.proof  .tag { color: var(--gold); }
+  .card p { margin: 0; font-size: 13.5px; color: #cdd7e6; }
+  .card p b { color: var(--ink); }
+
+  section { margin-top: 40px; }
+  h2 { font-size: 23px; margin: 0 0 6px; letter-spacing: -.01em; }
+  h2 .num { font-family: var(--mono); color: var(--accent); font-size: 16px; margin-right: 8px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+
+  /* Before/After comparison rows */
+  .cmp { display: flex; flex-direction: column; gap: 12px; }
+  .row { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+  .row .dim { padding: 10px 16px; font-weight: 600; font-size: 13.5px;
+    background: var(--panel-2); border-bottom: 1px solid var(--line); color: #d8e1ef; }
+  .row .cols { display: grid; grid-template-columns: 1fr 1fr; }
+  .col { padding: 13px 16px; font-size: 13.5px; color: #c4cfde; }
+  .col.b { background: var(--before-bg); border-right: 1px solid var(--line); }
+  .col.a { background: var(--after-bg); }
+  .col .lbl { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; display: block; margin-bottom: 5px; }
+  .col.b .lbl { color: var(--before); }
+  .col.a .lbl { color: var(--after); }
+  .col b { color: var(--ink); }
+
+  /* Theme blocks */
+  .theme { border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    padding: 18px 20px; margin-bottom: 14px; }
+  .theme h3 { margin: 0 0 4px; font-size: 17px; }
+  .theme .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .theme ul { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 8px; }
+  .theme li { font-size: 13.5px; color: #c8d3e2; padding-left: 18px; position: relative; }
+  .theme li::before { content: "▸"; color: var(--accent); position: absolute; left: 0; }
+  .pr { font-family: var(--mono); font-size: 12px; color: var(--gold);
+    background: rgba(247,201,72,.10); padding: 1px 6px; border-radius: 5px; }
+  .unlock { color: var(--gold); font-weight: 600; }
+
+  /* Metrics grid */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .metric { border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    padding: 16px; text-align: center; }
+  .metric .v { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+  .metric .v.good { color: var(--after); }
+  .metric .v.gold { color: var(--gold); }
+  .metric .k { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .open ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 9px; }
+  .open li { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    padding: 11px 14px; font-size: 13.5px; color: #c8d3e2; }
+  .open li b { color: var(--ink); }
+
+  .note { border: 1px solid var(--before-line); background: var(--before-bg);
+    border-radius: 12px; padding: 16px 20px; font-size: 13.5px; color: #d2c2c2; }
+  .note b { color: #ffd9d9; }
+
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12px; font-family: var(--mono); }
+
+  @media (max-width: 760px) {
+    .tldr, .metrics { grid-template-columns: 1fr; }
+    .row .cols { grid-template-columns: 1fr; }
+    .col.b { border-right: none; border-bottom: 1px solid var(--line); }
+    h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">Agent Mesh · Iteration Report</p>
+    <h1>V1 <span class="arrow">→</span> V2: from a spine you drive to a fleet that drives itself</h1>
+    <p class="meta"><b>Window</b> 2026-06-23 → 2026-06-30 &nbsp;·&nbsp; <b>Repo</b> georgenijo/agent-mesh &nbsp;·&nbsp; <b>Mode</b> autonomous</p>
+    <blockquote class="lede">
+      V1 helped agents <i>you</i> ran avoid each other. V2 runs the agents for you. Drop a ticket →
+      a Sonnet worker builds it → an Opus expert reviews it → it merges. No human in the build loop.
+    </blockquote>
+  </header>
+
+  <!-- TL;DR -->
+  <div class="tldr">
+    <div class="card before">
+      <p class="tag">Before · V1</p>
+      <p>A CLI fabric — <b>mesh join/claim/ask/note</b> — so coding agents <b>you drive by hand</b> discover each other, avoid editing the same files, and ask each other questions. You are the operator.</p>
+    </div>
+    <div class="card after">
+      <p class="tag">After · V2</p>
+      <p>A hands-off service. Drop a GitHub issue (or say <b>"work on issues 110–115"</b>); the coordinator triages, <b>auto-spawns</b> experts + workers, builds in an isolated worktree, an Opus reviewer <b>gates</b> the merge, and the dashboard streams it live. You watch.</p>
+    </div>
+    <div class="card proof">
+      <p class="tag">Proof · overnight run</p>
+      <p>The 06-28 run cleared the backlog unattended: <b>10 issues + 2 infra fixes, 14 PRs, ~$26, main never broke</b>. Prior run (06-26): <b>0 / 30</b>. The fleet even fixed <b>5 of its own bugs</b>.</p>
+    </div>
+  </div>
+
+  <!-- Pivot table -->
+  <section>
+    <h2>The pivot in one table</h2>
+    <p class="sub">Eleven dimensions, before and after. The only one that didn't move: cognition still runs on the user's CLI subscription — no API key in core.</p>
+    <div class="cmp">
+
+      <div class="row"><div class="dim">Who drives</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>The human. Agents work solo ~95% of the time; mesh assists only on overlap. Collaboration is opt-in <b>per message</b>.</div>
+        <div class="col a"><span class="lbl">V2</span>The system. You drop a ticket; the coordinator triages, spawns a team, executes, reviews, reports. You watch.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Intake</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>A human runs <b>mesh</b> verbs at the terminal.</div>
+        <div class="col a"><span class="lbl">V2</span>GitHub issue link, repo-picker dropdown, natural language ("work on issue N / range / all"), or <b>POST /jobs</b>. One <b>mesh up</b> brings the fleet up armed.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Agent model</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>Long-lived agents the mesh merely assists; no team or pipeline concept.</div>
+        <div class="col a"><span class="lbl">V2</span><b>Hybrid:</b> warm <b>persistent experts</b> (hold the codebase map, answer + review) paired with <b>ephemeral workers</b> (one job, then exit).</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Expert lifecycle</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>One manually-started responder loop (<b>mesh expert serve</b>).</div>
+        <div class="col a"><span class="lbl">V2</span>Coordinator <b>auto-spawns</b> an expert for any un-owned role; a <b>reviewer pool</b> parallelises reviews; idle experts <b>self-terminate</b> on a TTL.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Worker execution</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>N/A — no worker concept.</div>
+        <div class="col a"><span class="lbl">V2</span>Isolated git <b>worktree-per-task</b>, embedded per-worker sidecar for real <b>mesh claim/ask --wait</b>, auto-commit onto the task branch.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Quality gate</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>None in the original design (P2 was async ask/answer).</div>
+        <div class="col a"><span class="lbl">V2</span>Every diff is <b>routed to a reviewer</b>; the typed verdict gates the task. Workers self-verify a <b>Definition of Done</b>; <b>request_changes</b> → bounded re-dispatch with feedback; ambiguity → <b>escalate</b>, not guess.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Cognition source</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>CLI invocation on the user's subscription; no API key in core.</div>
+        <div class="col a"><span class="lbl">V2</span><b>Same.</b> Every brain is <b>claude -p</b> / <b>codex exec</b>, headless + structured output. The invariant survived the pivot intact.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Transport</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>Assumed NATS/JetStream as a separate process (early framing).</div>
+        <div class="col a"><span class="lbl">V2</span>Coordinator-embedded <b>star bus</b> over a unix socket (pub/sub + KV CAS/TTL + JSONL streams). <b>bus.Client</b> is the NATS swap seam — no distributed tax paid early.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Coordinator role</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>Registry + presence + ask routing.</div>
+        <div class="col a"><span class="lbl">V2</span>Control plane <b>expanded:</b> triage (planner → task DAG), schedule, review gate, <b>budget metering</b> (hard cap, pause-not-fail), idle reaping, audit fan-out.</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Blackboard</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>Per-repo decision streams a human replays with <b>mesh context</b>.</div>
+        <div class="col a"><span class="lbl">V2</span>Same streams, now the experts' <b>long-term memory</b> (compacted primer re-injected on restart) <b>and</b> mesh-wide in the dashboard (aggregated across all repos).</div>
+      </div></div>
+
+      <div class="row"><div class="dim">Dashboard</div><div class="cols">
+        <div class="col b"><span class="lbl">V1</span>Read-only SSE observer — presence, claims, notes.</div>
+        <div class="col a"><span class="lbl">V2</span>Live <b>drill-in</b>: click a job/task/agent to stream its output, model + cumulative cost, a cost ledger vs budget, group-by-job, issue links, and a Claude-session telemetry panel into each worker's transcript.</div>
+      </div></div>
+
+    </div>
+  </section>
+
+  <!-- This week, by theme -->
+  <section>
+    <h2>What shipped this week, by theme</h2>
+    <p class="sub">06-23 → 06-30. Five themes, anchored to the merged PRs.</p>
+
+    <div class="theme">
+      <h3>1 · English-in intake — you stop typing paths</h3>
+      <p class="hint">The front door changed from "run mesh verbs" to "tell it what you want."</p>
+      <ul>
+        <li><span class="pr">#134</span> submit a job from a <b>GitHub issue link</b></li>
+        <li><span class="pr">#133</span> <b>natural-language control</b>: "work on issue 110", "issues 110–115", "all open issues"</li>
+        <li><span class="pr">#138</span> submit-job <b>repo picker</b> (dropdown from MESH_REPOS_DIR)</li>
+        <li><span class="pr">#135</span> generic <b>POST /jobs</b> HTTP ingress on meshd</li>
+        <li><span class="pr">#139</span> <b>arm-once</b> drop-and-run — a single <b>mesh up</b></li>
+      </ul>
+    </div>
+
+    <div class="theme">
+      <h3>2 · Autonomous experts — the pool scales itself</h3>
+      <p class="hint">The control plane provisions and reaps its own cognition.</p>
+      <ul>
+        <li><span class="pr">#118</span> <b>on-demand experts</b> — coordinator spawns an expert the instant an ask/review hits an un-owned role</li>
+        <li><span class="pr">#146</span> <b>reviewer pool</b> (MESH_REVIEW_POOL_SIZE) parallelises reviews, lifting the single-reviewer ceiling</li>
+        <li><span class="pr">#129</span> <b>idle reaper</b> — experts self-terminate after an inactivity TTL</li>
+        <li><span class="pr">#148</span> fix the <b>cold-spawn re-deliver race</b> (readiness signal so the first review never drops)</li>
+      </ul>
+    </div>
+
+    <div class="theme">
+      <h3>3 · The review loop closes — work actually finishes</h3>
+      <p class="hint">V1 could coordinate agents; it couldn't finish work. Three changes flipped that.</p>
+      <ul>
+        <li><span class="pr">#130</span> <span class="unlock">worker "Definition of Done" — the unlock:</span> self-verify gofmt / build / test / acceptance before declaring done. Flipped nit-failures into <b>four first-try approvals in a row</b></li>
+        <li><span class="pr">#149</span> <b>bounded re-dispatch</b> — on request_changes, re-dispatch with the reviewer's feedback instead of hard-failing</li>
+        <li><span class="pr">#150</span> <b>escalation primitive</b> — a worker hitting real ambiguity escalates rather than guessing</li>
+      </ul>
+    </div>
+
+    <div class="theme">
+      <h3>4 · Observability — workers stop being black boxes</h3>
+      <p class="hint">See which task is running, what it's doing, and what it costs — live.</p>
+      <ul>
+        <li><span class="pr">8baa2c3</span> click <b>drill-in + live worker streaming</b> (state, role, model, PID, cwd, cost, branch + live log)</li>
+        <li><span class="pr">0c77afb</span> <b>Claude Code session telemetry panel</b> — correlates each cc-* worker with its native transcript</li>
+        <li><span class="pr">#136</span> per-agent <b>model + cumulative cost</b></li>
+        <li><span class="pr">#128 / #131</span> persistent <b>cost ledger</b> + the cost-window UI</li>
+        <li><span class="pr">#127</span> <b>group tasks by job</b> with readable labels &nbsp;·&nbsp; <span class="pr">#126</span> GitHub issue link on jobs</li>
+        <li><span class="pr">8bb2220</span> <b>MESH_DASHBOARD_ALLOWED_HOSTS</b> — tailnet viewing (loopback stays default) &nbsp;·&nbsp; <span class="pr">#116</span> mesh-wide notes</li>
+      </ul>
+    </div>
+
+    <div class="theme">
+      <h3>5 · Dogfood self-heal — the fleet fixed its own bugs</h3>
+      <p class="hint">The mesh ran its own hardening backlog; the workers produced audit-grade, CI-verified fixes.</p>
+      <ul>
+        <li><span class="pr">#124</span> the two collapse-causers: <b>worker child-process leak</b> (process-group kill → zero orphans) + <b>planner over-decomposition</b> curb (default to one task → 13/13 jobs = 1 task)</li>
+        <li><span class="pr">bb1ff57</span> <b>worker tool-use unblock</b> — --dangerously-skip-permissions so it can edit inside its bounded worktree</li>
+        <li><span class="pr">baddd72</span> <b>resident-expert startup deadlock</b> fix (lazy session-id capture)</li>
+        <li><b>5 fleet-found fixes:</b> KV reads no longer create buckets · sidecar no longer self-accepts its own role-ask · NaN/Inf budget rejected · MESH_DIR/MESH_REPOS_DIR absolutized · --json honored on setup errors</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Proof metrics -->
+  <section>
+    <h2>The proof — overnight autonomous run</h2>
+    <p class="sub">2026-06-28 · unattended · build + Opus review + merge, all in one ~2-hour window.</p>
+    <div class="metrics">
+      <div class="metric"><div class="v good">10 + 2</div><div class="k">backlog issues + infra fixes</div></div>
+      <div class="metric"><div class="v">14</div><div class="k">PRs merged (#124–#139)</div></div>
+      <div class="metric"><div class="v good">never</div><div class="k">main broke</div></div>
+      <div class="metric"><div class="v gold">$26.14</div><div class="k">worker spend (~$2/job)</div></div>
+      <div class="metric"><div class="v">62%</div><div class="k">first-pass success (all 13 landed)</div></div>
+      <div class="metric"><div class="v">~2h 12m</div><div class="k">active working window</div></div>
+      <div class="metric"><div class="v">13 / 13</div><div class="k">jobs = exactly 1 task</div></div>
+      <div class="metric"><div class="v before" style="color:var(--before)">0 / 30</div><div class="k">prior run (06-26)</div></div>
+    </div>
+  </section>
+
+  <!-- Open -->
+  <section class="open">
+    <h2>What's still open — the V2.1 edge</h2>
+    <ul>
+      <li><span class="pr">#147</span> <b>idle reaper vs long reviews</b> — can terminate the reviewer before a long task finishes (review runtime_lost); lifecycle ordering needs work.</li>
+      <li><span class="pr">#107</span> <b>autonomous PR workflow</b> — worker opens a PR, merge gated on CI build + reviewer approval.</li>
+      <li><span class="pr">#102 / #103 / #104</span> <b>multi-provider workers</b> — Codex / Aider / multi-CLI scheduling; the cliexec.Adapter seam exists, non-Claude adapters stubbed.</li>
+      <li><span class="pr">#143 / #144</span> <b>eval harness + independent review oracle</b> — grade what the reviewer approved (catch false-approves).</li>
+      <li><span class="pr">#142 / #145</span> <b>lifecycle hygiene + run isolation</b> — reap completed jobs/worktrees, archive runs.</li>
+      <li><span class="pr">#121</span> <b>P4 observer redesign</b> — promote the Console/Wall mockup into web/.</li>
+    </ul>
+  </section>
+
+  <!-- Stale framing -->
+  <section>
+    <h2>Note on stale framing</h2>
+    <div class="note">
+      <b>ARCHITECTURE.md §1 / §11 / §12</b> still describe V1 — the opt-in-per-message human-driven model
+      and a separate NATS broker. The newest <b>DECISIONS.md</b> entries win on every conflict: the
+      autonomous pivot (Mode B), the coordinator-embedded star bus, review gating, and hard-cap budget
+      all supersede that older framing. Re-deriving §1/§11/§12 for the autonomous model is outstanding doc debt.
+    </div>
+  </section>
+
+  <footer>
+    Sources: git log + GitHub PR/issue data (06-23 → 06-30) · docs/decisions/DECISIONS.md · docs/reports/2026-06-28-overnight-run.mdx (the 2026-06-28 run). · Twin of docs/reports/2026-06-30-v1-v2-before-after.mdx
+  </footer>
+
+</div>
+</body>
+</html>

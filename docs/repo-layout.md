@@ -70,10 +70,14 @@ agent-mesh/
     ├── decisions/
     │   ├── DECISIONS.md        # running log
     │   └── YYYY-MM-DD-*.md     # ADRs for deep one-off rationale (as needed)
-    └── mockups/                # HTML prototypes (no build step)
-        ├── dashboard-bus.html
-        ├── dashboard-full.html
-        └── topology.html
+    ├── reports/                # dated build + autonomous-run reports
+    │   └── YYYY-MM-DD-*.{md,mdx,html}
+    ├── spikes/                 # feasibility evidence (answered; kept as record)
+    ├── mockups/                # HTML prototypes (no build step)
+    │   ├── dashboard-bus.html
+    │   ├── dashboard-full.html
+    │   └── topology.html
+    └── archive/                # completed one-off artifacts (not load-bearing)
 ```
 
 ---

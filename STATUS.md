@@ -2,7 +2,7 @@
 
 **An autonomous director ran the mesh against its own GitHub backlog and merged 9 issues, unattended, with `main` green throughout.** Drop a ticket → a Sonnet worker builds it → an Opus expert reviews it → it merges.
 
-See `docs/overnight-run.html` for the animated story.
+See `docs/reports/2026-06-28-overnight-run.html` for the animated story.
 
 ## Result
 

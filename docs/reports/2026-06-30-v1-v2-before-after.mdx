@@ -1,0 +1,131 @@
+---
+title: "Agent Mesh — V1 → V2: From a Spine You Drive to a Fleet That Drives Itself"
+date: "2026-06-30"
+repo: "georgenijo/agent-mesh"
+window: "2026-06-23 → 2026-06-30"
+summary: "In one week Agent Mesh crossed from a coordination spine you drive by hand to an autonomous service: drop a GitHub issue, the coordinator triages it, spawns experts + workers, builds → reviews → merges, and you watch. Proven by an unattended overnight run that cleared the backlog — 10 issues + 2 infra fixes across 14 PRs, ~$26, main never broke — and a fleet that fixed five of its own bugs."
+---
+
+# Agent Mesh — V1 → V2
+
+**Window:** 2026-06-23 → 2026-06-30 · **Repo:** `georgenijo/agent-mesh` · **Mode:** autonomous
+
+> V1 helped agents *you* ran avoid each other. V2 runs the agents for you.
+> Drop a ticket → the coordinator triages it → a Sonnet worker builds it → an Opus expert
+> reviews it → it merges. No human in the build loop.
+
+---
+
+## TL;DR — the before/after in three lines
+
+- **Before:** a CLI fabric (`mesh join/claim/ask/note`) so coding agents *you drive by hand* discover each other, avoid editing the same files, and ask each other questions. You are the operator.
+- **After:** a hands-off service. You drop a GitHub issue (or type "work on issues 110–115"); the coordinator triages it into a task DAG, **auto-spawns** experts + workers, the worker builds in an isolated worktree, an Opus reviewer **gates** the merge, and the dashboard streams it all live. You watch.
+- **Proof:** the **2026-06-28 overnight run** cleared the do-able backlog unattended — **10 backlog issues + 2 infra fixes, 14 PRs, ~$26.14 worker spend, `main` never broke**. The prior run (06-26) merged **0 of 30**. The workers even found and fixed **5 of the mesh's own bugs**.
+
+---
+
+## The pivot in one table
+
+| Dimension | V1 — coordination spine | V2 — autonomous fleet |
+| --- | --- | --- |
+| **Who drives** | The human. Agents work solo ~95% of the time; mesh assists only on overlap or when stuck. Collaboration is opt-in *per message*. | The system. You drop a ticket; the coordinator triages, spawns a team, executes, reviews, reports. You watch. |
+| **Intake** | A human runs `mesh` verbs at the terminal. | GitHub issue link, a repo-picker dropdown, natural language ("work on issue N / range / all open"), or `POST /jobs`. One command (`mesh up`) brings the whole fleet up armed. |
+| **Agent model** | Long-lived agents the mesh merely assists; no team/pipeline concept. | **Hybrid:** warm **persistent experts** (hold the codebase map + decisions, answer + review) paired with **ephemeral workers** (spawned per subtask, do one job, exit). |
+| **Expert lifecycle** | One manually-started responder loop (`mesh expert serve`). | Coordinator **auto-spawns** an expert the instant an ask/review targets an un-owned role; a **reviewer pool** parallelises reviews; idle experts **self-terminate** on a TTL. |
+| **Worker execution** | N/A — no worker concept. | Isolated git **worktree-per-task**, embedded per-worker sidecar for real `mesh claim/ask --wait`, auto-commit of the diff onto the task branch. |
+| **Quality gate** | None in the original design (P2 was async ask/answer). | Every successful diff is **routed to a reviewer**; the typed verdict **gates** the task — approve → done, anything else → failed (never a silent pass). Workers self-verify a **Definition of Done** (gofmt/build/test/acceptance) before finishing; `request_changes` triggers **bounded re-dispatch** with feedback; ambiguous tasks **escalate** instead of guessing. |
+| **Cognition source** | CLI invocation on the user's subscription; no API key in core. | **Same** — every brain is `claude -p` / `codex exec` on the user's plan, headless + structured-output. The invariant survived the pivot intact. |
+| **Transport** | Assumed NATS/JetStream as a separate process (early framing). | Coordinator-embedded **star bus** over a unix socket (pub/sub + KV CAS/TTL + JSONL streams). `bus.Client` is the seam if NATS is ever needed. No distributed tax paid before it's earned. |
+| **Coordinator role** | Registry + presence + ask routing. | Control plane **expanded:** triage (planner → task DAG), schedule (dependency-gated dispatch), review gate, **budget metering** (hard cap, pause-not-fail on exhaustion), idle reaping, audit fan-out. |
+| **Blackboard** | Per-repo decision streams a human replays with `mesh context`. | Same streams, now the **experts' long-term memory** (compacted primer re-injected on restart) **and** mesh-wide in the dashboard (aggregated across all visible repos). |
+| **Dashboard** | Read-only SSE observer — presence, claims, notes. | Live **drill-in**: click a job/task/agent to stream its worker output, see model + cumulative cost, a persistent cost ledger vs budget, tasks grouped by job, GitHub issue links, and a Claude-session telemetry panel into each worker's actual transcript. |
+| **Cost posture** | N/A. | **Hard cap** (`MESH_BUDGET_USD`); worker + review cost accrue on one meter; on exhaustion the fleet **pauses** (jobs queued, never failed). Per-job ≈ $2. |
+
+---
+
+## What shipped this week, by theme
+
+### 1. English-in intake — you stop typing paths
+
+The whole front door changed from "run mesh verbs" to "tell it what you want."
+
+- **#134** — submit a job from a **GitHub issue link** (paste a URL; the coordinator pulls title/body as the ticket).
+- **#133** — **natural-language job control**: "work on issue 110", "issues 110–115", "all open issues".
+- **#138** — submit-job **repo picker** (dropdown from `MESH_REPOS_DIR`) instead of typing the path.
+- **#135** — generic **`POST /jobs` HTTP ingress** on `meshd` for external/programmatic submission.
+- **#139** — **arm-once drop-and-run**: a single `mesh up` brings up coordinator + director + dashboard, armed.
+
+### 2. Autonomous experts — the pool scales itself
+
+The control plane now provisions and reaps its own cognition.
+
+- **#118** — **autonomous on-demand experts**: the coordinator spawns a resident `meshd --mode expert --role R` the instant an ask or review-request hits an un-owned role (opt-in `MESH_AUTO_EXPERTS=on`). Includes the publish-before-subscribe buffer + re-deliver fix.
+- **#146** — **reviewer pool** (`MESH_REVIEW_POOL_SIZE`) parallelises reviews, lifting the single-reviewer throughput ceiling that capped the overnight run at 2 workers.
+- **#129** — **idle agent reaper**: experts self-terminate after an inactivity TTL so a long run doesn't leave warm brains burning.
+- **#148** — fix the **cold-spawn re-deliver race** (#125): a readiness signal so a freshly-spawned reviewer never drops its first review request.
+
+### 3. The review loop closes — work actually finishes
+
+V1 could coordinate agents; it couldn't *finish* work. Three changes flipped that.
+
+- **#130 — worker "Definition of Done" (the unlock):** the worker now runs `gofmt` / `go build` / `go test` and re-checks every acceptance criterion before declaring done. Jobs flipped from nit-failing review to **first-try approvals — four clean passes in a row** right after it landed.
+- **#149 — bounded re-dispatch:** on `request_changes`, the task is re-dispatched **with the reviewer's feedback** (capped), instead of hard-failing on the first fixable nit (#85).
+- **#150 — escalation primitive:** a worker hitting genuine ambiguity **escalates** the task rather than guessing (#141) — the first thread of human-in-the-loop attention.
+
+### 4. Observability — workers stop being black boxes
+
+- **8baa2c3** — click **drill-in + live worker streaming**: click any node/job/task/agent to see state, role, model, PID, cwd, cost, branch, plus a live-tailing log of the worker's `claude` stream-json output.
+- **0c77afb** — **Claude Code session telemetry panel**: correlates each `cc-*` worker with its native Claude Code transcript / sub-agents / RSS.
+- **#136** — per-agent **model + cumulative cost** on each agent.
+- **#128 / #131** — **persistent cost ledger** backend (spent / budget / per-model) + the **cost-window UI** that renders it.
+- **#127** — **group tasks by job** with human-readable labels.
+- **#126** — show the **GitHub issue link** on issue-sourced jobs.
+- **8bb2220** — `MESH_DASHBOARD_ALLOWED_HOSTS`: opt-in allow-list to view the dashboard over a tailnet (loopback-only stays the secure default).
+- **#116** — notes/blackboard panel **aggregates across all visible repos**, not just `default`.
+
+### 5. Dogfood self-heal — the fleet fixed its own bugs
+
+The mesh ran its own hardening backlog and the workers produced audit-grade fixes, each reviewed + CI-verified before merge.
+
+- **#124** — the two collapse-causers: **worker child-process leak** (kill the whole process group on cancel — zero orphans all night) + **planner over-decomposition** curb (default to **one task**; result: 13/13 jobs = 1 task).
+- **bb1ff57** — **worker tool-use unblock**: pass `--dangerously-skip-permissions` to the headless worker `claude` so it can actually Edit/Write/Bash inside its bounded worktree (before this, every task completed with an empty diff).
+- **baddd72** — **resident-expert startup deadlock** fix (#101): don't block startup on the session id; capture it lazily on first ask.
+- The **5 fleet-found fixes**, harvested from the workers themselves: KV reads no longer side-effect a bucket into existence; a sidecar no longer self-accepts its own role-ask; `MESH_BUDGET_USD` rejects NaN/Inf; `MESH_DIR`/`MESH_REPOS_DIR` are absolutized so identity survives a re-spawn; `--json` is honored on setup errors.
+
+---
+
+## The proof — overnight autonomous run (2026-06-28)
+
+| Metric | Value |
+| --- | --- |
+| Backlog issues delivered | **10** (#95, #96, #97, #98, #99, #105, #109, #110, #111, #119) |
+| Infra fixes | **2** (#122 worker leak, #130 worker hardening) |
+| PRs merged | **14** (#124–#139) |
+| First-pass success | **62%** (8/13 straight to done); **all 13 ultimately landed** |
+| Active working window | **~2h 12m** (build + review + merge) |
+| Worker spend | **$26.14** (~$2.01/job) |
+| `main` broken at any point | **never** |
+| Prior run (06-26) | **0 / 30 merged** |
+
+The Opus reviewer was substantive, not a rubber stamp — it caught a backend-only feature with no UI, a single gofmt-misaligned line, and regex-ordering polish, while approving sound work with specific reasoning.
+
+---
+
+## What's still open (the V2.1 edge)
+
+- **#147** — the idle reaper can terminate the reviewer before a long worker task finishes (`review runtime_lost`); lifecycle ordering needs work.
+- **#107** — autonomous **PR workflow**: the worker opens a PR, merge gated on CI build + reviewer approval.
+- **#102 / #103 / #104** — multi-provider workers (Codex `codex exec`, Aider, multi-CLI scheduling); the `internal/cliexec.Adapter` seam exists, the non-Claude adapters are stubbed.
+- **#143 / #144** — an **evaluation harness** + an **independent review oracle** to grade what the reviewer approved (catch false-approves).
+- **#142 / #145** — lifecycle hygiene + run isolation / dashboard run-archiving.
+- **#121** — promote the Console/Wall observer redesign from mockup into `web/`.
+
+---
+
+## Note on stale framing
+
+`ARCHITECTURE.md` **§1** (vision), **§11** (tech: lists NATS+JetStream), and **§12** (build phases) still describe **V1** — the opt-in-per-message, human-driven model and a separate NATS broker. The newest `DECISIONS.md` entries win on every conflict: the **autonomous pivot (Mode B)**, the **coordinator-embedded star bus**, **review gating**, and **hard-cap budget** all supersede that older framing. Re-deriving §1/§11/§12 for the autonomous model is outstanding doc debt.
+
+---
+
+*Sources: `git log` + GitHub PR/issue data (06-23 → 06-30), `docs/decisions/DECISIONS.md`, and `docs/reports/2026-06-28-overnight-run.mdx` (the 2026-06-28 run).*

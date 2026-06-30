@@ -1,170 +1,236 @@
+<div align="center">
+
 # Agent Mesh
 
-A local-first coordination fabric that lets heterogeneous coding agents
-(Claude Code, Codex CLI, Cursor CLI, Aider, …) discover each other, share
-status, ask each other questions, and avoid stepping on each other's work —
-through a single `mesh` command-line tool.
+**A shared nervous system for coding agents on your machine.**
 
-You run several coding agents at once. Today they're blind to each other: two
-edit the same file, a third re-derives a fact a fourth already figured out, and
-you babysit all of them. Agent Mesh gives them a shared nervous system so they
-can **announce** what they're working on, **ask** a question and get an answer
-from whichever agent (or human) knows, read a shared **blackboard** of
-decisions, and be **observed** from one live dashboard — all opt-in per message,
-not forced per turn.
+Local-first coordination so Claude Code, Codex, Cursor, Aider, and friends can discover each other, avoid editing the same files, ask async questions, share a blackboard — and run autonomous job pipelines — through one `mesh` CLI.
 
-## Status
+<br>
 
-**Fully implemented (P0–P2 + fleet automation).** Go module
-`github.com/georgenijo/agent-mesh`, zero external dependencies, stdlib only.
+[![Go](https://img.shields.io/badge/go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![Dependencies](https://img.shields.io/badge/dependencies-zero-success?style=flat-square)](#)
+[![CI](https://img.shields.io/github/actions/workflow/status/georgenijo/agent-mesh/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/georgenijo/agent-mesh/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#)
 
-- **P0 (presence):** `mesh join/leave/who/status`, autostart, live SSE dashboard.
-- **P1 (conflict avoidance + blackboard):** `mesh claim/release/announce/note/context`.
-- **P2 (async ask/answer):** `mesh ask/poll/inbox/answer` across real processes.
-- **Fleet automation:** triage planner, worker scheduler, resident experts, review
-  gating, per-agent model pinning, budget cap, audit log.
-- **`mesh up`:** one command to bring up the full fleet and arm it (see below).
+<br>
+
+[Quick start](#quick-start) · [Features](#features) · [Architecture](#architecture) · [Autonomous loop](#the-autonomous-loop) · [CLI](#the-mesh-cli) · [Docs](#documentation)
+
+</div>
+
+---
+
+## The problem
+
+You run several coding agents at once. They're blind to each other: two edit the same file, a third re-derives a fact a fourth already figured out, and you babysit all of them.
+
+**Agent Mesh** gives them opt-in coordination — per message, not per turn. Agents work solo by default and touch the mesh only when work overlaps or they're stuck. Then it goes one step further: hand it a ticket and a fleet of agents **builds, reviews, and merges it for you** while you watch.
 
 ## Quick start
 
 ```sh
+git clone https://github.com/georgenijo/agent-mesh.git
+cd agent-mesh
 make build
-PATH="$PWD/bin:$PATH"
+export PATH="$PWD/bin:$PATH"
 
-# Bring up coordinator + dashboard + observe (idempotent):
-mesh up
-
-# Or arm the full fleet in one shot:
-mesh up --planner-cli claude --worker-cli claude --repos-dir /path/to/repos
-
-# Dashboard is at the URL printed on startup (default http://127.0.0.1:8737).
+mesh up                              # coordinator + dashboard + observe
+mesh join --name me --role builder   # autostarts your sidecar
+mesh who                             # see who's live
 ```
 
-## `mesh up` — one-command fleet bring-up
+Open the live dashboard at **http://127.0.0.1:8737/ui/** — agents, claims, notes, tickets, jobs, and workers stream in over SSE.
 
-`mesh up` starts the coordinator, dashboard, and observe server idempotently,
-then prints the dashboard URL and fleet arm status. It is the canonical way to
-start a new mesh session or verify an existing one is healthy.
-
-```
-mesh up [--config FILE]
-        [--dashboard-addr HOST:PORT] [--observe-addr HOST:PORT]
-        [--planner-cli CMD] [--planner-model MODEL]
-        [--worker-cli CMD]  [--worker-model MODEL]
-        [--repos-dir DIR]
-        [--review-role ROLE]
-        [--budget USD]
-        [--auto-experts on|off]
-        [--jobs-addr HOST:PORT]
-        [--github-repo owner/repo]
-        [--json]
-```
-
-### Config file
-
-Fleet settings can be written to a JSON file instead of exporting `MESH_*`
-env vars by hand. The default path is `$MESH_DIR/config.json`
-(`~/.mesh/config.json` if `MESH_DIR` is unset). Use `--config <path>` for a
-custom location.
-
-**Precedence (lowest → highest):** config file → environment variables → CLI flags.
-
-The spawned coordinator inherits the current process's environment, so settings
-applied at `mesh up` time take effect in the coordinator on first bring-up.
-
-Example `~/.mesh/config.json`:
-
-```json
-{
-  "plannerCLI":   "claude",
-  "plannerModel": "sonnet",
-  "workerCLI":    "claude",
-  "workerModel":  "sonnet",
-  "reposDir":     "/home/alice/projects",
-  "reviewRole":   "reviewer",
-  "budgetUSD":    50.0,
-  "autoExperts":  false,
-  "githubRepo":   "alice/my-project"
-}
-```
-
-All fields are optional. Unset fields leave the corresponding `MESH_*` env var
-untouched, so you can mix config file and env vars freely.
-
-| JSON field      | Env var                  | Description                                           |
-|-----------------|--------------------------|-------------------------------------------------------|
-| `plannerCLI`    | `MESH_PLANNER_CLI`       | CLI the triage planner drives; empty = triage off     |
-| `plannerModel`  | `MESH_PLANNER_MODEL`     | `--model` for planner (default `sonnet`)              |
-| `workerCLI`     | `MESH_WORKER_CLI`        | CLI the worker scheduler drives; empty = scheduler off|
-| `workerModel`   | `MESH_WORKER_MODEL`      | `--model` for workers (default `sonnet`)              |
-| `reposDir`      | `MESH_REPOS_DIR`         | Dir mapping repo names → git checkouts (workers)      |
-| `reviewRole`    | `MESH_REVIEW_ROLE`       | Role that reviews worker diffs; empty = gating off    |
-| `budgetUSD`     | `MESH_BUDGET_USD`        | Fleet budget cap in USD; 0/omit = unlimited           |
-| `autoExperts`   | `MESH_AUTO_EXPERTS`      | Auto-spawn experts on demand (`on`/`off`)             |
-| `jobsAddr`      | `MESH_JOBS_ADDR`         | HTTP listen address for `POST /jobs`; empty = off     |
-| `githubRepo`    | `MESH_GITHUB_REPO`       | `owner/repo` for `mesh work` NL control               |
-| `dashboardAddr` | `MESH_DASHBOARD_ADDR`    | Dashboard listen address (default `127.0.0.1:8737`)   |
-| `observeAddr`   | `MESH_OBSERVE_ADDR`      | Observe server listen address (default `127.0.0.1:8739`) |
-
-### Example output
-
-```
-mesh up (/home/alice/.mesh)
-coordinator: started (bus /home/alice/.mesh/bus.sock)
-dashboard:   http://127.0.0.1:8737  (started, pid 12345)
-observe:     http://127.0.0.1:8739  (started, pid 12346)
-fleet:
-  planner:   claude (model: sonnet)
-  worker:    claude (model: sonnet)
-  reviewer:  role "reviewer"
-  experts:   manual (--auto-experts on to enable)
-  budget:    $50.00
-```
-
-## Build
+<details>
+<summary><strong>Autonomous mode</strong> (planner + workers + optional review)</summary>
 
 ```sh
-make build       # bin/meshd + bin/mesh
-make test        # unit + cross-process e2e tests (~4s)
-make ci          # fmt-check + build + vet + test (what CI runs)
+export MESH_REPOS_DIR="$HOME/code"          # maps job.repo → $MESH_REPOS_DIR/<name>
+export MESH_PLANNER_CLI=claude              # triage: job → task DAG
+export MESH_WORKER_CLI=claude               # scheduler: run tasks in git worktrees
+export MESH_REVIEW_ROLE=reviewer            # optional: gate done on expert review
+
+mesh expert serve --name rev --role reviewer   # in another terminal
+mesh submit --repo my-app --title "Fix the thing" --body "..."
 ```
 
-## CLI reference
+Set `MESH_BUDGET_USD` for a fleet spend cap. See [`internal/config/config.go`](internal/config/config.go) for every knob.
 
-```
-mesh up        bring up coordinator + dashboard; arm fleet; print dashboard URL
-mesh join      register this agent (autostarts sidecar + coordinator)
-mesh leave     deregister this agent
-mesh who       show the roster
-mesh status    post what this agent is doing
-mesh claim     take a CAS lock on a file path (exit 6 if lost)
-mesh release   release a claim
-mesh announce  broadcast advisory intent
-mesh note      append to the repo blackboard
-mesh context   replay the repo's blackboard history
-mesh ask       create an async ask ticket
-mesh poll      collect an answer (exit 3 until ready)
-mesh inbox     list questions accepted by this agent
-mesh answer    answer an accepted ticket
-mesh submit    record a top-level job
-mesh work      natural-language job control (requires MESH_GITHUB_REPO)
-mesh expert    run a resident expert that auto-answers role-routed asks
-mesh ops       runtime health snapshot; ops doctor/down/clean
-```
+</details>
 
-Exit codes: `0` ok · `1` error · `2` usage · `3` no-answer-yet · `4` no-such-ticket ·
-`5` not-joined · `6` claim-lost · `7` dirty
+## Features
+
+| | |
+|---|---|
+| **Presence** | `join` / `leave` / `who` / `status` with heartbeat leases — live → away → evict |
+| **Conflict avoidance** | CAS file claims with TTL; Claude Code claim-guard hook included |
+| **Blackboard** | Durable per-repo `note` / `context` streams — replay decisions after restart |
+| **Async Q&A** | `ask` returns a ticket immediately; collect via `poll` or inbox hooks — asker never blocks on an LLM turn |
+| **Experts** | Resident role-owning responders auto-answer accepted asks (`mesh expert serve`) |
+| **Autonomous jobs** | Submit → triage → DAG scheduler → isolated git worktree workers → review gate → merge |
+| **Live dashboard** | SSE observer at `/ui/` plus job intake; ops plane via `mesh ops` |
+| **Zero deps** | Pure Go stdlib; two static binaries (`mesh`, `meshd`) |
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design and
-[docs/decisions/DECISIONS.md](docs/decisions/DECISIONS.md) for the running
-decisions log (newest-first; wins on conflicts with ARCHITECTURE.md).
+```mermaid
+flowchart TB
+  subgraph agents["Your agents"]
+    CC[Claude Code]
+    CX[Codex / Cursor / …]
+  end
 
-Key concepts:
-- **Sidecar** — one per agent; owns the unix socket the `mesh` CLI talks to.
-- **Coordinator** — control plane only; registry, role-routing, policy. Never in the data path.
-- **Dashboard** — pure observer; live SSE view of the mesh at `http://127.0.0.1:8737`.
-- **Blackboard** — durable per-repo decision stream (`mesh note`/`mesh context`).
-- **Experts** — resident agents that auto-answer role-routed asks.
-- **Workers** — ephemeral agents the coordinator spawns per task in isolated git worktrees.
+  subgraph edge["Per-agent edge"]
+    CLI["mesh CLI<br/><i>one-shot, exits</i>"]
+    SC["sidecar daemon<br/><i>heartbeats, verbs</i>"]
+  end
+
+  subgraph coord["Coordinator process"]
+    BUS["Star bus<br/><i>pub/sub · KV · streams</i>"]
+    CP["Control plane<br/><i>registry · claims · audit</i>"]
+    AUTO["Autonomy<br/><i>triage · scheduler · workers</i>"]
+  end
+
+  UI["Dashboard<br/><i>SSE observer + job submit</i>"]
+
+  CC & CX --> CLI
+  CLI -->|unix socket| SC
+  SC -->|unix socket| BUS
+  BUS --> CP & AUTO
+  BUS --> UI
+```
+
+Four planes, one wire contract (`internal/envelope`):
+
+| Plane | Role |
+|-------|------|
+| **Sidecar** | One per agent. Owns the unix socket, registers, heartbeats, dispatches CLI verbs to the bus. |
+| **Star bus** | Coordinator-embedded transport: NATS-*style* subjects (`mesh.>`), KV with CAS/TTL, JSONL-persisted streams. Not a separate NATS process — [`bus.Client`](internal/bus/client.go) is the seam if that ever changes. |
+| **Coordinator** | Control plane: registry, claim reclaim, audit fan-out, optional triage/scheduler loops. Role asks are **sidecar pull + CAS accept**, not coordinator-routed. |
+| **Dashboard** | Pure observer (SSE `/events`); optional `POST /api/jobs` with a local bearer token. |
+
+### Design principles
+
+1. **Async by default** — an `ask` returns a ticket immediately; the only real cost is the responder's LLM turn (seconds), not transport (microseconds).
+2. **CLI at the edge, not MCP** — context-cheap, universal (`bash`), composable. Agents run `mesh`, not injected tool schemas every turn.
+3. **One authority per fact** — KV records own state; bus envelopes are observability taps. Typed results everywhere; never fake-success.
+
+## The autonomous loop
+
+Drop a ticket (or point it at a GitHub issue) and the coordinator runs the whole build → review → merge cycle. Every brain is a CLI invocation on **your** subscription — no API key in the core.
+
+```mermaid
+flowchart LR
+  IN["GitHub issue<br/>or <code>mesh submit</code>"] --> TRIAGE
+  TRIAGE["Triage<br/><i>planner → task DAG</i>"] --> SCHED
+  SCHED["Scheduler<br/><i>dependency-gated</i>"] --> WORK
+  WORK["Worker<br/><i>isolated git worktree</i>"] --> GATE{"Review<br/>gate"}
+  GATE -->|approve| DONE(["✓ committed"])
+  GATE -->|request changes| WORK
+  GATE -->|reject · timeout| FAIL(["✗ failed"])
+
+  classDef ok fill:#16341f,stroke:#36d399,color:#dffbed;
+  classDef no fill:#3a1620,stroke:#ff6b6b,color:#ffe0e0;
+  class DONE ok;
+  class FAIL no;
+```
+
+- **Persistent experts** stay warm — they hold the codebase map, answer worker questions by role, and **review** every diff. Their context cost amortizes, so reviews are cheap and high-value.
+- **Ephemeral workers** spawn per task in a throwaway git worktree, do one job, and exit. The branch is the work product.
+- **The gate is real** — a task reaches `done` only on a typed `approve` verdict. `request_changes` re-dispatches with feedback (bounded); reject / timeout fail loudly. Never a silent pass.
+
+> ▶ **See it run:** [a real unattended overnight run](docs/reports/2026-06-28-overnight-run.html) cleared the backlog — **10 issues built, reviewed & merged, ~$26, `main` never broke.**
+
+## The `mesh` CLI
+
+Every command supports `--json`. Exit codes carry meaning:
+
+| Code | Meaning |
+|------|---------|
+| `0` | ok |
+| `3` | no answer yet (`poll`) |
+| `4` | no such ticket |
+| `5` | not joined |
+| `6` | claim lost |
+| `7` | dirty runtime (`mesh ops doctor`) |
+
+```sh
+# Presence
+mesh up | join | leave | who | status
+
+# Conflict + memory
+mesh claim <path> | release <path> | announce "…" | note "…" | context
+
+# Async Q&A
+mesh ask "…" --role reviewer | poll <ticket> | inbox | answer <ticket> "…"
+
+# Autonomous work
+mesh submit | work | expert serve
+
+# Ops
+mesh ops doctor | down | clean
+```
+
+Full surface: [`ARCHITECTURE.md`](ARCHITECTURE.md) §4.
+
+## Build & test
+
+```sh
+make build      # bin/meshd + bin/mesh
+make test       # unit + cross-process e2e (~30s)
+make e2e        # verbose e2e only
+make test-race  # race detector on internal/
+make ci         # fmt-check · build · vet · test  (same as GitHub Actions)
+```
+
+Cross-process e2e builds real binaries, boots real daemons on temp unix sockets — the done gate.
+
+## Roadmap
+
+Built **cheap-core-first**: presence → claims/blackboard → ask/answer → autonomy → dashboard polish.
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| **P0** | Presence, autostart, SSE dashboard | ✅ |
+| **P1** | CAS claims, announce, blackboard, hooks | ✅ |
+| **P2** | Async ask/answer, ticket FSM, role routing | ✅ |
+| **P3** | Experts, triage, scheduler, workers, review, audit | ✅ core spine; cache/rate-limit/dedup deferred |
+| **P4** | Production dashboard | 🔶 live `/ui/` observer + job submit; bus visualizer mockup not yet promoted |
+
+**Verified today:** Claude Code headless (`claude -p --output-format json`). Codex/Cursor/Aider adapters stubbed — see [`internal/cliexec`](internal/cliexec).
+
+## Documentation
+
+| Doc | What's in it |
+|-----|----------------|
+| [**ARCHITECTURE.md**](ARCHITECTURE.md) | Full system design (§1/§11/§12 partly predate the star-bus pivot) |
+| [**docs/decisions/DECISIONS.md**](docs/decisions/DECISIONS.md) | Locked decisions — **wins on conflict** |
+| [**docs/concepts.md**](docs/concepts.md) | Glossary (NATS terms = conceptual; implementation is the star bus) |
+| [**docs/components.md**](docs/components.md) | Per-component feature tiers |
+| [**docs/agent-runbook.md**](docs/agent-runbook.md) | Rules for implementation agents |
+| [**docs/reports/**](docs/reports/) | Dated build + autonomous-run reports |
+| [**docs/mockups/**](docs/mockups/) | HTML prototypes — open in a browser, no build step |
+
+## Project layout
+
+```
+cmd/mesh/          thin CLI entrypoint
+cmd/meshd/         daemon modes: sidecar · coordinator · dashboard · observe · expert
+internal/bus/      star-bus transport (pub/sub, KV, streams)
+internal/envelope/ wire contract — every message goes through here
+internal/sidecar/  per-agent daemon
+internal/coordinator/  control plane + embedded bus server
+internal/dashboard/ + web/   SSE observer UI
+internal/worker/   git worktree driver (scheduler backend)
+test/e2e/          cross-process acceptance tests
+hooks/             Claude Code + Codex agent hooks
+```
+
+---
+
+<div align="center">
+
+**Local-first · stdlib-only · opt-in coordination**
+
+</div>

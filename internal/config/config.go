@@ -40,6 +40,12 @@ const (
 	EnvAuditFanout       = "MESH_AUDIT_FANOUT"        // coordinator fans bus-observed lifecycle events into the audit log: on (default) | off
 	EnvReviewRole        = "MESH_REVIEW_ROLE"         // role whose expert reviews successful worker diffs (#80); empty = review gating off
 	EnvReviewTimeout     = "MESH_REVIEW_TIMEOUT"      // wall-clock bound on one review round trip (request → verdict)
+
+	EnvWorkerStream         = "MESH_WORKER_STREAM"          // on = workers run stream-json and write a live per-task transcript under runs/; default off
+	EnvWorkerPermissionMode = "MESH_WORKER_PERMISSION_MODE" // claude --permission-mode for workers so they can edit headlessly; empty omits the flag
+	EnvPlanCLI              = "MESH_PLAN_CLI"               // CLI the triage plan-step runs to produce an implementation plan written to the blackboard; empty = plan-step off
+	EnvPlanModel            = "MESH_PLAN_MODEL"             // --model passed to the plan CLI (default "sonnet"; empty = CLI default)
+	EnvPlanTimeout          = "MESH_PLAN_TIMEOUT"           // wall-clock bound on one plan-tool invocation
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -103,6 +109,20 @@ const (
 	// past it the gate treats the review as lost — never as an approval.
 	DefaultReviewTimeout = 5 * time.Minute
 
+	// DefaultWorkerPermissionMode lets a worker's headless `claude -p` actually
+	// edit files and run tooling without a prompt — autonomous workers cannot
+	// answer an interactive permission request. The M0 spike only ever verified
+	// the planner (text-only); the worker path needs this to do real work.
+	// Overridable (e.g. acceptEdits) or empty to omit the flag.
+	DefaultWorkerPermissionMode = "bypassPermissions"
+
+	// DefaultPlanModel pins the plan-step's model, same rationale as the planner.
+	DefaultPlanModel = "sonnet"
+
+	// DefaultPlanTimeout bounds one plan-tool invocation. A real implementation
+	// plan is a full multi-minute claude run, unlike the decomposition planner.
+	DefaultPlanTimeout = 5 * time.Minute
+
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
 	DefaultEvictAfter        = 60 * time.Second
@@ -150,8 +170,27 @@ type Config struct {
 	WorkerCLI     string
 	WorkerModel   string        // --model for the worker CLI; empty = CLI default
 	WorkerTimeout time.Duration // wall-clock bound on one worker invocation
-	BudgetUSD     float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
-	MaxWorkers    int           // max concurrent workers
+
+	// WorkerPermissionMode is the claude --permission-mode a worker child runs
+	// under so it can edit files / run tooling headlessly. Empty omits the flag.
+	WorkerPermissionMode string
+
+	// WorkerStream, when true, runs the worker CLI in stream-json mode and writes
+	// a live newline-delimited transcript to RunsDir()/<task>.jsonl as the agent
+	// works, so the dashboard can tail what an agent is doing in real time. Off by
+	// default: the proven one-shot `--output-format json` path is unchanged.
+	WorkerStream bool
+
+	// PlanCLI is the optional implementation-plan tool the coordinator's triage
+	// plan-step runs BEFORE decomposition: its stdout is written to the repo
+	// blackboard as a context note, so decomposition and every worker read the
+	// plan (mesh context + primer). Deliberately NO default — empty disables the
+	// plan-step. Only consulted when PlannerCLI is set (triage enabled).
+	PlanCLI     string
+	PlanModel   string        // --model for the plan CLI; empty = CLI default
+	PlanTimeout time.Duration // wall-clock bound on one plan-tool invocation
+	BudgetUSD   float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
+	MaxWorkers  int           // max concurrent workers
 
 	// ReviewRole gates the #80 review integration: when set (and the scheduler
 	// is enabled), every successful worker diff is routed to the expert serving
@@ -186,23 +225,26 @@ type Config struct {
 // Load resolves config from the environment with defaults.
 func Load() (Config, error) {
 	cfg := Config{
-		HeartbeatInterval: DefaultHeartbeatInterval,
-		AwayAfter:         DefaultAwayAfter,
-		EvictAfter:        DefaultEvictAfter,
-		RegistrationGrace: DefaultRegistrationGrace,
-		DashboardAddr:     DefaultDashboardAddr,
-		ObserveAddr:       DefaultObserveAddr,
-		ExpertCLI:         DefaultExpertCLI,
-		PlannerModel:      DefaultPlannerModel,
-		TriageTimeout:     DefaultTriageTimeout,
-		TriageMaxAttempts: DefaultTriageMaxAttempts,
-		TriageBackoff:     DefaultTriageBackoff,
-		WorkerModel:       DefaultWorkerModel,
-		WorkerTimeout:     DefaultWorkerTimeout,
-		MaxWorkers:        DefaultMaxWorkers,
-		ReviewTimeout:     DefaultReviewTimeout,
-		KeepWorktrees:     KeepWorktreesOnFailure,
-		AuditFanout:       true,
+		HeartbeatInterval:    DefaultHeartbeatInterval,
+		AwayAfter:            DefaultAwayAfter,
+		EvictAfter:           DefaultEvictAfter,
+		RegistrationGrace:    DefaultRegistrationGrace,
+		DashboardAddr:        DefaultDashboardAddr,
+		ObserveAddr:          DefaultObserveAddr,
+		ExpertCLI:            DefaultExpertCLI,
+		PlannerModel:         DefaultPlannerModel,
+		TriageTimeout:        DefaultTriageTimeout,
+		TriageMaxAttempts:    DefaultTriageMaxAttempts,
+		TriageBackoff:        DefaultTriageBackoff,
+		WorkerModel:          DefaultWorkerModel,
+		WorkerTimeout:        DefaultWorkerTimeout,
+		WorkerPermissionMode: DefaultWorkerPermissionMode,
+		PlanModel:            DefaultPlanModel,
+		PlanTimeout:          DefaultPlanTimeout,
+		MaxWorkers:           DefaultMaxWorkers,
+		ReviewTimeout:        DefaultReviewTimeout,
+		KeepWorktrees:        KeepWorktreesOnFailure,
+		AuditFanout:          true,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -228,6 +270,7 @@ func Load() (Config, error) {
 		{EnvTriageBackoff, &cfg.TriageBackoff},
 		{EnvWorkerTimeout, &cfg.WorkerTimeout},
 		{EnvReviewTimeout, &cfg.ReviewTimeout},
+		{EnvPlanTimeout, &cfg.PlanTimeout},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -259,6 +302,23 @@ func Load() (Config, error) {
 	cfg.WorkerCLI = os.Getenv(EnvWorkerCLI) // empty = scheduler disabled
 	if model, ok := os.LookupEnv(EnvWorkerModel); ok {
 		cfg.WorkerModel = model // explicit empty = use the CLI's default model
+	}
+	if mode, ok := os.LookupEnv(EnvWorkerPermissionMode); ok {
+		cfg.WorkerPermissionMode = mode // explicit empty = omit the --permission-mode flag
+	}
+	if raw := os.Getenv(EnvWorkerStream); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.WorkerStream = true
+		case "off", "false", "0":
+			cfg.WorkerStream = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvWorkerStream, raw)
+		}
+	}
+	cfg.PlanCLI = os.Getenv(EnvPlanCLI) // empty = plan-step disabled
+	if model, ok := os.LookupEnv(EnvPlanModel); ok {
+		cfg.PlanModel = model // explicit empty = use the CLI's default model
 	}
 	if raw := os.Getenv(EnvBudgetUSD); raw != "" {
 		budget, err := strconv.ParseFloat(raw, 64)
@@ -361,6 +421,11 @@ func (c Config) BucketsDir() string { return filepath.Join(c.MeshDir, "buckets")
 // (one isolated git worktree per dispatched task). Owned by the
 // coordinator-embedded worker driver only.
 func (c Config) WorkersDir() string { return filepath.Join(c.MeshDir, "workers") }
+
+// RunsDir holds per-task live transcripts (one <task>.jsonl per worker run)
+// when WorkerStream is on. The dashboard tails these to show what an agent is
+// doing in real time.
+func (c Config) RunsDir() string { return filepath.Join(c.MeshDir, "runs") }
 
 // CoordinatorPID is written by the running coordinator for ops inspection.
 func (c Config) CoordinatorPID() string { return filepath.Join(c.MeshDir, "coordinator.pid") }

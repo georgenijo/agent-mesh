@@ -42,10 +42,13 @@
 package cliexec
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -119,6 +122,17 @@ type InvokeOptions struct {
 	// Callers use this to mark the child as exited on the ops plane
 	// (MarkChildExited).
 	OnExit func(pid int)
+
+	// PermissionMode is the claude --permission-mode for this call (e.g.
+	// "acceptEdits", "bypassPermissions"); empty omits the flag.
+	PermissionMode string
+
+	// TranscriptPath, when non-empty, switches the CLI to stream-json and writes
+	// each streamed event line to this file as it arrives (a live transcript the
+	// dashboard can tail). The adapter still returns the single final result
+	// envelope, so callers parse it exactly as in the one-shot json path. Empty
+	// keeps the proven one-shot `--output-format json` behavior.
+	TranscriptPath string
 }
 
 // Adapter is the per-CLI interface every supported agent CLI must satisfy to
@@ -197,9 +211,20 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 		wd = 3 * time.Second
 	}
 
-	args := []string{"-p", "--output-format", "json"}
+	args := []string{"-p"}
+	if opts.TranscriptPath != "" {
+		// stream-json emits one JSON event per line as the agent works; -p requires
+		// --verbose for it. Each line is teed to the transcript; the final result
+		// event is returned so callers parse it exactly as in the one-shot path.
+		args = append(args, "--output-format", "stream-json", "--verbose")
+	} else {
+		args = append(args, "--output-format", "json")
+	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
+	}
+	if opts.PermissionMode != "" {
+		args = append(args, "--permission-mode", opts.PermissionMode)
 	}
 	args = append(args, prompt)
 
@@ -211,6 +236,10 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 		cmd.Env = opts.Env
 	}
 	cmd.WaitDelay = wd
+
+	if opts.TranscriptPath != "" {
+		return invokeStreaming(cmd, opts)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -239,6 +268,64 @@ func (a ClaudeAdapter) Invoke(ctx context.Context, prompt string, opts InvokeOpt
 		return nil, fmt.Errorf("claude: failed to run: %w", waitErr)
 	}
 	return stdout.Bytes(), nil
+}
+
+// invokeStreaming runs a stream-json child, tees every event line to
+// opts.TranscriptPath as it arrives (the live transcript), and returns the
+// final result event line so the caller parses it like the one-shot path.
+func invokeStreaming(cmd *exec.Cmd, opts InvokeOptions) ([]byte, error) {
+	f, err := os.Create(opts.TranscriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("claude: open transcript %s: %w", opts.TranscriptPath, err)
+	}
+	defer f.Close()
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("claude: stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("claude: failed to start: %w", err)
+	}
+	pid := cmd.Process.Pid
+	if opts.OnStart != nil {
+		opts.OnStart(pid)
+	}
+
+	// Scan the child's stdout line by line, flushing each to the transcript as it
+	// arrives, and keep the last result-typed event to return.
+	var resultLine []byte
+	sc := bufio.NewScanner(stdoutPipe)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // stream-json tool results can be large
+	for sc.Scan() {
+		line := sc.Bytes()
+		f.Write(line)         //nolint:errcheck // best-effort live transcript
+		f.Write([]byte("\n")) //nolint:errcheck
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(line, &probe) == nil && probe.Type == "result" {
+			resultLine = append(resultLine[:0], line...)
+		}
+	}
+
+	waitErr := cmd.Wait()
+	if opts.OnExit != nil {
+		opts.OnExit(pid)
+	}
+	if waitErr != nil {
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("claude: exited: %w: %s", waitErr, truncate(stderr.String(), 2048))
+		}
+		return nil, fmt.Errorf("claude: failed to run: %w", waitErr)
+	}
+	if len(resultLine) == 0 {
+		return nil, fmt.Errorf("claude: stream produced no result event")
+	}
+	return resultLine, nil
 }
 
 // CodexAdapter is a STUB for OpenAI Codex CLI support.

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mesh · live transcript</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #0d1117; color: #c9d1d9; }
+  header { padding: 10px 16px; border-bottom: 1px solid #21262d; display: flex;
+           gap: 12px; align-items: center; position: sticky; top: 0; background: #0d1117; }
+  header h1 { font-size: 13px; margin: 0; font-weight: 600; color: #e6edf3; }
+  header .task { color: #8b949e; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; display: inline-block; }
+  header .dot.done { background: #8b949e; }
+  header .cost { margin-left: auto; color: #8b949e; }
+  #feed { padding: 12px 16px; }
+  .ev { padding: 3px 0; white-space: pre-wrap; word-break: break-word; }
+  .ev .tag { color: #8b949e; user-select: none; }
+  .text { color: #c9d1d9; }
+  .tool { color: #d2a8ff; }
+  .toolres { color: #8b949e; }
+  .result { color: #3fb950; font-weight: 600; margin-top: 8px; }
+  .err { color: #f85149; }
+  .meta { color: #6e7681; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>live transcript</h1>
+  <span class="task" id="task"></span>
+  <span class="cost" id="cost"></span>
+</header>
+<div id="feed"></div>
+
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const task = params.get("task") || "";
+document.getElementById("task").textContent = task ? task : "(no ?task= given)";
+
+const feed = document.getElementById("feed");
+const dot = document.getElementById("dot");
+const costEl = document.getElementById("cost");
+
+let renderedLines = 0;   // how many transcript lines we've already drawn
+let done = false;
+
+function add(cls, text) {
+  const div = document.createElement("div");
+  div.className = "ev";
+  div.innerHTML = `<span class="tag">${cls.tag} </span><span class="${cls.css}"></span>`;
+  div.lastChild.textContent = text;
+  feed.appendChild(div);
+}
+
+// Render one stream-json event into a human line.
+function renderEvent(ev) {
+  if (!ev || !ev.type) return;
+  switch (ev.type) {
+    case "system":
+      add({ tag: "●", css: "meta" }, `session ${ev.subtype || "event"} (${ev.model || ev.session_id || ""})`);
+      break;
+    case "assistant": {
+      const blocks = (ev.message && ev.message.content) || [];
+      for (const b of blocks) {
+        if (b.type === "text" && b.text.trim()) add({ tag: "", css: "text" }, b.text.trim());
+        else if (b.type === "tool_use") {
+          const arg = b.input ? JSON.stringify(b.input) : "";
+          add({ tag: "🔧", css: "tool" }, `${b.name} ${arg.length > 160 ? arg.slice(0, 160) + "…" : arg}`);
+        }
+      }
+      break;
+    }
+    case "user": {
+      const blocks = (ev.message && ev.message.content) || [];
+      for (const b of blocks) {
+        if (b.type === "tool_result") {
+          let c = b.content;
+          if (Array.isArray(c)) c = c.map(x => x.text || "").join("");
+          c = String(c || "").trim().replace(/\s+/g, " ");
+          add({ tag: "↳", css: "toolres" }, c.length > 200 ? c.slice(0, 200) + "…" : c);
+        }
+      }
+      break;
+    }
+    case "result": {
+      const ok = !ev.is_error && ev.subtype === "success";
+      add({ tag: ok ? "✓" : "✗", css: ok ? "result" : "err" },
+          `${ok ? "done" : "failed"}${ev.result ? " — " + String(ev.result).slice(0, 200) : ""}`);
+      if (typeof ev.total_cost_usd === "number") costEl.textContent = "$" + ev.total_cost_usd.toFixed(4);
+      done = true;
+      dot.classList.add("done");
+      break;
+    }
+  }
+}
+
+async function poll() {
+  if (!task) return;
+  try {
+    const res = await fetch("/api/runlog?task=" + encodeURIComponent(task), { cache: "no-store" });
+    const body = await res.text();
+    const lines = body.split("\n").filter(l => l.trim());
+    // Render only undrawn lines (the file grows append-only). Stop at the first
+    // line that fails to parse — it is a half-written trailing line; advance only
+    // past fully-parsed lines so the partial is retried on the next poll.
+    let i = renderedLines;
+    for (; i < lines.length; i++) {
+      let ev;
+      try { ev = JSON.parse(lines[i]); } catch (_) { break; }
+      renderEvent(ev);
+    }
+    renderedLines = i;
+    window.scrollTo(0, document.body.scrollHeight);
+  } catch (_) { /* transient; keep polling */ }
+  if (!done) setTimeout(poll, 1200);
+}
+poll();
+</script>
+</body>
+</html>

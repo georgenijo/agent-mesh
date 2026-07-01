@@ -29,16 +29,21 @@ package triage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/job"
+	"github.com/georgenijo/agent-mesh/internal/meshapi"
 	meshruntime "github.com/georgenijo/agent-mesh/internal/runtime"
 	"github.com/georgenijo/agent-mesh/internal/task"
 )
@@ -104,6 +109,11 @@ type Options struct {
 	Backoff     time.Duration // #64: base delay of the exponential retry schedule (default 30s)
 	Log         *slog.Logger
 
+	PlanCLI     string        // optional implementation-plan tool; empty = plan-step off
+	PlanModel   string        // --model for the plan CLI
+	PlanTimeout time.Duration // wall-clock bound on one plan-tool run
+	ReposDir    string        // maps a job repo name to a checkout (<ReposDir>/<repo>)
+
 	// now is the clock the retry schedule reads. Swappable seam for tests so a
 	// backoff window can be asserted without sleeping; nil = time.Now (UTC).
 	now func() time.Time
@@ -152,6 +162,9 @@ func New(cli *bus.Client, opts Options) (*Triager, error) {
 	}
 	if opts.Backoff <= 0 {
 		opts.Backoff = 30 * time.Second
+	}
+	if opts.PlanTimeout <= 0 {
+		opts.PlanTimeout = 5 * time.Minute
 	}
 	if opts.now == nil {
 		opts.now = func() time.Time { return time.Now().UTC() }
@@ -318,8 +331,78 @@ func (t *Triager) onFailure(rec job.Record, att attemptRecord, cause error) {
 	})
 }
 
+// planTruncMarker terminates an over-long plan note.
+const planTruncMarker = "\n\n…[plan truncated]"
+
+// runPlanStep runs the optional implementation-plan tool (Options.PlanCLI) for
+// a job and writes its stdout to the repo blackboard as a context note, so both
+// decomposition (recentNotes) and the workers (mesh context + primer) see the
+// plan. No-op when PlanCLI is empty. A failure is a typed triage error so the
+// job retries/fails like any triage failure — never a silent skip.
+func (t *Triager) runPlanStep(rec job.Record) error {
+	if t.opts.PlanCLI == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), t.opts.PlanTimeout)
+	defer cancel()
+	tf, err := os.CreateTemp("", "mesh-ticket-*.md")
+	if err != nil {
+		return &Error{Code: envelope.TriageInternal, Err: fmt.Errorf("plan: temp ticket: %w", err)}
+	}
+	defer os.Remove(tf.Name())
+	fmt.Fprintf(tf, "# %s\n\n%s\n", rec.Title, rec.Body)
+	tf.Close()
+	args := []string{tf.Name(), "--repo", filepath.Join(t.opts.ReposDir, rec.Repo)}
+	if t.opts.PlanModel != "" {
+		args = append(args, "--model", t.opts.PlanModel)
+	}
+	cmd := exec.CommandContext(ctx, t.opts.PlanCLI, args...)
+	cmd.WaitDelay = 3 * time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return &Error{Code: envelope.TriagePlannerUnavailable, Err: fmt.Errorf("plan tool timed out after %s: %w", t.opts.PlanTimeout, ctx.Err())}
+		}
+		return &Error{Code: envelope.TriagePlannerUnavailable, Err: fmt.Errorf("plan tool failed: %w", err)}
+	}
+	plan := strings.TrimSpace(string(out))
+	if plan == "" {
+		// Empty output from a clean exit is structurally a crash/no-op, not the
+		// deterministic bad-prompt response TriagePlannerFailed (PERMANENT) models
+		// for the decomposition planner — the plan tool never speaks that protocol.
+		// Classify it TRANSIENT so a plan tool that no-ops once (e.g. mid-deploy)
+		// backs off and retries instead of permanently failing the job.
+		return &Error{Code: envelope.TriagePlannerUnavailable, Err: fmt.Errorf("plan tool exited 0 but produced empty output")}
+	}
+	return t.writePlanNote(rec, plan)
+}
+
+// writePlanNote appends the plan to the repo blackboard as a context note,
+// mirroring the sidecar note-write path (KindNote -> StreamNotes).
+func (t *Triager) writePlanNote(rec job.Record, plan string) error {
+	if len(plan) > meshapi.MaxNoteLen {
+		plan = plan[:meshapi.MaxNoteLen-len(planTruncMarker)] + planTruncMarker
+	}
+	env, err := envelope.New(envelope.KindNote, triagerID, envelope.SubjectNote(rec.Repo),
+		&envelope.NotePayload{ID: triagerID, Decision: plan, Repo: rec.Repo, Kind: envelope.NoteKindContext, Ticket: rec.ID})
+	if err != nil {
+		return &Error{Code: envelope.TriageInternal, Err: fmt.Errorf("plan note: %w", err)}
+	}
+	raw, err := envelope.Encode(env)
+	if err != nil {
+		return &Error{Code: envelope.TriageInternal, Err: fmt.Errorf("plan note encode: %w", err)}
+	}
+	if _, err := t.cli.StreamAppend(envelope.StreamNotes(rec.Repo), json.RawMessage(raw)); err != nil {
+		return &Error{Code: envelope.TriageInternal, Err: fmt.Errorf("plan note append: %w", err)}
+	}
+	return nil
+}
+
 // plan runs the planner and returns validated, persisted task records.
 func (t *Triager) plan(rec job.Record) ([]task.Record, error) {
+	if err := t.runPlanStep(rec); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), t.opts.Timeout)
 	defer cancel()
 

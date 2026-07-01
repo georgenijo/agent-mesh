@@ -52,13 +52,17 @@ func CanTransition(from, to envelope.JobState) bool {
 	return false
 }
 
-// SourceManual and SourceGitHub are the two recognized job sources.
+// SourceManual, SourceGitHub, and SourceJira are the recognized job sources.
+// A manual job has no external ref; a github job carries an issue/PR URL or
+// "owner/repo#N" in SourceRef; a jira job carries the issue key (e.g. "CA-1234")
+// in SourceRef.
 const (
 	SourceManual = "manual"
 	SourceGitHub = "github"
+	SourceJira   = "jira"
 )
 
-var sources = map[string]bool{SourceManual: true, SourceGitHub: true}
+var sources = map[string]bool{SourceManual: true, SourceGitHub: true, SourceJira: true}
 
 // Record is the authoritative jobs-bucket entry, keyed by ID in
 // envelope.BucketJobs. Job ids are envelope.NewID() UUIDv7s, so they are valid
@@ -215,7 +219,7 @@ func validateNew(rec Record) error {
 		}
 	}
 	if !sources[rec.Source] {
-		return fmt.Errorf("%w: unknown source %q (want manual|github)", ErrBadRecord, rec.Source)
+		return fmt.Errorf("%w: unknown source %q (want manual|github|jira)", ErrBadRecord, rec.Source)
 	}
 	if rec.State != envelope.JobOpen {
 		return fmt.Errorf("%w: new job state must be open", ErrBadRecord)

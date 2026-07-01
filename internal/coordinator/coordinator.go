@@ -175,6 +175,10 @@ func (c *Coordinator) Start() error {
 			MaxAttempts: c.cfg.TriageMaxAttempts, // #64 retry/backoff policy
 			Backoff:     c.cfg.TriageBackoff,
 			Log:         c.log,
+			PlanCLI:     c.cfg.PlanCLI,
+			PlanModel:   c.cfg.PlanModel,
+			PlanTimeout: c.cfg.PlanTimeout,
+			ReposDir:    c.cfg.ReposDir,
 		})
 		if err != nil {
 			c.Stop()

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,55 @@ func TestClaudeAdapterInvokeSuccess(t *testing.T) {
 	}
 	if got := envelope["subtype"]; got != "success" {
 		t.Errorf("expected subtype=success, got %v", got)
+	}
+}
+
+// TestClaudeAdapterStreamingTranscript verifies that with a TranscriptPath the
+// adapter (a) writes EVERY streamed event line to the transcript as it arrives —
+// including intermediate, non-result events — and (b) still returns only the
+// final result envelope, so callers parse it exactly as in the one-shot path.
+func TestClaudeAdapterStreamingTranscript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fake CLI not supported on Windows")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-stream")
+	body := "#!/bin/sh\n" +
+		`printf '%s\n' '{"type":"system","subtype":"init","session_id":"s"}'` + "\n" +
+		`printf '%s\n' '{"type":"assistant","message":{"role":"assistant"},"marker":"MIDLINE-7"}'` + "\n" +
+		`printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s","total_cost_usd":0.002,"api_error_status":null}'` + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := cliexec.ClaudeAdapter{Binary: script}
+	transcript := filepath.Join(dir, "task.jsonl")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := a.Invoke(ctx, "do the work", cliexec.InvokeOptions{TranscriptPath: transcript})
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+
+	// Returned bytes are ONLY the final result event.
+	var env map[string]interface{}
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("returned bytes not a single JSON object: %v: %s", err, out)
+	}
+	if env["type"] != "result" || env["subtype"] != "success" {
+		t.Fatalf("returned line is not the result event: %s", out)
+	}
+
+	// Transcript holds EVERY streamed line, including the intermediate marker.
+	data, err := os.ReadFile(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"subtype":"init"`, "MIDLINE-7", `"type":"result"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("transcript missing %q:\n%s", want, data)
+		}
 	}
 }
 
@@ -258,6 +308,73 @@ func TestClaudeAdapterOnStartOnExitNilSafe(t *testing.T) {
 				t.Fatalf("unexpected panic or error: %v", err)
 			}
 		})
+	}
+}
+
+// argvCaptureBinary writes a shell script that prints its argv (one arg per
+// line, prefixed with "arg:") to stdout before emitting a minimal success
+// envelope. The caller searches the output for specific flag sequences.
+func argvCaptureBinary(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fake CLI not supported on Windows")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "argv-capture")
+	// Print each positional arg on its own line, then emit a success envelope.
+	content := `#!/bin/sh
+for a in "$@"; do printf 'arg:%s\n' "$a"; done
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"test-session","total_cost_usd":0.0,"api_error_status":null}
+EOF
+`
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatalf("write argv-capture script: %v", err)
+	}
+	return script
+}
+
+// TestClaudeAdapterPermissionMode verifies that when InvokeOptions.PermissionMode
+// is "acceptEdits", the child argv contains "--permission-mode" immediately
+// followed by "acceptEdits".
+func TestClaudeAdapterPermissionMode(t *testing.T) {
+	bin := argvCaptureBinary(t)
+	a := cliexec.ClaudeAdapter{Binary: bin}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := a.Invoke(ctx, "do the work", cliexec.InvokeOptions{
+		PermissionMode: "acceptEdits",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Parse the argv lines (everything before the JSON envelope).
+	var args []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "arg:") {
+			args = append(args, strings.TrimPrefix(line, "arg:"))
+		}
+	}
+
+	// Find "--permission-mode" and check the immediately following element.
+	found := false
+	for i, arg := range args {
+		if arg == "--permission-mode" {
+			if i+1 >= len(args) {
+				t.Fatalf("--permission-mode found at index %d but no following arg", i)
+			}
+			if args[i+1] != "acceptEdits" {
+				t.Fatalf("--permission-mode value: got %q, want %q", args[i+1], "acceptEdits")
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("--permission-mode not found in argv: %v", args)
 	}
 }
 

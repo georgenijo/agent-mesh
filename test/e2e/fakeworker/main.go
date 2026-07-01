@@ -21,6 +21,10 @@
 //	       then emit a success result carrying the answer. A worker blocked
 //	       on an ask either resumes with the answer or (wait failure) emits a
 //	       typed error result.
+//	"context" replay `mesh context` from inside the run and persist what the
+//	       worker SAW to worker-saw-context-<pid>.txt in the worktree cwd, so a
+//	       test can assert a blackboard plan note reached the worker that
+//	       implements the ticket. Any failing step emits a typed error result.
 package main
 
 import (
@@ -50,8 +54,34 @@ func main() {
 		if err := askMode(res); err != nil {
 			emitError(res, err)
 		}
+	case "context":
+		if err := contextMode(res); err != nil {
+			emitError(res, err)
+		}
 	}
 	emit(res)
+}
+
+// contextMode proves the worker RECEIVES the repo blackboard from inside its
+// run: replay `mesh context`, persist what it saw to worker-saw-context-<pid>.txt
+// in the worktree cwd (so the e2e test can assert a plan note landed there
+// reached the worker), then succeed. Any failing step emits a typed error
+// result — never fake-success.
+func contextMode(res map[string]any) error {
+	meshBin, err := requireMeshBin()
+	if err != nil {
+		return err
+	}
+	out, err := exec.Command(meshBin, "context", "--json").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mesh context: %v: %s", err, out)
+	}
+	marker := fmt.Sprintf("worker-saw-context-%d.txt", os.Getpid())
+	if err := os.WriteFile(marker, out, 0o644); err != nil {
+		return fmt.Errorf("write context marker: %w", err)
+	}
+	res["result"] = string(out)
+	return nil
 }
 
 // meshMode proves in-run mesh access and worktree containment: replay the

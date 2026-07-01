@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -235,6 +236,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/roster", d.serveRoster)
 	mux.HandleFunc("GET /api/claims", d.serveClaims)
 	mux.HandleFunc("GET /api/notes", d.serveNotes)
+	mux.HandleFunc("GET /api/runlog", d.serveRunLog)
 	mux.HandleFunc("GET /api/jobs", d.serveListJobs)
 	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
@@ -899,6 +901,41 @@ func (d *Dashboard) serveListJobs(w http.ResponseWriter, _ *http.Request) {
 func (d *Dashboard) serveWriteToken(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": d.jobToken}) //nolint:errcheck
+}
+
+// serveRunLog serves a worker's live per-task transcript (runs/<task>.jsonl),
+// written when MESH_WORKER_STREAM is on. Read-only and unauthenticated, the same
+// posture as the other observer endpoints. The task id is constrained to safe
+// filename characters so the path cannot escape RunsDir. An absent transcript
+// (run not started, or streaming off) is an empty body, not an error — the UI
+// polls this and renders whatever is there.
+func (d *Dashboard) serveRunLog(w http.ResponseWriter, r *http.Request) {
+	task := r.URL.Query().Get("task")
+	if !validRunTaskID(task) {
+		writeJSONError(w, `{"error":"bad_request","message":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	data, err := os.ReadFile(filepath.Join(d.cfg.RunsDir(), task+".jsonl"))
+	if err != nil {
+		return // no transcript yet → empty body
+	}
+	w.Write(data) //nolint:errcheck
+}
+
+// validRunTaskID accepts only the safe filename characters a task id uses
+// (UUIDv7: hex + hyphen), bounding length, so the transcript path cannot escape
+// RunsDir via separators or "..".
+func validRunTaskID(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // writeJSONError writes a JSON error response with the correct Content-Type.

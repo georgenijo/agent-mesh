@@ -15,6 +15,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/bus"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/job"
+	"github.com/georgenijo/agent-mesh/internal/meshapi"
 	"github.com/georgenijo/agent-mesh/internal/task"
 	"github.com/georgenijo/agent-mesh/internal/testsock"
 )
@@ -587,6 +588,105 @@ func TestExecPlannerTimeout(t *testing.T) {
 		if p.Code != envelope.TriagePlannerUnavailable {
 			t.Fatalf("code = %s, want planner_unavailable", p.Code)
 		}
+	}
+}
+
+// TestPlanStepEmptyOutputIsTransient guards the classification fix: a plan tool
+// that exits 0 with no output is a no-op/crash (TRANSIENT, retryable), not the
+// deterministic bad-prompt response TriagePlannerFailed (PERMANENT) models.
+func TestPlanStepEmptyOutputIsTransient(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plan stub")
+	}
+	f := newFixture(t)
+	rec := f.openJob(t)
+
+	script := filepath.Join(t.TempDir(), "emptyplan.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := New(f.cli, Options{PlannerCLI: "stub", PlanCLI: script, ReposDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tr.runPlanStep(rec)
+	if err == nil {
+		t.Fatal("want a typed error for empty plan output")
+	}
+	if CodeOf(err) != envelope.TriagePlannerUnavailable {
+		t.Fatalf("code = %s, want planner_unavailable", CodeOf(err))
+	}
+	if !transientErr(err) {
+		t.Fatal("empty plan output must classify TRANSIENT (retryable), not fail-fast")
+	}
+}
+
+// TestPlanStepTimeoutIsTransient proves a wedged plan tool is killed and typed
+// TRANSIENT, not waited on forever.
+func TestPlanStepTimeoutIsTransient(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plan stub")
+	}
+	f := newFixture(t)
+	rec := f.openJob(t)
+
+	script := filepath.Join(t.TempDir(), "sleeper.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := New(f.cli, Options{PlannerCLI: "stub", PlanCLI: script, ReposDir: t.TempDir(), PlanTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	err = tr.runPlanStep(rec)
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("plan timeout did not bound the plan tool")
+	}
+	if CodeOf(err) != envelope.TriagePlannerUnavailable {
+		t.Fatalf("code = %s, want planner_unavailable", CodeOf(err))
+	}
+	if !transientErr(err) {
+		t.Fatal("plan timeout must classify TRANSIENT")
+	}
+}
+
+// TestPlanStepWritesTruncatedNote proves a successful plan-step lands the plan on
+// the repo blackboard (visible to recentNotes → decomposition + workers), bounded
+// to exactly MaxNoteLen with the truncation marker when oversized.
+func TestPlanStepWritesTruncatedNote(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plan stub")
+	}
+	f := newFixture(t)
+	rec := f.openJob(t) // repo "demo"
+
+	// A plan larger than MaxNoteLen, with a leading token to assert the head survives.
+	script := filepath.Join(t.TempDir(), "bigplan.sh")
+	body := "#!/bin/sh\nprintf 'PLANMARKER-Z9 '\nhead -c 20000 /dev/zero | tr '\\0' x\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := New(f.cli, Options{PlannerCLI: "stub", PlanCLI: script, ReposDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.runPlanStep(rec); err != nil {
+		t.Fatalf("runPlanStep: %v", err)
+	}
+	notes := tr.recentNotes(rec.Repo)
+	if len(notes) == 0 {
+		t.Fatal("plan note not on the blackboard")
+	}
+	note := notes[len(notes)-1]
+	if !strings.Contains(note, "PLANMARKER-Z9") {
+		t.Fatal("plan token missing from the blackboard note")
+	}
+	if len(note) != meshapi.MaxNoteLen {
+		t.Fatalf("note len = %d, want exactly MaxNoteLen=%d (truncated)", len(note), meshapi.MaxNoteLen)
+	}
+	if !strings.HasSuffix(note, planTruncMarker) {
+		t.Fatal("truncated note missing the trunc marker")
 	}
 }
 

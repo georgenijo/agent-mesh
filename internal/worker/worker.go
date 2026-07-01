@@ -355,12 +355,26 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 		config.EnvAgentSocket+"="+w.sockPath,
 	)
 
+	// Live transcript: when streaming is on, the adapter runs stream-json and
+	// writes a per-task transcript the dashboard tails. Best-effort — a runs-dir
+	// failure just means no transcript, never a failed run.
+	transcript := ""
+	if w.d.cfg.WorkerStream {
+		if err := os.MkdirAll(w.d.cfg.RunsDir(), 0o700); err == nil {
+			transcript = filepath.Join(w.d.cfg.RunsDir(), w.rec.ID+".jsonl")
+		} else {
+			w.d.log.Warn("worker: create runs dir failed; running without a transcript", "task", w.rec.ID, "err", err)
+		}
+	}
+
 	out, err := w.adapter.Invoke(ctx, w.buildPrompt(), cliexec.InvokeOptions{
-		Model:   w.d.cfg.WorkerModel,
-		WorkDir: w.dir,
-		Env:     env,
-		OnStart: func(pid int) { w.sc.TrackChild(w.d.cfg.WorkerCLI, pid) },
-		OnExit:  func(pid int) { w.sc.MarkChildExited(pid) },
+		Model:          w.d.cfg.WorkerModel,
+		WorkDir:        w.dir,
+		Env:            env,
+		PermissionMode: w.d.cfg.WorkerPermissionMode,
+		TranscriptPath: transcript,
+		OnStart:        func(pid int) { w.sc.TrackChild(w.d.cfg.WorkerCLI, pid) },
+		OnExit:         func(pid int) { w.sc.MarkChildExited(pid) },
 	})
 	if err != nil {
 		return scheduler.Result{}, fmt.Errorf("worker: %w", err)

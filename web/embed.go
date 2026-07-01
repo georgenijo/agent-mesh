@@ -15,5 +15,5 @@ import "embed"
 // Assets holds the dashboard UI files, embedded so meshd stays a single
 // static binary with zero external dependencies.
 //
-//go:embed index.html app.js style.css enhance.js jobform.js
+//go:embed index.html app.js style.css enhance.js jobform.js runlog.html
 var Assets embed.FS

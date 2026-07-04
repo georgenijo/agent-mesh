@@ -1,3 +1,5 @@
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.svg"><img src="docs/banner.svg" alt="agent-mesh — Agents orchestrating themselves" width="100%"></picture>
+
 <div align="center">
 
 # Agent Mesh

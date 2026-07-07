@@ -99,6 +99,18 @@ func goldenCases() []goldenCase {
 				Instruction:  "implement RRULE builder",
 				Diff:         "--- a/src/api.ts\n+++ b/src/api.ts\n@@ -1 +1 @@\n-old\n+new\n"},
 			&ReviewRequestPayload{}},
+		{KindSettings, "", SubjectSettings,
+			&SettingsPayload{
+				Rev: 7, UpdatedAt: goldenTS, UpdatedBy: "george",
+				BudgetUSD: 5, MaxWorkers: 4, ReDispatchBackoff: "30s",
+				WorkerCLI: "claude", WorkerModel: "sonnet", PlannerCLI: "claude", PlannerModel: "sonnet",
+				ExpertCLI: "claude", WorkerTimeout: "10m0s", TriageTimeout: "2m0s", TriageBackoff: "30s",
+				TriageMaxAttempts: 4, ReviewRole: "reviewer", ReviewPoolSize: 1, ReviewRetries: 2,
+				ReviewTimeout: "5m0s", KeepWorktrees: "on-failure", AutoExperts: true, AuditFanout: true,
+				ExpertIdleTTL: "5m0s", JobsAddr: "127.0.0.1:8740",
+				HeartbeatInterval: "5s", AwayAfter: "15s", EvictAfter: "1m0s", ClaimTTL: "2m20s",
+				DashboardAddr: "127.0.0.1:8737", ObserveAddr: "127.0.0.1:8739"},
+			&SettingsPayload{}},
 	}
 }
 
@@ -226,6 +238,7 @@ func TestContractStrings(t *testing.T) {
 		{"SubjectWorker", SubjectWorker("T1"), "mesh.worker.T1"},
 		{"SubjectFleet", SubjectFleet, "mesh.fleet"},
 		{"SubjectReview", SubjectReview("T1"), "mesh.review.T1"},
+		{"SubjectSettings", SubjectSettings, "mesh.settings"},
 		// Patterns.
 		{"PatternAll", PatternAll, "mesh.>"},
 		{"PatternHeartbeats", PatternHeartbeats, "mesh.heartbeat.>"},
@@ -248,10 +261,12 @@ func TestContractStrings(t *testing.T) {
 		{"BucketTasks", BucketTasks, "tasks"},
 		{"BucketCostLedger", BucketCostLedger, "cost-ledger"},
 		{"BucketExpertReady", BucketExpertReady, "expert-ready"},
+		{"BucketSettings", BucketSettings, "settings"},
 		{"StreamAudit", StreamAudit, "audit"},
 		{"StreamTickets", StreamTickets, "ticket-events"},
 		{"StreamJobs", StreamJobs, "job-events"},
 		{"StreamTasks", StreamTasks, "task-events"},
+		{"StreamSettings", StreamSettings, "settings-events"},
 		{"StreamNotes", StreamNotes("demo"), "notes-demo"},
 		// Repo identity.
 		{"DefaultRepo", DefaultRepo, "default"},
@@ -322,6 +337,7 @@ func TestContractStrings(t *testing.T) {
 		{"AuditWorker", string(AuditWorker), "worker"},
 		{"AuditFleet", string(AuditFleet), "fleet"},
 		{"AuditReview", string(AuditReview), "review"},
+		{"AuditSettings", string(AuditSettings), "settings"},
 		// Review verdicts and error codes.
 		{"ReviewApprove", string(ReviewApprove), "approve"},
 		{"ReviewRequestChanges", string(ReviewRequestChanges), "request_changes"},
@@ -350,6 +366,7 @@ func TestContractStrings(t *testing.T) {
 		{"KindFleet", string(KindFleet), "fleet"},
 		{"KindReview", string(KindReview), "review"},
 		{"KindReviewRequest", string(KindReviewRequest), "review_request"},
+		{"KindSettings", string(KindSettings), "settings"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

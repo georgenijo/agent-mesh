@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -178,6 +179,19 @@ func (c *Coordinator) auditEntryFor(env envelope.Envelope) (AuditEntry, bool) {
 		if p.Code != "" {
 			base.Result = string(p.Code)
 		}
+		return base, true
+
+	case envelope.KindSettings:
+		// A staged settings change (v1 settings screen): arming/budget/model
+		// mutations are exactly the policy changes the audit log exists for.
+		var p envelope.SettingsPayload
+		if envelope.DecodeInto(env, &p) != nil {
+			return AuditEntry{}, false
+		}
+		base.Kind = envelope.AuditSettings
+		base.Event = "staged"
+		base.By = p.UpdatedBy
+		base.State = strconv.FormatUint(p.Rev, 10)
 		return base, true
 
 	default:

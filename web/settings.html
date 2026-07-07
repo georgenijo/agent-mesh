@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Mesh · Settings</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 2L2 6.5V13.5L10 18L18 13.5V6.5L10 2Z' fill='none' stroke='%2322d3ee' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='10' cy='10' r='2.5' fill='%2322d3ee'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<style>
+/* Settings-screen-local styles: additive, self-contained, theme-consistent
+   with style.css tokens. */
+.set-wrap { max-width: 1100px; margin: 0 auto; padding: 20px 24px 80px; }
+.set-banner { border-radius: 8px; padding: 12px 16px; margin: 14px 0; font-size: 13px; }
+.set-banner.warn { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); color: #fbbf24; }
+.set-banner.info { background: rgba(34,211,238,.08); border: 1px solid rgba(34,211,238,.3); color: #67e8f9; }
+.set-banner.hidden { display: none; }
+.set-section { margin: 22px 0; }
+.set-section > h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; margin: 0 0 6px; }
+.set-section > p.hint { font-size: 12px; color: #64748b; margin: 0 0 10px; }
+table.set-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.set-scroll { overflow-x: auto; }
+.set-table th { text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .05em; padding: 6px 8px; border-bottom: 1px solid rgba(148,163,184,.2); }
+.set-table td { padding: 8px; border-bottom: 1px solid rgba(148,163,184,.08); vertical-align: middle; }
+.set-label { font-weight: 600; color: #e2e8f0; }
+.set-col { color: #94a3b8; font-family: "JetBrains Mono", monospace; font-size: 12px; white-space: nowrap; }
+.set-col.eff { color: #e2e8f0; }
+.badge { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; }
+.badge.hot { background: rgba(34,197,94,.16); color: #4ade80; }
+.badge.restart-coordinator { background: rgba(245,158,11,.16); color: #fbbf24; }
+.badge.restart-fleet { background: rgba(239,68,68,.16); color: #f87171; }
+.badge.arm { background: rgba(168,85,247,.18); color: #c084fc; margin-left: 4px; }
+.envlock { color: #f59e0b; font-size: 11px; cursor: help; }
+.set-input, .set-select { width: 100%; box-sizing: border-box; background: #0f172a; border: 1px solid rgba(148,163,184,.25); color: #e2e8f0; border-radius: 5px; padding: 5px 7px; font-size: 12px; font-family: "JetBrains Mono", monospace; }
+.set-input:disabled, .set-select:disabled { opacity: .5; cursor: not-allowed; }
+.set-input.invalid { border-color: #f87171; }
+.set-row-note { font-size: 11px; color: #64748b; margin-top: 3px; }
+.set-actions { position: sticky; bottom: 0; background: linear-gradient(to top, #0b1120 70%, transparent); padding: 14px 0; display: flex; gap: 12px; align-items: center; }
+.set-actions .jf-submit { min-width: 140px; }
+#setStatus { font-size: 13px; }
+#setStatus.err { color: #f87171; }
+#setStatus.ok { color: #4ade80; }
+details.set-advanced > summary { cursor: pointer; color: #94a3b8; font-size: 13px; font-weight: 600; padding: 6px 0; }
+.apply-panel { background: #0f172a; border: 1px solid rgba(148,163,184,.2); border-radius: 8px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #94a3b8; }
+.apply-panel code { background: #1e293b; padding: 2px 6px; border-radius: 4px; color: #67e8f9; font-family: "JetBrains Mono", monospace; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(2,6,23,.7); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal-overlay[hidden] { display: none; }
+.modal-sheet { background: #0f172a; border: 1px solid rgba(148,163,184,.3); border-radius: 10px; padding: 22px; max-width: 460px; }
+.modal-sheet h3 { margin: 0 0 10px; color: #f87171; font-size: 15px; }
+.modal-sheet p { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+.modal-actions { display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end; }
+.mode-pill { font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-brand">
+    <svg class="brand-icon" viewBox="0 0 20 20" fill="none" width="16" height="16">
+      <path d="M10 2L2 6.5V13.5L10 18L18 13.5V6.5L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
+    </svg>
+    <span class="brand-name">AGENT&nbsp;MESH</span>
+    <span class="brand-sep"></span>
+    <span class="brand-mode">FLEET SETTINGS</span>
+  </div>
+  <div class="topbar-right">
+    <a class="jf-fab" href="index.html">← Dashboard</a>
+  </div>
+</header>
+
+<main class="set-wrap">
+  <div id="divergeBanner" class="set-banner warn hidden"></div>
+  <div id="envBanner" class="set-banner info hidden"></div>
+
+  <div class="apply-panel">
+    <strong>How to apply.</strong>
+    <span class="badge hot">applies now</span> hot knobs take effect within one scheduler sweep — a live budget raise preserves spend-to-date.
+    <span class="badge restart-coordinator">restart required</span> restart the coordinator to apply:
+    <code>mesh ops down &amp;&amp; mesh up</code> — note a restart re-seeds the spend meter from the cost ledger.
+    <span class="badge restart-fleet">fleet restart</span> every daemon (coordinator + each sidecar/expert) must restart.
+    No credential/API-key field lives here (no API key in core).
+  </div>
+
+  <form id="setForm">
+    <div id="setSections"></div>
+
+    <div class="set-actions">
+      <button type="submit" class="jf-submit" id="setSubmit" disabled>Stage changes</button>
+      <button type="button" class="jf-fab" id="setReset">Reset</button>
+      <span id="setStatus"></span>
+    </div>
+  </form>
+</main>
+
+<div class="modal-overlay" id="armModal" hidden>
+  <div class="modal-sheet" role="alertdialog" aria-modal="true">
+    <h3>Confirm arming change</h3>
+    <p id="armModalBody"></p>
+    <div class="modal-actions">
+      <button type="button" class="jf-fab" id="armCancel">Cancel</button>
+      <button type="button" class="jf-submit" id="armConfirm">Arm &amp; stage</button>
+    </div>
+  </div>
+</div>
+
+<script src="settings.js"></script>
+</body>
+</html>

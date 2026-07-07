@@ -107,6 +107,11 @@ const (
 	// The coordinator's auto-expert spawner waits for this key before
 	// re-delivering buffered review requests, replacing the fixed settle delay.
 	BucketExpertReady = "expert-ready"
+	// BucketSettings holds the desired-config authority (v1 settings screen):
+	// one singleton record (settings.KeyCurrent) the coordinator overlays onto
+	// its Config on every Start. A fact with no live re-asserter, so it is
+	// persisted alongside jobs/tasks (unlike the registry/claims leases).
+	BucketSettings = "settings"
 )
 
 // Streams (bounded).
@@ -115,6 +120,11 @@ const (
 	StreamTickets = "ticket-events"
 	StreamJobs    = "job-events"
 	StreamTasks   = "task-events"
+	// StreamSettings is the settings change-event stream (v1 settings screen):
+	// one who/what/old→new/when Event per Store.Put, so an operator can replay
+	// how the desired config reached its current state — independent of the
+	// MESH_AUDIT_FANOUT tap that mirrors KindSettings into StreamAudit.
+	StreamSettings = "settings-events"
 )
 
 // StreamNotes is the per-repo durable blackboard stream name.

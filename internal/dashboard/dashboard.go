@@ -190,6 +190,13 @@ type Dashboard struct {
 	triages []triageSnap        // bounded ring, newest last
 	fleet   *fleetSnap          // nil until the first KindFleet is observed
 
+	// settings-screen state (v1). effectiveSettings is the last EFFECTIVE
+	// projection observed from the coordinator's KindSettings tap (nil until the
+	// coordinator publishes one); lastRejection is the last write the settings
+	// store refused, surfaced in GET /api/settings so the UI can show it.
+	effectiveSettings *envelope.SettingsPayload
+	lastRejection     *settingsRejection
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -255,6 +262,8 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("GET /api/tasklog", d.serveTaskLog)
 	mux.HandleFunc("GET /api/worklog", d.serveWorkLog)
 	mux.HandleFunc("POST /api/jobs", d.serveCreateJob)
+	mux.HandleFunc("GET /api/settings", d.serveGetSettings)
+	mux.HandleFunc("POST /api/settings", d.serveUpdateSettings)
 	mux.HandleFunc("GET /api/write-token", d.serveWriteToken)
 	mux.HandleFunc("GET /api/claude-sessions", d.serveClaudeSessions)
 	mux.HandleFunc("GET /api/cost", d.serveCost)
@@ -337,6 +346,8 @@ func (d *Dashboard) onEvent(env envelope.Envelope) {
 		d.recordTriage(env)
 	case envelope.KindFleet:
 		d.recordFleet(env)
+	case envelope.KindSettings:
+		d.recordSettings(env)
 	}
 	msg, err := json.Marshal(map[string]any{"type": "event", "envelope": env})
 	if err != nil {
@@ -1389,6 +1400,13 @@ func (d *Dashboard) serveSSE(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
 			flusher.Flush()
 		}
+	}
+
+	// Initial settings snapshot so the settings screen renders on connect and an
+	// edit in one tab reflects in another.
+	if msg, err := json.Marshal(map[string]any{"type": "settings", "settings": d.settingsResponse()}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", msg) //nolint:errcheck
+		flusher.Flush()
 	}
 
 	// Initial cost snapshot so the cost panel renders immediately on connect.

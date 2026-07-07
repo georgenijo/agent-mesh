@@ -108,6 +108,18 @@ type Scheduler struct {
 
 	costLedger *cost.Ledger // nil = in-memory-only
 
+	// Hot-tunable knobs (settings screen, apply-class "hot"). Seeded from
+	// Options at New; the coordinator's settings watcher may raise or lower them
+	// live via the Set* methods below. Guarded by mu because the setters run on
+	// the coordinator's goroutine while the accessors are read on the loop
+	// goroutine — the ONE concurrency-sensitive surface in this package.
+	// Raising budgetUSD deliberately never touches s.spent: a live cap raise
+	// must not reset spend-to-date (that footgun is reserved for a restart).
+	mu          sync.Mutex
+	budgetUSD   float64
+	maxParallel int
+	backoff     time.Duration
+
 	// Loop-goroutine-only state.
 	inflight map[string]string    // task id → job id, workers in flight this lifetime
 	retryAt  map[string]time.Time // task id → earliest re-dispatch (rate-limit backoff)
@@ -153,21 +165,70 @@ func New(cli *bus.Client, opts Options) (*Scheduler, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		opts:       opts,
-		cli:        cli,
-		log:        opts.Log,
-		jobs:       job.NewStore(cli),
-		tasks:      task.NewStore(cli),
-		results:    make(chan outcome),
-		reviews:    make(chan reviewOutcome),
-		costLedger: opts.CostLedger,
-		inflight:   make(map[string]string),
-		retryAt:    make(map[string]time.Time),
-		spent:      initialSpent,
-		ctx:        ctx,
-		cancel:     cancel,
-		stop:       make(chan struct{}),
+		opts:        opts,
+		cli:         cli,
+		log:         opts.Log,
+		jobs:        job.NewStore(cli),
+		tasks:       task.NewStore(cli),
+		results:     make(chan outcome),
+		reviews:     make(chan reviewOutcome),
+		costLedger:  opts.CostLedger,
+		inflight:    make(map[string]string),
+		retryAt:     make(map[string]time.Time),
+		spent:       initialSpent,
+		budgetUSD:   opts.BudgetUSD,
+		maxParallel: opts.MaxParallel,
+		backoff:     opts.Backoff,
+		ctx:         ctx,
+		cancel:      cancel,
+		stop:        make(chan struct{}),
 	}, nil
+}
+
+// SetBudgetUSD raises or lowers the fleet budget cap live (settings hot-apply).
+// Never touches s.spent: a live cap raise must not reset spend-to-date.
+func (s *Scheduler) SetBudgetUSD(v float64) {
+	s.mu.Lock()
+	s.budgetUSD = v
+	s.mu.Unlock()
+}
+
+// SetMaxParallel changes the concurrent-worker ceiling live (settings hot-apply).
+func (s *Scheduler) SetMaxParallel(n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.maxParallel = n
+	s.mu.Unlock()
+}
+
+// SetBackoff changes the rate-limit re-dispatch delay live (settings hot-apply).
+func (s *Scheduler) SetBackoff(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.backoff = d
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) budgetCap() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.budgetUSD
+}
+
+func (s *Scheduler) maxParallelN() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxParallel
+}
+
+func (s *Scheduler) backoffDelay() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.backoff
 }
 
 // Start launches the sweep loop.
@@ -307,7 +368,7 @@ func (s *Scheduler) sweepJob(j job.Record) {
 				anyRunning = true
 				continue
 			}
-			if s.checkBudgetBeforeSpawn() && len(s.inflight) < s.opts.MaxParallel {
+			if s.checkBudgetBeforeSpawn() && len(s.inflight) < s.maxParallelN() {
 				s.spawn(j, rec)
 				anyRunning = true
 			}
@@ -337,7 +398,7 @@ func (s *Scheduler) sweepJob(j job.Record) {
 // dispatch moves a runnable task pending→running and spawns its worker.
 // Returns true when a worker is now in flight for it.
 func (s *Scheduler) dispatch(j job.Record, rec task.Record, byID map[string]task.Record) bool {
-	if len(s.inflight) >= s.opts.MaxParallel {
+	if len(s.inflight) >= s.maxParallelN() {
 		return false
 	}
 	if !s.checkBudgetBeforeSpawn() {
@@ -440,8 +501,9 @@ func (s *Scheduler) handleOutcome(o outcome) {
 	case res.Code == envelope.WorkerRateLimited:
 		// Back off, never fail: the task stays persisted running and is
 		// re-dispatched once the backoff elapses.
-		s.retryAt[o.task.ID] = time.Now().Add(s.opts.Backoff)
-		s.log.Warn("scheduler: rate limited; backing off", "task", o.task.ID, "backoff", s.opts.Backoff)
+		backoff := s.backoffDelay()
+		s.retryAt[o.task.ID] = time.Now().Add(backoff)
+		s.log.Warn("scheduler: rate limited; backing off", "task", o.task.ID, "backoff", backoff)
 	case res.Code == envelope.WorkerBillingError:
 		// Pause the fleet, never fail: the task stays persisted running and
 		// the next lifetime (after the operator resets) resumes it.
@@ -455,9 +517,9 @@ func (s *Scheduler) handleOutcome(o outcome) {
 			truncate(fmt.Sprintf("%s: %s", res.Code, res.Summary), 512))
 	}
 
-	if s.opts.BudgetUSD > 0 && s.spent >= s.opts.BudgetUSD {
+	if budget := s.budgetCap(); budget > 0 && s.spent >= budget {
 		s.pause(envelope.FleetBudgetExhausted,
-			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, s.opts.BudgetUSD))
+			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, budget))
 	}
 }
 
@@ -560,9 +622,9 @@ func (s *Scheduler) handleReview(o reviewOutcome) {
 			truncate(fmt.Sprintf("review error (%s): %s", code, dec.Notes), 512))
 	}
 
-	if s.opts.BudgetUSD > 0 && s.spent >= s.opts.BudgetUSD {
+	if budget := s.budgetCap(); budget > 0 && s.spent >= budget {
 		s.pause(envelope.FleetBudgetExhausted,
-			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, s.opts.BudgetUSD))
+			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, budget))
 	}
 }
 
@@ -712,9 +774,9 @@ func (s *Scheduler) checkBudgetBeforeSpawn() bool {
 	if s.paused {
 		return false
 	}
-	if s.opts.BudgetUSD > 0 && s.spent >= s.opts.BudgetUSD {
+	if budget := s.budgetCap(); budget > 0 && s.spent >= budget {
 		s.pause(envelope.FleetBudgetExhausted,
-			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, s.opts.BudgetUSD))
+			fmt.Sprintf("spent %.4f of %.4f USD", s.spent, budget))
 		return false
 	}
 	return true
@@ -727,11 +789,12 @@ func (s *Scheduler) pause(code envelope.FleetPauseCode, reason string) {
 		return
 	}
 	s.paused = true
+	budget := s.budgetCap()
 	s.log.Warn("scheduler: fleet paused", "code", string(code), "reason", reason,
-		"spentUSD", s.spent, "budgetUSD", s.opts.BudgetUSD)
+		"spentUSD", s.spent, "budgetUSD", budget)
 	env, err := envelope.New(envelope.KindFleet, schedulerID, envelope.SubjectFleet, &envelope.FleetPayload{
 		State: envelope.FleetPaused, Code: code, Reason: reason,
-		SpentUSD: s.spent, BudgetUSD: s.opts.BudgetUSD,
+		SpentUSD: s.spent, BudgetUSD: budget,
 	})
 	if err == nil {
 		err = s.cli.Publish(env)

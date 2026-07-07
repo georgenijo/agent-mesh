@@ -77,6 +77,13 @@ const (
 	// KV record stays the one authority for task state, and the verdict event
 	// is the gate's input, not a second authority.
 	KindReviewRequest Kind = "review_request"
+	// KindSettings is the effective-config observability event (v1 settings
+	// screen): published by the coordinator on mesh.settings after it overlays
+	// the staged settings bucket onto its Config at Start and on any staged
+	// change. The settings KV record (internal/settings) is the authority for
+	// the desired config; this event carries the resolved effective projection
+	// (SettingsPayload) so the dashboard renders the "Effective" column.
+	KindSettings Kind = "settings"
 )
 
 var knownKinds = map[Kind]bool{
@@ -97,6 +104,7 @@ var knownKinds = map[Kind]bool{
 	KindFleet:         true,
 	KindReview:        true,
 	KindReviewRequest: true,
+	KindSettings:      true,
 }
 
 // Envelope is the single wire shape. Payload is kind-specific (payloads.go).

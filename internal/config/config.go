@@ -51,6 +51,7 @@ const (
 	EnvReviewRetries         = "MESH_REVIEW_RETRIES"      // max re-dispatch attempts when a reviewer returns request_changes (#85); default 2; 0 = fail immediately
 	EnvAutoExperts           = "MESH_AUTO_EXPERTS"        // coordinator auto-spawns a resident expert when a role-ask/review-req has no live owner (#117): on | off (default off)
 	EnvExpertIdleTTL         = "MESH_EXPERT_IDLE_TTL"     // expert self-terminates after this period with no ask/review activity (#105); 0 = never
+	EnvReDispatchBackoff     = "MESH_REDISPATCH_BACKOFF"  // scheduler rate-limit re-dispatch delay; default 30s
 	EnvJobsAddr              = "MESH_JOBS_ADDR"           // HTTP ingress for POST /jobs (#119); empty (default) = disabled
 	EnvGitHubRepo            = "MESH_GITHUB_REPO"         // GitHub repo (owner/repo) for NL job control (`mesh work`); empty = mesh work disabled
 	// EnvEscalationFile is the path the worker child can write an escalation
@@ -139,6 +140,12 @@ const (
 	// to disable the reaper.
 	DefaultExpertIdleTTL = 5 * time.Minute
 
+	// DefaultReDispatchBackoff is the scheduler's rate-limit re-dispatch delay:
+	// after a worker result maps to WorkerRateLimited the task waits this long
+	// before being re-dispatched. Wired into scheduler.Options.Backoff (a field
+	// that previously had no config source — the phantom knob).
+	DefaultReDispatchBackoff = 30 * time.Second
+
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
 	DefaultEvictAfter        = 60 * time.Second
@@ -191,6 +198,8 @@ type Config struct {
 	WorkerTimeout time.Duration // wall-clock bound on one worker invocation
 	BudgetUSD     float64       // fleet budget cap (locked decision: hard cap, pause-not-fail); 0 = unlimited
 	MaxWorkers    int           // max concurrent workers
+	// Backoff is the scheduler's rate-limit re-dispatch delay (scheduler.Options.Backoff).
+	Backoff time.Duration
 
 	// ReviewRole gates the #80 review integration: when set (and the scheduler
 	// is enabled), every successful worker diff is routed to the expert serving
@@ -282,6 +291,7 @@ func Load() (Config, error) {
 		KeepWorktrees:     KeepWorktreesOnFailure,
 		AuditFanout:       true,
 		ExpertIdleTTL:     DefaultExpertIdleTTL,
+		Backoff:           DefaultReDispatchBackoff,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -312,6 +322,7 @@ func Load() (Config, error) {
 		{EnvTriageBackoff, &cfg.TriageBackoff},
 		{EnvWorkerTimeout, &cfg.WorkerTimeout},
 		{EnvReviewTimeout, &cfg.ReviewTimeout},
+		{EnvReDispatchBackoff, &cfg.Backoff},
 	} {
 		raw := os.Getenv(d.env)
 		if raw == "" {
@@ -439,14 +450,6 @@ func Load() (Config, error) {
 		}
 	}
 
-	if cfg.AwayAfter < cfg.HeartbeatInterval {
-		return Config{}, fmt.Errorf("config: away-after (%s) must be >= heartbeat interval (%s)",
-			cfg.AwayAfter, cfg.HeartbeatInterval)
-	}
-	if cfg.EvictAfter <= cfg.AwayAfter {
-		return Config{}, fmt.Errorf("config: evict-after (%s) must be > away-after (%s)",
-			cfg.EvictAfter, cfg.AwayAfter)
-	}
 	// Claim lease backstop: like the registry record TTL, it must outlast
 	// every legitimate silent window (the eviction sweep is the primary
 	// release path; the TTL self-heals if the coordinator is down). Derived
@@ -454,11 +457,71 @@ func Load() (Config, error) {
 	if cfg.ClaimTTL == 0 {
 		cfg.ClaimTTL = 2 * (cfg.EvictAfter + cfg.RegistrationGrace)
 	}
-	if cfg.ClaimTTL <= cfg.HeartbeatInterval {
-		return Config{}, fmt.Errorf("config: claim-ttl (%s) must be > heartbeat interval (%s)",
-			cfg.ClaimTTL, cfg.HeartbeatInterval)
+	if err := Validate(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// Validate enforces the cross-field and range invariants on a fully-resolved
+// Config (all durations set, ClaimTTL already derived). Load calls it as its
+// last step; the settings overlay (internal/settings) calls it too, so a staged
+// value that would push the running system into a state Load itself would have
+// rejected at boot is caught before it is applied. Pure — no I/O, no env reads.
+func Validate(cfg Config) error {
+	for name, d := range map[string]time.Duration{
+		EnvHeartbeatInterval: cfg.HeartbeatInterval,
+		EnvAwayAfter:         cfg.AwayAfter,
+		EnvEvictAfter:        cfg.EvictAfter,
+		EnvRegistrationGrace: cfg.RegistrationGrace,
+		EnvClaimTTL:          cfg.ClaimTTL,
+		EnvTriageTimeout:     cfg.TriageTimeout,
+		EnvTriageBackoff:     cfg.TriageBackoff,
+		EnvWorkerTimeout:     cfg.WorkerTimeout,
+		EnvReviewTimeout:     cfg.ReviewTimeout,
+		EnvReDispatchBackoff: cfg.Backoff,
+	} {
+		if d <= 0 {
+			return fmt.Errorf("config: %s must be positive, got %s", name, d)
+		}
+	}
+	if cfg.ExpertIdleTTL < 0 {
+		return fmt.Errorf("config: %s must be non-negative, got %s", EnvExpertIdleTTL, cfg.ExpertIdleTTL)
+	}
+	if cfg.AwayAfter < cfg.HeartbeatInterval {
+		return fmt.Errorf("config: away-after (%s) must be >= heartbeat interval (%s)",
+			cfg.AwayAfter, cfg.HeartbeatInterval)
+	}
+	if cfg.EvictAfter <= cfg.AwayAfter {
+		return fmt.Errorf("config: evict-after (%s) must be > away-after (%s)",
+			cfg.EvictAfter, cfg.AwayAfter)
+	}
+	if cfg.ClaimTTL <= cfg.HeartbeatInterval {
+		return fmt.Errorf("config: claim-ttl (%s) must be > heartbeat interval (%s)",
+			cfg.ClaimTTL, cfg.HeartbeatInterval)
+	}
+	if cfg.BudgetUSD < 0 || math.IsNaN(cfg.BudgetUSD) || math.IsInf(cfg.BudgetUSD, 0) {
+		return fmt.Errorf("config: %s must be a non-negative finite USD amount, got %v", EnvBudgetUSD, cfg.BudgetUSD)
+	}
+	if cfg.MaxWorkers <= 0 {
+		return fmt.Errorf("config: %s must be a positive integer, got %d", EnvMaxWorkers, cfg.MaxWorkers)
+	}
+	if cfg.TriageMaxAttempts <= 0 {
+		return fmt.Errorf("config: %s must be a positive integer, got %d", EnvTriageMaxAttempts, cfg.TriageMaxAttempts)
+	}
+	if cfg.ReviewPoolSize < 1 {
+		return fmt.Errorf("config: %s must be >= 1, got %d", EnvReviewPoolSize, cfg.ReviewPoolSize)
+	}
+	if cfg.ReviewRetries < 0 {
+		return fmt.Errorf("config: %s must be non-negative, got %d", EnvReviewRetries, cfg.ReviewRetries)
+	}
+	switch cfg.KeepWorktrees {
+	case KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever:
+	default:
+		return fmt.Errorf("config: %s=%q: want %s|%s|%s", EnvKeepWorktrees, cfg.KeepWorktrees,
+			KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever)
+	}
+	return nil
 }
 
 // BusSocket is the coordinator-owned bus socket path.

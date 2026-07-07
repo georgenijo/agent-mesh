@@ -24,6 +24,7 @@ import (
 	"github.com/georgenijo/agent-mesh/internal/cost"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/scheduler"
+	"github.com/georgenijo/agent-mesh/internal/settings"
 	"github.com/georgenijo/agent-mesh/internal/triage"
 	"github.com/georgenijo/agent-mesh/internal/worker"
 )
@@ -67,7 +68,11 @@ type AuditEntry struct {
 // Coordinator runs the bus server and the registry reducer.
 type Coordinator struct {
 	cfg config.Config
-	log *slog.Logger
+	// baseCfg is the env-loaded config captured at Start before the staged
+	// settings overlay. Hot re-apply overlays the staged record onto baseCfg so
+	// env precedence (env > settings > default) is preserved on every re-read.
+	baseCfg config.Config
+	log     *slog.Logger
 
 	// WorkerJoin joins one #26 worker agent to the mesh (an embedded
 	// per-worker sidecar). It is INJECTED — by cmd/meshd in production, by
@@ -145,7 +150,7 @@ func (c *Coordinator) Start() error {
 	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{
 		StreamDir:      c.cfg.StreamsDir(),
 		PersistDir:     c.cfg.BucketsDir(),
-		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts, envelope.BucketCostLedger},
+		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts, envelope.BucketCostLedger, envelope.BucketSettings},
 		Logger:         c.log,
 	})
 	if err := c.srv.Start(); err != nil {
@@ -157,6 +162,26 @@ func (c *Coordinator) Start() error {
 		return fmt.Errorf("coordinator: dial own bus: %w", err)
 	}
 	c.cli = cli
+
+	// Staged settings overlay (v1 settings screen): the settings bucket is the
+	// desired-config authority. Read it now — AFTER the bus is dialed (the
+	// persisted bucket has already been replayed in srv.Start) and BEFORE any
+	// subsystem constructs — and overlay it onto the env-loaded config with env
+	// precedence. This is the common path: an autostarted coordinator (bare
+	// `mesh join`) governs from staging too, not just `mesh up`. A bad staged
+	// value is logged and skipped wholesale (never a boot failure).
+	c.baseCfg = c.cfg
+	if rec, _, found, gerr := settings.NewStore(cli).Get(); gerr != nil {
+		c.log.Warn("read staged settings failed; using env/defaults", "err", gerr)
+	} else if found {
+		resolved := settings.Overlay(c.cfg, rec)
+		if verr := config.Validate(resolved); verr != nil {
+			c.log.Warn("staged settings invalid; using env/defaults", "err", verr)
+		} else {
+			c.cfg = resolved
+			c.log.Info("staged settings applied", "rev", rec.Rev)
+		}
+	}
 
 	// One subscription, one dispatch goroutine: register/leave/heartbeat/
 	// status for the same agent MUST be reduced in publish order. Separate
@@ -213,6 +238,7 @@ func (c *Coordinator) Start() error {
 			BudgetUSD:     c.cfg.BudgetUSD,
 			MaxParallel:   c.cfg.MaxWorkers,
 			Interval:      sweepInterval(c.cfg.HeartbeatInterval),
+			Backoff:       c.cfg.Backoff, // was a phantom knob: never wired before
 			Log:           c.log,
 			CostLedger:    cost.New(cli),
 			ReviewRetries: c.cfg.ReviewRetries,
@@ -242,8 +268,15 @@ func (c *Coordinator) Start() error {
 			c.Stop()
 			return fmt.Errorf("coordinator: scheduler: %w", err)
 		}
+		// c.scheduler is read from the subscription goroutine
+		// (reduce→handleSettings→reapplyHotSettings), which is already live
+		// because Subscribe ran above. Guard the pointer write with c.mu so that
+		// concurrent read is not a data race; reapplyHotSettings takes the same
+		// lock to load it.
+		c.mu.Lock()
 		c.scheduler = sch
-		c.scheduler.Start()
+		c.mu.Unlock()
+		sch.Start()
 		c.log.Info("scheduler enabled", "worker", c.cfg.WorkerCLI,
 			"reposDir", c.cfg.ReposDir, "budgetUSD", c.cfg.BudgetUSD, "maxWorkers", c.cfg.MaxWorkers)
 		if c.reviewer != nil {
@@ -282,12 +315,103 @@ func (c *Coordinator) Start() error {
 		c.log.Info("jobs ingress started", "addr", ji.addr())
 	}
 
+	// Publish the EFFECTIVE (post-overlay) settings snapshot so the dashboard's
+	// "Effective" column reflects what this coordinator is actually running.
+	c.publishEffectiveSettings()
+
+	// Settings loop (v1 settings screen): a sweep-cadence backstop that (1)
+	// re-applies the staged hot knobs (budget/max-workers/backoff) to the
+	// scheduler so a dropped best-effort KindSettings publish self-heals within
+	// one tick, and (2) republishes the EFFECTIVE snapshot so a late-connecting
+	// observer (a dashboard started after the coordinator) still populates its
+	// "Effective" column. The event-driven path (reduce → handleSettings)
+	// applies and republishes promptly; this loop is the durable backstop.
+	c.wg.Add(1)
+	go c.settingsWatcher()
+
 	if err := writeCoordinatorPID(c.cfg.CoordinatorPID()); err != nil {
 		c.Stop()
 		return fmt.Errorf("coordinator: write pid file: %w", err)
 	}
 	c.log.Info("coordinator started", "bus", c.cfg.BusSocket())
 	return nil
+}
+
+// settingsWatcher is the sweep-cadence backstop for hot settings changes.
+func (c *Coordinator) settingsWatcher() {
+	defer c.wg.Done()
+	ticker := time.NewTicker(sweepInterval(c.cfg.HeartbeatInterval))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-ticker.C:
+			c.reapplyHotSettings()
+			c.publishEffectiveSettings()
+		}
+	}
+}
+
+// reapplyHotSettings re-reads the staged record and pushes the resolved hot
+// knobs to the scheduler's mutex-guarded setters. Never touches restart-class
+// knobs (those take effect on the next Start). No publish — the event path owns
+// the effective-snapshot broadcast; this is the silent self-heal.
+func (c *Coordinator) reapplyHotSettings() {
+	// Load the scheduler pointer under c.mu: it is assigned on the Start
+	// goroutine, and this runs on the subscription goroutine (via handleSettings)
+	// and the settingsWatcher goroutine.
+	c.mu.Lock()
+	sch := c.scheduler
+	c.mu.Unlock()
+	if sch == nil {
+		return
+	}
+	rec, _, found, err := settings.NewStore(c.cli).Get()
+	if err != nil || !found {
+		return
+	}
+	resolved := settings.Overlay(c.baseCfg, rec)
+	if verr := config.Validate(resolved); verr != nil {
+		// The dashboard write path validates against this same env-honoring
+		// resolution before persisting, so a record that reaches here invalid
+		// means the env diverged since it was staged. Never silently swallow it —
+		// log so the drop is visible (never-fake-success discipline).
+		c.log.Warn("staged settings invalid at re-apply; hot knobs unchanged", "err", verr)
+		return
+	}
+	sch.SetBudgetUSD(resolved.BudgetUSD)
+	sch.SetMaxParallel(resolved.MaxWorkers)
+	sch.SetBackoff(resolved.Backoff)
+}
+
+// handleSettings responds to a staged settings change observed on mesh.settings
+// (published by the dashboard's write path). It hot-applies the change and
+// republishes the coordinator's authoritative effective snapshot. Our own
+// effective republish (From=coordinatorID) is ignored to avoid a publish loop.
+func (c *Coordinator) handleSettings(env envelope.Envelope) {
+	if env.From == coordinatorID {
+		return
+	}
+	c.reapplyHotSettings()
+	c.publishEffectiveSettings()
+	c.auditObserved(env) // audit the operator's staged mutation (arming/budget)
+}
+
+// publishEffectiveSettings publishes the coordinator's EFFECTIVE config as a
+// KindSettings tap on mesh.settings, carrying the staged record's provenance.
+// Non-secret projection only (settings.Project) — never a credential.
+func (c *Coordinator) publishEffectiveSettings() {
+	rec, _, _, _ := settings.NewStore(c.cli).Get()
+	resolved := settings.Overlay(c.baseCfg, rec)
+	p := settings.Project(resolved, rec)
+	env, err := envelope.New(envelope.KindSettings, coordinatorID, envelope.SubjectSettings, &p)
+	if err == nil {
+		err = c.cli.Publish(env)
+	}
+	if err != nil {
+		c.log.Warn("publish effective settings failed", "err", err)
+	}
 }
 
 // Stop shuts down the janitor, the bus client, and the bus server.
@@ -346,6 +470,11 @@ func (c *Coordinator) reduce(env envelope.Envelope) {
 		c.handleHeartbeat(env)
 	case envelope.KindStatus:
 		c.handleStatus(env)
+	case envelope.KindSettings:
+		// A staged settings change (from the dashboard write path): hot-apply +
+		// republish the effective snapshot + audit. Our own effective republish
+		// is ignored inside handleSettings.
+		c.handleSettings(env)
 	default:
 		// Non-presence lifecycle event: record it in the audit log. Presence is
 		// audited at its mutation site (register/leave/away/evict) so the entry

@@ -212,7 +212,7 @@ func TestSSEPresenceLifecycleContract(t *testing.T) {
 			// here too — the explicit allow-list is the SSE contract.
 			switch f.Type {
 			case "event", "roster", "claims", "claimlog",
-				"jobs", "tasks", "workers", "triage", "fleet", "cost":
+				"jobs", "tasks", "workers", "triage", "fleet", "cost", "settings":
 				// known and accepted
 			default:
 				scanErr <- fmt.Errorf("frame type %q is not in the SSE frame allow-list", f.Type)

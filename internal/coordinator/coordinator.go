@@ -402,8 +402,22 @@ func (c *Coordinator) handleSettings(env envelope.Envelope) {
 // KindSettings tap on mesh.settings, carrying the staged record's provenance.
 // Non-secret projection only (settings.Project) — never a credential.
 func (c *Coordinator) publishEffectiveSettings() {
-	rec, _, _, _ := settings.NewStore(c.cli).Get()
+	rec, _, found, _ := settings.NewStore(c.cli).Get()
 	resolved := settings.Overlay(c.baseCfg, rec)
+	// Same validate-and-drop the Start overlay and reapplyHotSettings apply: a
+	// record that resolves invalid against THIS process's env (the dashboard
+	// validated against its own) is never applied — so it must never be
+	// projected as effective either. Fall back to the config Start actually
+	// adopted, keeping the snapshot honest about what is running. Guarded on
+	// the base config being valid (mirrors the dashboard's apply-parity guard):
+	// with an invalid base — a bare test fixture — any resolve failure is the
+	// base's doing, not the staged record's.
+	if found && config.Validate(c.baseCfg) == nil {
+		if verr := config.Validate(resolved); verr != nil {
+			c.log.Warn("staged settings invalid; effective snapshot reflects running config", "err", verr)
+			resolved = c.cfg
+		}
+	}
 	p := settings.Project(resolved, rec)
 	env, err := envelope.New(envelope.KindSettings, coordinatorID, envelope.SubjectSettings, &p)
 	if err == nil {

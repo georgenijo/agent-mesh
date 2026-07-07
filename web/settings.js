@@ -49,8 +49,8 @@ const SECTIONS = [
   { title: "Worktrees & Audit", hint: "",
     fields: ["keepWorktrees", "auditFanout"] },
 ];
-const ADVANCED = { title: "Presence & Network", hint: "Restart-fleet: every daemon must restart. Validated by the shared config invariants.",
-  fields: ["heartbeatInterval", "awayAfter", "evictAfter", "claimTTL", "dashboardAddr", "observeAddr"] };
+const ADVANCED = { title: "Presence & Network", hint: "Restart-fleet: every daemon must restart. Validated by the shared config invariants. Jobs ingress is an arming knob — it opens a listening port.",
+  fields: ["heartbeatInterval", "awayAfter", "evictAfter", "claimTTL", "dashboardAddr", "observeAddr", "jobsAddr"] };
 
 // Live state from the last GET/SSE.
 let state = { meta: [], metaByField: {}, effective: null, staged: null, defaults: {}, stagedRev: 0, envOverridden: [], lastRejection: null };

@@ -296,3 +296,30 @@ func TestEventAppendedOnPut(t *testing.T) {
 		t.Fatalf("budgetUSD change not recorded: %+v", ev.Changes)
 	}
 }
+
+func TestMerge(t *testing.T) {
+	f := 5.0
+	m := "opus"
+	n := 7
+	prev := Record{BudgetUSD: &f, WorkerModel: &m}
+	patch := Record{MaxWorkers: &n}
+
+	got := Merge(prev, patch)
+	if got.BudgetUSD == nil || *got.BudgetUSD != 5.0 {
+		t.Errorf("BudgetUSD not kept from prev: %v", got.BudgetUSD)
+	}
+	if got.WorkerModel == nil || *got.WorkerModel != "opus" {
+		t.Errorf("WorkerModel not kept from prev: %v", got.WorkerModel)
+	}
+	if got.MaxWorkers == nil || *got.MaxWorkers != 7 {
+		t.Errorf("MaxWorkers not taken from patch: %v", got.MaxWorkers)
+	}
+
+	// A non-nil patch field wins over prev — including the empty string
+	// (three-way model semantics: "" = CLI default is a real staged value).
+	empty := ""
+	got = Merge(prev, Record{WorkerModel: &empty})
+	if got.WorkerModel == nil || *got.WorkerModel != "" {
+		t.Errorf("patch empty-string did not win: %v", got.WorkerModel)
+	}
+}

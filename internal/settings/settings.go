@@ -276,13 +276,36 @@ func diff(prev, next Record) []Change {
 	t := pv.Type()
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		if f.Type.Kind() != reflect.Ptr {
+		if f.Type.Kind() != reflect.Pointer {
 			continue // Rev/UpdatedAt/UpdatedBy are provenance, not knobs
 		}
 		o := ptrString(pv.Field(i))
 		n := ptrString(nv.Field(i))
 		if o != n {
 			out = append(out, Change{Field: jsonName(f), Old: o, New: n})
+		}
+	}
+	return out
+}
+
+// Merge overlays patch's staged knobs onto prev: a non-nil patch field wins, a
+// nil (absent-in-JSON) patch field keeps prev's staged value. The HTTP write
+// path is a merge-patch — the UI POSTs only the fields the operator changed —
+// so without this a partial POST would silently wipe every previously staged
+// knob (Put is a full-record CAS replace by design). Absent therefore means
+// "leave as staged", never "unstage"; v1 has no unstage path. Provenance
+// (Rev/UpdatedAt/UpdatedBy) is Put's to stamp and is taken from patch.
+func Merge(prev, patch Record) Record {
+	out := patch
+	ov := reflect.ValueOf(&out).Elem()
+	pv := reflect.ValueOf(prev)
+	t := pv.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Type.Kind() != reflect.Pointer {
+			continue // provenance, not a knob
+		}
+		if ov.Field(i).IsNil() && !pv.Field(i).IsNil() {
+			ov.Field(i).Set(pv.Field(i))
 		}
 	}
 	return out

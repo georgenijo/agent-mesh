@@ -110,9 +110,20 @@ func (d *Dashboard) serveUpdateSettings(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	rec := req.Record
-
 	store := settings.NewStore(d.bus)
+
+	// Merge-patch semantics: the UI (and any curl caller) POSTs only the fields
+	// it wants to change, so the staged record is prev + patch — an absent field
+	// keeps its previously staged value. Without this a partial POST would
+	// silently wipe every knob it didn't mention (Store.Put is a deliberate
+	// full-record CAS replace). The CAS on stagedRev below still rejects a write
+	// racing another editor, so the merge base cannot be stale without a 409.
+	prev, _, _, gerr := store.Get()
+	if gerr != nil {
+		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	rec := settings.Merge(prev, req.Record)
 
 	// Field + self-consistency validation, naming the offending field. This is
 	// the same check settings.Store.Put runs (against the compiled defaults, env
@@ -152,11 +163,9 @@ func (d *Dashboard) serveUpdateSettings(w http.ResponseWriter, r *http.Request) 
 	// Arming gate: a change that arms real subscription spend / opens a port
 	// requires an explicit confirm. Rejected with 409 confirmation_required and
 	// the arming field list so the UI can name the consequence before re-POSTing.
-	prev, _, _, gerr := store.Get()
-	if gerr != nil {
-		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
+	// The delta is computed on the MERGED record, so an arming knob that was
+	// already staged (and confirmed) does not demand re-confirmation on an
+	// unrelated later edit.
 	arming, aerr := store.ArmingDelta(rec)
 	if aerr != nil {
 		writeJSONError(w, `{"error":"unavailable","message":"bus unavailable"}`, http.StatusServiceUnavailable)

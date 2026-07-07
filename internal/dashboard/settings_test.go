@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -148,3 +149,41 @@ func TestUpdateSettingsArmingRequiresConfirm(t *testing.T) {
 		t.Fatalf("arming with confirm: status %d, want 201 (%v)", resp2.StatusCode, out)
 	}
 }
+
+// Regression: the POST body is a merge-patch, not a full-record replace. The UI
+// sends only the fields the operator changed, so a second partial write must
+// keep every previously staged knob instead of silently wiping it.
+func TestUpdateSettingsMergePatchKeepsStaged(t *testing.T) {
+	_, _, d := startStack(t)
+	base := "http://" + d.Addr()
+	token := d.WriteToken()
+
+	resp, out := postSettings(t, base, token, `{"stagedRev":0,"workerModel":"opus","maxWorkers":3}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d, want 201 (%v)", resp.StatusCode, out)
+	}
+	rev, _ := getSettings(t, base)["stagedRev"].(float64)
+
+	// Partial second write: only the budget. workerModel/maxWorkers must survive.
+	resp2, out2 := postSettings(t, base, token,
+		`{"stagedRev":`+strconvItoa(int(rev))+`,"budgetUSD":2}`)
+	if resp2.StatusCode != http.StatusCreated {
+		t.Fatalf("partial write: status %d, want 201 (%v)", resp2.StatusCode, out2)
+	}
+
+	staged, _ := getSettings(t, base)["staged"].(map[string]any)
+	if staged == nil {
+		t.Fatal("no staged record after partial write")
+	}
+	if staged["workerModel"] != "opus" {
+		t.Errorf("workerModel wiped by partial write: %v", staged["workerModel"])
+	}
+	if staged["maxWorkers"] != float64(3) {
+		t.Errorf("maxWorkers wiped by partial write: %v", staged["maxWorkers"])
+	}
+	if staged["budgetUSD"] != float64(2) {
+		t.Errorf("budgetUSD not staged: %v", staged["budgetUSD"])
+	}
+}
+
+func strconvItoa(n int) string { return fmt.Sprintf("%d", n) }

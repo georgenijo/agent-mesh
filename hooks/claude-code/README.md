@@ -8,6 +8,7 @@ leaves (freeing its claims) when it ends, **with zero manual mesh commands**:
 | ---- | ----- | ---- |
 | `mesh-session-start.sh` | `SessionStart` | joins as a session-scoped agent (`cc-<sid8>`); announces startup; injects mesh identity + roster into the model's context |
 | `mesh-claim-guard.sh` | `PreToolUse` (Edit/Write/MultiEdit/NotebookEdit) | takes a CAS claim on the target file; blocks the edit (exit 2) naming the owner when another agent holds it |
+| `mesh-struggle-hint.sh` | `PostToolUse` | when `$MESH_EXPERT_HINT_FILE` has expert guidance (Feature 5 struggle nudge), feeds it to the model (`decision:block`) and clears the file |
 | `mesh-inbox-drain.sh` | `Stop` | when accepted asks are pending, feeds them to the model (`decision:block`) so it answers before finishing the turn |
 | `mesh-session-end.sh` | `SessionEnd` | `mesh leave` — the coordinator promptly releases every claim the session still holds |
 
@@ -27,6 +28,9 @@ Optional environment knobs (set before launching the session):
 - `MESH_REPO` — pins the repo id for the join and every claim.
 - `MESH_SOCKET` — explicit sidecar socket; overrides session-derived
   identity in every hook (the pre-P3 manual flow keeps working).
+- `MESH_EXPERT_HINT_FILE` — path to a JSON hint file written by the
+  worker struggle observer (`MESH_STRUGGLE_NUDGE=on`). When set and
+  non-empty, `mesh-struggle-hint.sh` injects the answer mid-turn.
 
 ## Identity: session-scoped, derived per hook
 
@@ -62,6 +66,21 @@ The guard runs `mesh claim "<path>" --json` and maps its exit code
 The hook also exits 0 without calling `mesh` for: no resolvable identity
 (no `MESH_SOCKET` and no live session socket), tools that don't mutate
 files, unparseable hook JSON, and machines missing `python3` or `mesh`.
+
+## PostToolUse: struggle → expert hint (Feature 5)
+
+When a worker runs with `MESH_STRUGGLE_NUDGE=on`, the stream observer may
+auto-ask an expert on edit/test loops and write
+`<worktree>/.mesh_expert_hint` (also exported as `MESH_EXPERT_HINT_FILE`).
+`mesh-struggle-hint.sh` reads that file after a tool call, emits:
+
+```json
+{"decision": "block", "reason": "Expert guidance (edit_loop from <agent>): …"}
+```
+
+then truncates the file so the same hint is not re-injected. Missing env,
+empty/missing file, or parse errors → exit 0 (fail-open). The worker prompt
+also mentions the hint file when StruggleNudge is armed.
 
 ## Stop hook: how pending asks reach the model
 

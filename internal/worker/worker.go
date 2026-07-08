@@ -45,6 +45,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -394,10 +395,12 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 	// ambient MESH_DIR / MESH_SOCKET values. MESH_ESCALATION_FILE is the path
 	// the child writes to via `mesh escalate "<question>"`.
 	escalationFile := filepath.Join(w.dir, ".mesh_escalation")
+	hintFile := filepath.Join(w.dir, expertHintFileName)
 	env := append(os.Environ(),
 		config.EnvMeshDir+"="+w.d.cfg.MeshDir,
 		config.EnvAgentSocket+"="+w.sockPath,
 		config.EnvEscalationFile+"="+escalationFile,
+		envExpertHintFile+"="+hintFile,
 	)
 
 	invokeOpts := cliexec.InvokeOptions{
@@ -409,11 +412,39 @@ func (w *worker) Run(ctx context.Context) (scheduler.Result, error) {
 	}
 	// Live-stream the child's output to a per-task log so the dashboard drill-in
 	// can show what the worker is doing in real time. Best-effort: if the log
-	// can't be opened, LiveLog stays nil and the buffered path is used.
+	// can't be opened, LiveLog stays nil and the buffered path is used — unless
+	// StruggleNudge needs the stream-json path, in which case we still tee.
 	logPath := filepath.Join(w.d.cfg.MeshDir, "logs", "worker-"+filepath.Base(w.dir)+".log")
+	var liveWriters []io.Writer
 	if logF, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); ferr == nil { //nolint:gosec
 		defer logF.Close()
-		invokeOpts.LiveLog = logF
+		liveWriters = append(liveWriters, logF)
+	}
+	var struggleObs *Observer
+	if w.d.cfg.StruggleNudge {
+		struggleObs = NewObserver(ctx, ObserverConfig{
+			Enabled:    true,
+			Role:       resolveStruggleRole(w.d.cfg),
+			TestRepeat: w.d.cfg.StruggleTestRepeat,
+			EditRepeat: w.d.cfg.StruggleEditRepeat,
+			Cooldown:   w.d.cfg.StruggleCooldown,
+			MaxAsks:    w.d.cfg.StruggleMaxAsks,
+			WorkDir:    w.dir,
+			MeshDir:    w.d.cfg.MeshDir,
+			Socket:     w.sockPath,
+			Repo:       w.jrec.Repo,
+			Log:        w.d.log,
+		})
+		defer struggleObs.Close()
+		liveWriters = append(liveWriters, struggleObs)
+	}
+	switch len(liveWriters) {
+	case 0:
+		// buffered json path
+	case 1:
+		invokeOpts.LiveLog = liveWriters[0]
+	default:
+		invokeOpts.LiveLog = io.MultiWriter(liveWriters...)
 	}
 	out, err := w.adapter.Invoke(ctx, w.buildPrompt(), invokeOpts)
 	if err != nil {
@@ -568,6 +599,17 @@ func (w *worker) buildPrompt() string {
 	b.WriteString("  smarter\" with nothing measurable), or conflicting requirements you cannot\n")
 	b.WriteString("  resolve. Write a specific, answerable question. DO NOT guess for ambiguous\n")
 	b.WriteString("  tasks — escalate with a precise question instead.\n")
+
+	if w.d.cfg.StruggleNudge {
+		b.WriteString("\nIf the file `.mesh_expert_hint` appears in this worktree (or is injected by a\n")
+		b.WriteString("hook), read it and APPLY the expert guidance before continuing — it is an\n")
+		b.WriteString("auto-asked answer from a mesh expert because you were stuck in an edit or\n")
+		b.WriteString("test loop. Prefer that guidance over repeating the same failing approach.\n")
+		if hint, ok := readExpertHint(w.dir); ok {
+			fmt.Fprintf(&b, "\nExpert guidance already available (signal=%s, from %s):\n%s\n",
+				hint.Signal, hint.AnsweredBy, hint.Answer)
+		}
+	}
 
 	if primer, err := w.sc.BuildPrimer(w.jrec.Repo, 0); err != nil {
 		w.d.log.Warn("worker: blackboard primer failed; continuing without", "task", w.rec.ID, "err", err)

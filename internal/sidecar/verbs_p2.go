@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/georgenijo/agent-mesh/internal/agentcard"
+	"github.com/georgenijo/agent-mesh/internal/answercache"
 	"github.com/georgenijo/agent-mesh/internal/envelope"
 	"github.com/georgenijo/agent-mesh/internal/meshapi"
 	"github.com/georgenijo/agent-mesh/internal/socket"
@@ -262,18 +263,42 @@ func (s *Sidecar) handleAnswer(req socket.Request) socket.Response {
 // coordinator-mediated answer payload. ticket.Store.Answer enforces
 // AcceptedBy==id, so an agent can only answer what it accepted.
 func (s *Sidecar) recordAndPublishAnswer(id, ticketID, answer string) (ticket.Record, error) {
+	return s.recordAndPublishAnswerOpts(id, ticketID, answer, false)
+}
+
+// recordAndPublishAnswerOpts is the shared answer commit+publish path.
+// cached=true marks AnswerPayload.Cached when the answer was served from the
+// exact-match answer cache (Feature 6) without an LLM turn. On a fresh
+// (non-cached) successful answer with AnswerCache armed, the entry is Put so
+// a later identical role-ask can reuse it.
+func (s *Sidecar) recordAndPublishAnswerOpts(id, ticketID, answer string, cached bool) (ticket.Record, error) {
 	rec, err := s.ticketStore().Answer(ticketID, id, answer)
 	if err != nil {
 		return ticket.Record{}, err
 	}
 	s.publishTicket(rec.Ticket, envelope.TicketAnswered, id, "")
 	env, err := envelope.New(envelope.KindAnswer, id, envelope.SubjectAnswer(rec.Ticket),
-		&envelope.AnswerPayload{Ticket: rec.Ticket, Answer: rec.Answer})
+		&envelope.AnswerPayload{Ticket: rec.Ticket, Answer: rec.Answer, Cached: cached})
 	if err == nil {
 		env.To = rec.Asker
 		_ = s.bus.Publish(env)
 	}
+	if !cached && s.cfg.AnswerCache && rec.Role != "" {
+		_ = s.answerCache().Put(answercache.Entry{
+			Role:         rec.Role,
+			Q:            rec.Q,
+			Ctx:          rec.Ctx,
+			Answer:       rec.Answer,
+			AnsweredBy:   rec.AnsweredBy,
+			AnsweredAt:   rec.AnsweredAt,
+			SourceTicket: rec.Ticket,
+		})
+	}
 	return rec, nil
+}
+
+func (s *Sidecar) answerCache() *answercache.Store {
+	return answercache.New(s.bus, s.cfg.AnswerCacheTTL, s.cfg.AnswerCacheIncludeCtx)
 }
 
 func pollAnswered(rec ticket.Record) meshapi.PollResult {

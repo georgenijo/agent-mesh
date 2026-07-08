@@ -262,6 +262,7 @@ func TestContractStrings(t *testing.T) {
 		{"BucketCostLedger", BucketCostLedger, "cost-ledger"},
 		{"BucketExpertReady", BucketExpertReady, "expert-ready"},
 		{"BucketSettings", BucketSettings, "settings"},
+		{"BucketAnswerCache", BucketAnswerCache, "answer-cache"},
 		{"StreamAudit", StreamAudit, "audit"},
 		{"StreamTickets", StreamTickets, "ticket-events"},
 		{"StreamJobs", StreamJobs, "job-events"},

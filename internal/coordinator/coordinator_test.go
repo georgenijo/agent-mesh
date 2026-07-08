@@ -20,6 +20,24 @@ func fastConfig(t *testing.T) config.Config {
 		AwayAfter:         150 * time.Millisecond,
 		EvictAfter:        400 * time.Millisecond,
 		RegistrationGrace: 100 * time.Millisecond,
+		ClaimTTL:          time.Second,
+		TriageTimeout:     time.Minute,
+		TriageBackoff:     time.Second,
+		TriageMaxAttempts: 4,
+		WorkerTimeout:     time.Minute,
+		ReviewTimeout:     time.Minute,
+		ReviewPoolSize:    1,
+		MaxWorkers:        4,
+		Backoff:           time.Second,
+		KeepWorktrees:     config.KeepWorktreesOnFailure,
+		// AuditFanout left false (zero) so TestAuditFanoutDisabled can assert
+		// the off path; tests that need fan-out set AuditFanout: true explicitly.
+		StruggleTestRepeat:    config.DefaultStruggleTestRepeat,
+		StruggleEditRepeat:    config.DefaultStruggleEditRepeat,
+		StruggleCooldown:      config.DefaultStruggleCooldown,
+		StruggleMaxAsks:       config.DefaultStruggleMaxAsks,
+		AnswerCacheTTL:        config.DefaultAnswerCacheTTL,
+		AnswerCacheIncludeCtx: true,
 	}
 }
 

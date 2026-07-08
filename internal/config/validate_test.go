@@ -52,6 +52,9 @@ func TestValidateParityWithLoad(t *testing.T) {
 		TriageTimeout: time.Minute, TriageBackoff: time.Second, WorkerTimeout: time.Minute,
 		ReviewTimeout: time.Minute, Backoff: time.Second, MaxWorkers: 1, TriageMaxAttempts: 1,
 		ReviewPoolSize: 1, KeepWorktrees: KeepWorktreesOnFailure,
+		StruggleTestRepeat: DefaultStruggleTestRepeat, StruggleEditRepeat: DefaultStruggleEditRepeat,
+		StruggleCooldown: DefaultStruggleCooldown, StruggleMaxAsks: DefaultStruggleMaxAsks,
+		AnswerCacheTTL: DefaultAnswerCacheTTL, AnswerCacheIncludeCtx: true,
 	}
 	if err := Validate(base); err == nil || !strings.Contains(err.Error(), "evict-after") {
 		t.Fatalf("Validate err = %v, want evict-after violation", err)
@@ -65,6 +68,9 @@ func TestValidateRangeChecks(t *testing.T) {
 		TriageTimeout: 2 * time.Minute, TriageBackoff: 30 * time.Second, WorkerTimeout: 10 * time.Minute,
 		ReviewTimeout: 5 * time.Minute, Backoff: 30 * time.Second, MaxWorkers: 4, TriageMaxAttempts: 4,
 		ReviewPoolSize: 1, KeepWorktrees: KeepWorktreesOnFailure,
+		StruggleTestRepeat: DefaultStruggleTestRepeat, StruggleEditRepeat: DefaultStruggleEditRepeat,
+		StruggleCooldown: DefaultStruggleCooldown, StruggleMaxAsks: DefaultStruggleMaxAsks,
+		AnswerCacheTTL: DefaultAnswerCacheTTL, AnswerCacheIncludeCtx: true,
 	}
 	if err := Validate(ok); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
@@ -84,4 +90,9 @@ func TestValidateRangeChecks(t *testing.T) {
 	bad(func(c *Config) { c.TriageMaxAttempts = 0 }, "TRIAGE_MAX_ATTEMPTS")
 	bad(func(c *Config) { c.KeepWorktrees = "nope" }, "KEEP_WORKTREES")
 	bad(func(c *Config) { c.Backoff = 0 }, "REDISPATCH_BACKOFF")
+	bad(func(c *Config) { c.StruggleTestRepeat = 0 }, "STRUGGLE_TEST_REPEAT")
+	bad(func(c *Config) { c.StruggleEditRepeat = 0 }, "STRUGGLE_EDIT_REPEAT")
+	bad(func(c *Config) { c.StruggleCooldown = 0 }, "STRUGGLE_COOLDOWN")
+	bad(func(c *Config) { c.StruggleMaxAsks = 0 }, "STRUGGLE_MAX_ASKS")
+	bad(func(c *Config) { c.AnswerCacheTTL = 0 }, "ANSWER_CACHE_TTL")
 }

@@ -249,6 +249,26 @@ func (s *Sidecar) drainInbox(ctx context.Context, fn ExpertFunc, skip map[string
 		}
 		// Any non-skipped ticket we attempt counts as activity for the idle reaper.
 		s.touchExpertActivity()
+
+		// Feature 6: exact-match answer cache. Before spending an LLM turn,
+		// reuse a prior successful answer for the same role+q(+ctx).
+		if s.cfg.AnswerCache && rec.Role != "" {
+			if cached, ok := s.answerCache().Get(rec.Role, rec.Q, rec.Ctx); ok {
+				if _, err := s.recordAndPublishAnswerOpts(id, rec.Ticket, cached.Answer, true); err != nil {
+					if errors.Is(err, ticket.ErrNoSuchTicket) || errors.Is(err, ticket.ErrIllegalTransition) {
+						skip[rec.Ticket] = true
+						continue
+					}
+					s.log.Warn("expert: record cached answer failed", "ticket", rec.Ticket, "err", err)
+					continue
+				}
+				cached.Hits++
+				_ = s.answerCache().Put(*cached) // best-effort hit counter + TTL renew
+				s.log.Debug("expert: answered from cache", "ticket", rec.Ticket, "role", rec.Role)
+				continue
+			}
+		}
+
 		res, err := fn(ctx, rec.Q, rec.Ctx)
 		if err != nil {
 			// ctx cancellation is shutdown, not a poison ticket — let the next

@@ -6,6 +6,48 @@ Maintained via the `/decisions` skill. See `~/.claude/skills/decisions/SKILL.md`
 
 ---
 
+## 2026-07-08: Struggle nudge = worker stream observer + async mesh ask + hint file (not scheduler, not escalation)
+
+**Decision:** Feature 5 (struggle → ask-the-expert) lives in `internal/worker` as an NDJSON stream Observer on the worker child's stdout (Edit/Write/MultiEdit same-path counts; Bash test-cmd + repeated failure fingerprint). On threshold it fires an **async** `mesh ask --role <expert>` (no `--wait` on the driver hot path), polls the ticket in a background goroutine, and writes `.mesh_expert_hint` in the worktree for a PostToolUse hook / prompt clause to inject. Opt-in via `MESH_STRUGGLE_NUDGE` (default off); role = `MESH_STRUGGLE_ROLE` → `MESH_REVIEW_ROLE` → `architect`. Caps: edit/test repeat, cooldown, max asks per run. **Rejected:** putting detection in the scheduler (frozen Driver seam), reusing `mesh escalate` (that is a terminal human handoff), blocking `Run()` on the expert LLM, and scraping `result` prose for detection.
+
+**Rationale:** The hybrid model thesis is cheap workers + warm experts; struggle is the moment that thesis pays off. The worker already streams when LiveLog is open; tickets KV stays the one ask authority; async-by-default is preserved. Headless hook delivery is best-effort (prompt clause is the hook-independent backstop).
+
+**Status:** active
+
+**References:** internal/worker/struggle.go, internal/worker/worker.go, hooks/claude-code/mesh-struggle-hint.sh, config MESH_STRUGGLE_*; extends hybrid-model + #26 worker runtime
+
+**Deferred:** true mid-turn stdin injection without hooks; struggle signals in the dashboard as a first-class panel; settings-UI knobs (env-only v1).
+
+---
+
+## 2026-07-08: Exact-match answer cache = responder-side KV before ExpertFunc; tickets stay the FSM authority (#29 slice)
+
+**Decision:** Feature 6 ships the #29 exact-match answer cache as a new persisted bucket `answer-cache` (`internal/answercache`), keyed by SHA-256 of trimmed `(role, q, ctx)` (ctx optional via `MESH_ANSWER_CACHE_INCLUDE_CTX`). **Lookup** is in expert `drainInbox` before `ExpertFunc` — a hit calls the shared answer path with `AnswerPayload.Cached=true` and skips the LLM. **Write** is in `recordAndPublishAnswer` after a successful ticket Answer (role asks only; direct `--to` deferred). Opt-in `MESH_ANSWER_CACHE` (default off), TTL default 15m. **Not** in the coordinator data path; **not** asker-side instant-answer (would reshape ticket FSM); **not** plan/triage cache (separate #29 job-dedup domain); **not** semantic cache (no embeddings / no API key in core).
+
+**Rationale:** Experts are the expensive warm resource; exact reuse is the cheapest win that still honors one-authority (tickets for FSM, cache bucket for reuse entries) and never-fake-success (only successful answers are stored). Mirrors the `triage-attempts` persisted-bucket pattern.
+
+**Status:** active
+
+**References:** #29, internal/answercache, internal/sidecar/expert.go + verbs_p2.go, envelope.BucketAnswerCache / AnswerPayload.Cached, test/e2e/answer_cache_test.go; extends 2026-06-10 "#29 policy — audit first"
+
+**Deferred:** semantic cache; plan/triage cache; asker-side short-circuit; `--to` direct-ask keys; settings UI knobs; `mesh cache clear` CLI.
+
+---
+
+## 2026-07-08: Review throughput hardening — keep pool + readiness; add ready-timeout redeliver retries + cold-start e2e
+
+**Decision:** Feature 7 does **not** re-litigate #123/#125 (already shipped: `MESH_REVIEW_POOL_SIZE` + BusReviewer round-robin; `BucketExpertReady` gated redeliver). Hardening only: when the spawner times out waiting for expert-ready, it still redelivers immediately **and** schedules spaced retries (1s, 3s) of the buffered envelopes while `!stopping()`; cross-process e2e proves an auto-spawned reviewer answers the **first** cold review request. `reviewPoolSize` stays **restart-coordinator** in settings (hot pool resize deferred — BusReviewer/spawner hold construction-time snapshots).
+
+**Rationale:** Overnight dogfood was serialized on one reviewer and lost jobs to cold-start misses; the core fixes landed, but ready-timeout still had a single blind redeliver and no e2e gate. Retries are idempotent at the review layer (task-id correlation). Hot apply would require live SetPoolSize + spawn/kill and is unsafe without that work.
+
+**Status:** active
+
+**References:** #123, #125, #85; internal/coordinator/experts.go, test/e2e/auto_expert_review_test.go, STATUS.md; extends 2026-06-26 auto-experts and #80 review gating
+
+**Deferred:** hot pool resize; proactive pool warmup on coordinator Start; #147 idle-reaper vs in-flight long reviews.
+
+---
+
 ## 2026-07-07: Settings authority + operator settings screen (v1) — a durable KV bucket is the desired-config authority, overlaid onto every coordinator Start
 
 **Decision:** A new durable KV bucket `BucketSettings` (singleton key `settings.KeyCurrent = "current"`, `settings.Record` golden-pinned, every knob a POINTER so the three-way unset/empty/value distinction WorkerModel/PlannerModel need survives) is the desired-config authority. The coordinator reads it after dialing its bus and BEFORE any subsystem constructs, then `settings.Overlay`s it onto the env-loaded Config on **every** `Start` — autostart (`mesh join`) included, not just `mesh up` — with precedence **env > settings > default** (mirrors `up.go` `setIfUnset`). It then publishes an EFFECTIVE `KindSettings` projection on `mesh.settings` (new additive Kind/subject/`SettingsPayload`, golden-pinned, non-secret) on Start and re-publishes each sweep tick so a late-connecting dashboard still populates its "Effective" column. **Rejected Design 0's `config.json` authority** because config.json is read only by `mesh up` (never by `mesh join` autostart) and is lowest precedence — a settings screen writing it would silently no-op on the common path. **Dashboard write path extended:** `POST /api/settings` delegates wholesale to `settings.Store.Put` (create-only first write, revision-CAS thereafter; stale `stagedRev` → `ErrCASLost` → HTTP 409), token-gated + loopback, mirroring the 2026-06-09 P4 jobs write-path rationale; `GET /api/settings` is an unauth loopback read returning the three columns (effective/staged/default) + apply-class meta + env-lock list. **Apply-class taxonomy:** `hot` (BudgetUSD/MaxWorkers/ReDispatchBackoff via new mutex-guarded scheduler `Set*` accessors, effect within one sweep; a live budget raise deliberately never touches `s.spent`) / `restart-coordinator` (models, CLIs, review policy, timeouts, keep-worktrees, audit-fanout, jobs-addr, auto-experts) / `restart-fleet` (presence & claim TTLs, dashboard/observe addr, expert-idle-TTL). **Arming** knobs (autoExperts, workerCLI, plannerCLI, reviewRole, jobsAddr) default off and require an explicit `confirm:true` (else 409 `confirmation_required`) plus audit-log fan-out (`MESH_AUDIT_FANOUT` → `AuditSettings`). The **phantom scheduler `Backoff` knob** is now real config (`MESH_REDISPATCH_BACKOFF` → `config.Backoff` → `scheduler.Options.Backoff`, previously never wired). The `config.Load` cross-field invariant block is extracted into exported `config.Validate`, reused by the overlay to reject a staged value that Load itself would have rejected at boot. No credential/API-key field anywhere (no-API-key-in-core).

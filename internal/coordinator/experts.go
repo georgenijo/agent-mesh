@@ -11,8 +11,11 @@ package coordinator
 // The triggering message is published a beat before the fresh expert is
 // listening (sidecar.Start registers, then subscribes), so it would otherwise
 // be missed. The spawner buffers the trigger and RE-DELIVERS it once the expert
-// is live — the cold first ask gets answered, not just later ones. Re-delivery
-// is safe: an already-accepted ticket rejects a duplicate via its CAS guard.
+// is live and (for reviews) has signalled subscription readiness — the cold
+// first ask/review gets answered, not just later ones. On a ready-wait timeout
+// it still re-delivers immediately and schedules spaced follow-up retries.
+// Re-delivery is safe: an already-accepted ticket rejects a duplicate via its
+// CAS guard; duplicate review requests are correlated by task id.
 //
 // This is the control-plane spawn seam the architecture always called for ("the
 // Expert pool is on-demand responder agents the coordinator spawns when no live
@@ -49,13 +52,22 @@ const (
 	// autoExpertPollInterval is the registry poll cadence while waiting for live
 	// and for the review-subscription readiness signal.
 	autoExpertPollInterval = 250 * time.Millisecond
+)
+
+// Package-level vars (not consts) so unit tests can shorten the readiness
+// window and retry schedule without waiting on production timeouts.
+var (
 	// autoExpertReadyWait bounds how long we wait for the expert to signal that
 	// its review subscription is active (BucketExpertReady/<name> written by
 	// ServeReviews). This replaces the old fixed 500ms settle: the expert writes
 	// the key only after its subscription is established, so re-delivery is safe
-	// the moment the key appears (#125). On timeout we re-deliver anyway (the
-	// poll found live; the subscription window is likely just wider than expected).
+	// the moment the key appears (#125). On timeout we re-deliver anyway and
+	// schedule spaced follow-up re-delivers (see autoExpertRedeliverBackoff).
 	autoExpertReadyWait = 10 * time.Second
+	// autoExpertRedeliverBackoff is the schedule of follow-up re-delivers after a
+	// ready-wait timeout, measured from the first (immediate) re-deliver. Duplicate
+	// review requests are OK — the scheduler correlates by task id.
+	autoExpertRedeliverBackoff = []time.Duration{1 * time.Second, 3 * time.Second}
 )
 
 // expertSpawner owns autonomous expert lifecycle for one coordinator: the
@@ -273,15 +285,17 @@ func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 	// Wait for the expert's ServeReviews subscription to be active (#125).
 	// The expert writes BucketExpertReady/<name> after subscribing; we poll
 	// for it rather than sleeping a fixed delay that may be shorter than the
-	// runtime startup time. On timeout we re-deliver anyway — the subscription
-	// may already be active; at worst the re-delivered request is lost, which
-	// is the same outcome as before this fix, but now rare instead of common.
+	// runtime startup time. On timeout we re-deliver anyway and schedule
+	// spaced follow-up re-delivers so a late subscription still catches the
+	// cold first request.
 	readyDeadline := time.Now().Add(autoExpertReadyWait)
+	ready := false
 	for {
 		if e.stopping() {
 			return
 		}
 		if e.hasExpertReady(re.name) {
+			ready = true
 			break
 		}
 		if time.Now().After(readyDeadline) {
@@ -292,15 +306,73 @@ func (e *expertSpawner) spawnAndServe(re *roleExpert) {
 		time.Sleep(autoExpertPollInterval)
 	}
 
+	// Re-check at the moment of re-deliver: the ready key may have landed in
+	// the last poll interval, or we may still be in the timeout path.
+	readyAtRedeliver := ready || e.hasExpertReady(re.name)
+
 	e.mu.Lock()
 	re.live = true
 	pending := re.pending
 	re.pending = nil
 	e.mu.Unlock()
 
-	e.log.Info("auto-expert: live; re-delivering", "role", re.role, "name", re.name, "pending", len(pending))
+	e.log.Info("auto-expert: live; re-delivering",
+		"role", re.role, "name", re.name, "pending", len(pending), "ready", readyAtRedeliver)
 	for _, env := range pending {
 		e.redeliver(env)
+	}
+
+	// Ready-timeout hardening: if the readiness key was still missing when we
+	// re-delivered, schedule 2–3 spaced retries of the same pending envelopes.
+	// Idempotent — duplicate KindReviewRequest is OK (scheduler correlates by
+	// task id). Gated on !stopping() so coordinator teardown does not linger.
+	if !readyAtRedeliver && len(pending) > 0 {
+		e.scheduleReadyTimeoutRedelivers(re, pending)
+	}
+}
+
+// scheduleReadyTimeoutRedelivers re-publishes pending triggers at the offsets
+// in autoExpertRedeliverBackoff (measured from now / the first re-deliver).
+// Runs on a spawn-tracked goroutine so stop() waits for it to drain.
+func (e *expertSpawner) scheduleReadyTimeoutRedelivers(re *roleExpert, pending []envelope.Envelope) {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		start := time.Now()
+		for i, at := range autoExpertRedeliverBackoff {
+			if e.sleepOrStop(at - time.Since(start)) {
+				return
+			}
+			e.log.Info("auto-expert: ready-timeout re-deliver retry",
+				"role", re.role, "name", re.name, "attempt", i+1,
+				"of", len(autoExpertRedeliverBackoff), "pending", len(pending))
+			for _, env := range pending {
+				e.redeliver(env)
+			}
+		}
+	}()
+}
+
+// sleepOrStop sleeps until d elapses or the spawner is stopping. Returns true
+// if stopping (caller should abort), false if the full duration elapsed.
+func (e *expertSpawner) sleepOrStop(d time.Duration) bool {
+	if d <= 0 {
+		return e.stopping()
+	}
+	deadline := time.Now().Add(d)
+	for {
+		if e.stopping() {
+			return true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		sleep := remaining
+		if sleep > autoExpertPollInterval {
+			sleep = autoExpertPollInterval
+		}
+		time.Sleep(sleep)
 	}
 }
 

@@ -15,11 +15,28 @@ import (
 func fastConfig(t *testing.T) config.Config {
 	t.Helper()
 	return config.Config{
-		MeshDir:           testsock.Dir(t),
-		HeartbeatInterval: 50 * time.Millisecond,
-		AwayAfter:         150 * time.Millisecond,
-		EvictAfter:        400 * time.Millisecond,
-		RegistrationGrace: 100 * time.Millisecond,
+		MeshDir:               testsock.Dir(t),
+		HeartbeatInterval:     50 * time.Millisecond,
+		AwayAfter:             150 * time.Millisecond,
+		EvictAfter:            400 * time.Millisecond,
+		RegistrationGrace:     100 * time.Millisecond,
+		ClaimTTL:              time.Second,
+		TriageTimeout:         time.Minute,
+		TriageBackoff:         time.Second,
+		TriageMaxAttempts:     4,
+		WorkerTimeout:         time.Minute,
+		ReviewTimeout:         time.Minute,
+		ReviewPoolSize:        1,
+		MaxWorkers:            4,
+		Backoff:               time.Second,
+		KeepWorktrees:         config.KeepWorktreesOnFailure,
+		AuditFanout:           true,
+		StruggleTestRepeat:    config.DefaultStruggleTestRepeat,
+		StruggleEditRepeat:    config.DefaultStruggleEditRepeat,
+		StruggleCooldown:      config.DefaultStruggleCooldown,
+		StruggleMaxAsks:       config.DefaultStruggleMaxAsks,
+		AnswerCacheTTL:        config.DefaultAnswerCacheTTL,
+		AnswerCacheIncludeCtx: true,
 	}
 }
 

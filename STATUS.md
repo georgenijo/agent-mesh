@@ -45,12 +45,12 @@ See `docs/reports/2026-06-28-overnight-run.html` for the animated story.
 ## Bugs surfaced / filed
 
 - **#122** — worker child-process leak. **Fixed (#124).**
-- **#123** — single-reviewer throughput ceiling; one Opus reviewer serializes all reviews. Needs an expert pool to scale past ~2 workers. **Open — the next unlock.**
-- **#125** — cold-start review re-deliver race; a freshly auto-spawned reviewer can miss the first re-delivered request. Warm reviewers unaffected. **Open.**
-- **#85** — `request_changes` hard-fails on `main` (no auto re-dispatch with feedback). Worked around by hardening the worker. **Open.**
+- **#123** — single-reviewer throughput ceiling. **Shipped** — `MESH_REVIEW_POOL_SIZE` maintains N resident reviewers for `MESH_REVIEW_ROLE` (restart-class setting).
+- **#125** — cold-start review re-deliver race. **Shipped** — readiness KV (`BucketExpertReady`) plus spaced re-deliver retries on ready-timeout so the first cold review lands.
+- **#85** — `request_changes` hard-fails on `main` (no auto re-dispatch with feedback). **Shipped** — bounded re-dispatch with `MESH_REVIEW_RETRIES` / ReviewFeedback.
 
 ## Honest notes
 
-- **Cold-start cost two reviews** (#97 and one #111 attempt) to #125; keeping the reviewer warm (no coordinator bounces) made every later review land.
+- **Cold-start** used to cost reviews (#97 / #111) to #125; readiness signalling + timeout re-deliver retries close that gap for auto-spawned reviewers.
 - **Dashboard jobs collide on `web/app.js`** — parallel UI jobs conflict at merge time (claims are advisory within a run, not across git branches). Resolved by sequencing UI work and keep-both rebases.
-- **Throughput stayed at 2 workers** — the single reviewer (#123) is the ceiling.
+- **Reviewer pool (#123)** lifts the single-Opus serial ceiling; set `MESH_REVIEW_POOL_SIZE` > 1 when running more than ~2 concurrent workers.

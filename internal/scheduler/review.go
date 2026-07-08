@@ -13,22 +13,21 @@ import (
 // task's terminal state on the typed verdict — opt-in via Options.Reviewer
 // (nil = pre-#80 behavior: worker success → done, no review).
 //
-// Gating policy (the design fork resolved for #80, see DECISIONS.md):
+// Gating policy (the design fork resolved for #80 / #85, see DECISIONS.md):
 //
 //   - approve          → task done (the only path from a reviewed success to done)
-//   - request_changes  → task failed, typed reason carries the verdict + notes
+//   - request_changes  → bounded re-dispatch with reviewer feedback (#85);
+//     when MESH_REVIEW_RETRIES is exhausted the task fails typed
 //   - reject           → task failed, same shape
 //   - error (any code) → task failed — NEVER a silent approve (never-fake-success)
 //   - no diff to review (head == base per the worker's committed metadata)
 //     → task done without spending a review turn: the gate gates DIFFS, and a
 //     typed worker success with zero file changes has nothing to judge.
 //
-// request_changes does NOT re-dispatch in this slice: a bounded retry needs
-// worker-runtime support that is out of #80's lane (branch-aware worktree
-// re-allocation after a successful first run, plus a feedback channel into the
-// worker prompt) — tracked as a follow-up issue. Failing typed beats burning a
-// worker turn on an unchanged prompt, and the existing fail-fast path already
-// cancels dependents of a failed task.
+// request_changes re-dispatches onto the existing worker branch (prior commits
+// accumulate) carrying ReviewFeedback into the next worker prompt, up to
+// MESH_REVIEW_RETRIES attempts (default 2; 0 = fail immediately). See
+// handleRequestChanges.
 //
 // One authority per fact: the tasks KV record stays the sole authority for
 // task state. The KindReview event is the gate's INPUT (and the audit tap),

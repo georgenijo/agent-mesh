@@ -113,6 +113,104 @@ func TestRedeliverAfterSlowReviewSubscription(t *testing.T) {
 	}
 }
 
+// TestRedeliverRetriesAfterReadyTimeout proves the ready-timeout hardening:
+// when the expert becomes live but never writes BucketExpertReady within
+// autoExpertReadyWait, the spawner still re-delivers immediately AND schedules
+// spaced follow-up re-delivers so a late subscription still catches the cold
+// first request. Mirrors TestRedeliverAfterSlowReviewSubscription but never
+// writes the ready key, and shortens the wait/backoff so the test stays fast.
+func TestRedeliverRetriesAfterReadyTimeout(t *testing.T) {
+	// Shorten production waits for the unit test; restore after.
+	prevWait, prevBackoff := autoExpertReadyWait, autoExpertRedeliverBackoff
+	autoExpertReadyWait = 400 * time.Millisecond
+	autoExpertRedeliverBackoff = []time.Duration{200 * time.Millisecond, 400 * time.Millisecond}
+	t.Cleanup(func() {
+		autoExpertReadyWait = prevWait
+		autoExpertRedeliverBackoff = prevBackoff
+	})
+
+	cfg := fastConfig(t)
+	cfg.AutoExperts = true
+	cfg.RegistrationGrace = 5 * time.Second
+	cfg.AwayAfter = 10 * time.Second
+	cfg.EvictAfter = 20 * time.Second
+
+	c := New(cfg, nil)
+	if err := c.Start(); err != nil {
+		t.Fatal("coordinator start:", err)
+	}
+	t.Cleanup(c.Stop)
+
+	if c.experts == nil {
+		t.Skip("auto-experts not armed (findMeshd unavailable in this environment)")
+	}
+
+	cli := dialBus(t, cfg)
+	const role = "reviewer-timeout"
+
+	// Buffer large enough for the immediate re-deliver + 2 retries.
+	received := make(chan envelope.Envelope, 8)
+
+	// Fake launchFunc: registers live quickly, subscribes to the review
+	// subject, but NEVER writes the ready key — forcing the timeout path.
+	c.experts.launchFunc = func(r, name string) (*os.Process, error) {
+		go func() {
+			card := agentcard.Card{ID: name, Name: name, Role: r}
+			regEnv, err := envelope.New(envelope.KindRegister, name,
+				envelope.SubjectRegister, &envelope.RegisterPayload{Card: card})
+			if err != nil {
+				return
+			}
+			if err := cli.Publish(regEnv); err != nil {
+				return
+			}
+
+			sub, err := cli.Subscribe(envelope.SubjectReviewRequest(r),
+				func(env envelope.Envelope) {
+					select {
+					case received <- env:
+					default:
+					}
+				})
+			if err != nil {
+				return
+			}
+			defer sub.Unsubscribe()
+
+			// Hold the subscription open; do NOT write BucketExpertReady.
+			<-time.After(10 * time.Second)
+		}()
+		return nil, nil
+	}
+
+	reqEnv, err := envelope.New(envelope.KindReviewRequest, "scheduler",
+		envelope.SubjectReviewRequest(role),
+		envelope.ReviewRequestPayload{Task: "task-ready-timeout-retry", Role: role})
+	if err != nil {
+		t.Fatal("build review request:", err)
+	}
+	if err := cli.Publish(reqEnv); err != nil {
+		t.Fatal("publish review request:", err)
+	}
+
+	// Expect at least 2 deliveries: the immediate post-timeout re-deliver plus
+	// at least one spaced retry. Three is ideal (immediate + 2 backoff slots)
+	// but racing teardown can clip the last; two proves the retry path fires.
+	deadline := time.After(5 * time.Second)
+	count := 0
+	for count < 2 {
+		select {
+		case env := <-received:
+			if env.Kind != envelope.KindReviewRequest {
+				t.Fatalf("got kind %q, want %q", env.Kind, envelope.KindReviewRequest)
+			}
+			count++
+		case <-deadline:
+			t.Fatalf("got %d re-deliveries within 5s, want ≥2 (immediate + ready-timeout retry)", count)
+		}
+	}
+}
+
 // TestAlreadyLiveExpertReceivesDirectly verifies that when a live expert
 // already owns the role, the review request is delivered via normal pub/sub
 // without buffering or re-delivery — unchanged behavior (#125 scope guard).

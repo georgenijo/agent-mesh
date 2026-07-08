@@ -94,6 +94,10 @@ func (p AskPayload) validate() error {
 type AnswerPayload struct {
 	Ticket string `json:"ticket"`
 	Answer string `json:"answer"`
+	// Cached is true when the answer was served from the exact-match answer
+	// cache (Feature 6 / #29) without an LLM turn. Additive omitempty — older
+	// consumers ignore it; golden Answer payloads without the field still decode.
+	Cached bool `json:"cached,omitempty"`
 }
 
 func (p AnswerPayload) validate() error {

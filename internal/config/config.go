@@ -59,6 +59,19 @@ const (
 	// this in the child's env; `mesh escalate` reads it and writes the question.
 	// Empty outside of a worker-spawned child context.
 	EnvEscalationFile = "MESH_ESCALATION_FILE"
+
+	// Feature 5 — struggle → ask-the-expert nudge (worker stream observer).
+	EnvStruggleNudge      = "MESH_STRUGGLE_NUDGE"       // on|off (default off): auto-ask an expert when a worker loops
+	EnvStruggleRole       = "MESH_STRUGGLE_ROLE"        // expert role for auto-asks; empty → ReviewRole → "architect"
+	EnvStruggleTestRepeat = "MESH_STRUGGLE_TEST_REPEAT" // same test-failure fingerprint count before nudge; default 3
+	EnvStruggleEditRepeat = "MESH_STRUGGLE_EDIT_REPEAT" // same-path edit count before nudge; default 4
+	EnvStruggleCooldown   = "MESH_STRUGGLE_COOLDOWN"    // min gap between auto-asks per worker run; default 5m
+	EnvStruggleMaxAsks    = "MESH_STRUGGLE_MAX_ASKS"    // cap auto-asks per worker run; default 2
+
+	// Feature 6 — exact-match answer cache (#29 slice).
+	EnvAnswerCache           = "MESH_ANSWER_CACHE"             // on|off (default off): reuse last good answer for same role+q+ctx
+	EnvAnswerCacheTTL        = "MESH_ANSWER_CACHE_TTL"         // entry TTL; default 15m
+	EnvAnswerCacheIncludeCtx = "MESH_ANSWER_CACHE_INCLUDE_CTX" // on|off (default on): include ask ctx in cache key
 )
 
 // Worker worktree retention policies (#26). The policy is deterministic:
@@ -145,6 +158,17 @@ const (
 	// before being re-dispatched. Wired into scheduler.Options.Backoff (a field
 	// that previously had no config source — the phantom knob).
 	DefaultReDispatchBackoff = 30 * time.Second
+
+	// DefaultStruggleTestRepeat / EditRepeat / Cooldown / MaxAsks gate Feature 5
+	// auto-asks so a noisy worker cannot burn the expert budget.
+	DefaultStruggleTestRepeat = 3
+	DefaultStruggleEditRepeat = 4
+	DefaultStruggleCooldown   = 5 * time.Minute
+	DefaultStruggleMaxAsks    = 2
+
+	// DefaultAnswerCacheTTL is how long a successful role-ask answer stays
+	// reusable for an identical (role, q, ctx) key before expiry.
+	DefaultAnswerCacheTTL = 15 * time.Minute
 
 	DefaultHeartbeatInterval = 5 * time.Second
 	DefaultAwayAfter         = 15 * time.Second // 3 missed beats
@@ -266,6 +290,23 @@ type Config struct {
 	// natural-language issue references against GitHub. Empty means `mesh work`
 	// is not configured and will return a clear error.
 	GitHubRepo string
+
+	// StruggleNudge arms Feature 5: the worker stream observer auto-asks an
+	// expert when it sees a repeated test-failure fingerprint or repeated
+	// edits to the same path. Off by default (same opt-in posture as AutoExperts).
+	StruggleNudge      bool
+	StruggleRole       string        // empty → ReviewRole → "architect" at use site
+	StruggleTestRepeat int           // same failure fingerprint count; default 3
+	StruggleEditRepeat int           // same-path edit count; default 4
+	StruggleCooldown   time.Duration // min gap between auto-asks; default 5m
+	StruggleMaxAsks    int           // cap per worker run; default 2
+
+	// AnswerCache arms Feature 6 (#29 exact-match answer cache): expert
+	// drainInbox reuses a prior successful answer for the same role+q(+ctx)
+	// without invoking the LLM. Off by default.
+	AnswerCache           bool
+	AnswerCacheTTL        time.Duration // entry TTL; default 15m
+	AnswerCacheIncludeCtx bool          // include ask ctx in key; default true
 }
 
 // Load resolves config from the environment with defaults.
@@ -292,6 +333,12 @@ func Load() (Config, error) {
 		AuditFanout:       true,
 		ExpertIdleTTL:     DefaultExpertIdleTTL,
 		Backoff:           DefaultReDispatchBackoff,
+		StruggleTestRepeat:    DefaultStruggleTestRepeat,
+		StruggleEditRepeat:    DefaultStruggleEditRepeat,
+		StruggleCooldown:      DefaultStruggleCooldown,
+		StruggleMaxAsks:       DefaultStruggleMaxAsks,
+		AnswerCacheTTL:        DefaultAnswerCacheTTL,
+		AnswerCacheIncludeCtx: true,
 	}
 
 	if dir := os.Getenv(EnvMeshDir); dir != "" {
@@ -450,6 +497,76 @@ func Load() (Config, error) {
 		}
 	}
 
+	// Feature 5 — struggle nudge (opt-in).
+	if raw := os.Getenv(EnvStruggleNudge); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.StruggleNudge = true
+		case "off", "false", "0":
+			cfg.StruggleNudge = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvStruggleNudge, raw)
+		}
+	}
+	cfg.StruggleRole = os.Getenv(EnvStruggleRole)
+	if raw := os.Getenv(EnvStruggleTestRepeat); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvStruggleTestRepeat, raw)
+		}
+		cfg.StruggleTestRepeat = n
+	}
+	if raw := os.Getenv(EnvStruggleEditRepeat); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvStruggleEditRepeat, raw)
+		}
+		cfg.StruggleEditRepeat = n
+	}
+	if raw := os.Getenv(EnvStruggleCooldown); raw != "" {
+		dur, err := time.ParseDuration(raw)
+		if err != nil || dur <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive duration", EnvStruggleCooldown, raw)
+		}
+		cfg.StruggleCooldown = dur
+	}
+	if raw := os.Getenv(EnvStruggleMaxAsks); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive integer", EnvStruggleMaxAsks, raw)
+		}
+		cfg.StruggleMaxAsks = n
+	}
+
+	// Feature 6 — exact-match answer cache (opt-in).
+	if raw := os.Getenv(EnvAnswerCache); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.AnswerCache = true
+		case "off", "false", "0":
+			cfg.AnswerCache = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAnswerCache, raw)
+		}
+	}
+	if raw := os.Getenv(EnvAnswerCacheTTL); raw != "" {
+		dur, err := time.ParseDuration(raw)
+		if err != nil || dur <= 0 {
+			return Config{}, fmt.Errorf("config: %s=%q: want a positive duration", EnvAnswerCacheTTL, raw)
+		}
+		cfg.AnswerCacheTTL = dur
+	}
+	if raw := os.Getenv(EnvAnswerCacheIncludeCtx); raw != "" {
+		switch raw {
+		case "on", "true", "1":
+			cfg.AnswerCacheIncludeCtx = true
+		case "off", "false", "0":
+			cfg.AnswerCacheIncludeCtx = false
+		default:
+			return Config{}, fmt.Errorf("config: %s=%q: want on|off", EnvAnswerCacheIncludeCtx, raw)
+		}
+	}
+
 	// Claim lease backstop: like the registry record TTL, it must outlast
 	// every legitimate silent window (the eviction sweep is the primary
 	// release path; the TTL self-heals if the coordinator is down). Derived
@@ -514,6 +631,21 @@ func Validate(cfg Config) error {
 	}
 	if cfg.ReviewRetries < 0 {
 		return fmt.Errorf("config: %s must be non-negative, got %d", EnvReviewRetries, cfg.ReviewRetries)
+	}
+	if cfg.StruggleTestRepeat <= 0 {
+		return fmt.Errorf("config: %s must be a positive integer, got %d", EnvStruggleTestRepeat, cfg.StruggleTestRepeat)
+	}
+	if cfg.StruggleEditRepeat <= 0 {
+		return fmt.Errorf("config: %s must be a positive integer, got %d", EnvStruggleEditRepeat, cfg.StruggleEditRepeat)
+	}
+	if cfg.StruggleCooldown <= 0 {
+		return fmt.Errorf("config: %s must be positive, got %s", EnvStruggleCooldown, cfg.StruggleCooldown)
+	}
+	if cfg.StruggleMaxAsks <= 0 {
+		return fmt.Errorf("config: %s must be a positive integer, got %d", EnvStruggleMaxAsks, cfg.StruggleMaxAsks)
+	}
+	if cfg.AnswerCacheTTL <= 0 {
+		return fmt.Errorf("config: %s must be positive, got %s", EnvAnswerCacheTTL, cfg.AnswerCacheTTL)
 	}
 	switch cfg.KeepWorktrees {
 	case KeepWorktreesOnFailure, KeepWorktreesAlways, KeepWorktreesNever:

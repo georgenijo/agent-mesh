@@ -150,7 +150,7 @@ func (c *Coordinator) Start() error {
 	c.srv = bus.NewServer(c.cfg.BusSocket(), bus.Options{
 		StreamDir:      c.cfg.StreamsDir(),
 		PersistDir:     c.cfg.BucketsDir(),
-		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts, envelope.BucketCostLedger, envelope.BucketSettings},
+		PersistBuckets: []string{envelope.BucketJobs, envelope.BucketTasks, envelope.BucketTriageAttempts, envelope.BucketCostLedger, envelope.BucketSettings, envelope.BucketAnswerCache},
 		Logger:         c.log,
 	})
 	if err := c.srv.Start(); err != nil {

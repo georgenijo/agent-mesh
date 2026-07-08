@@ -112,6 +112,11 @@ const (
 	// its Config on every Start. A fact with no live re-asserter, so it is
 	// persisted alongside jobs/tasks (unlike the registry/claims leases).
 	BucketSettings = "settings"
+	// BucketAnswerCache holds exact-match answer reuse entries (#29 Feature 6):
+	// keyed by SHA-256(role|q|ctx), value is the last successful answer for that
+	// role-ask. Persisted so a coordinator restart does not flush warm hits.
+	// Tickets KV remains the authority for ticket FSM; this bucket is a cache.
+	BucketAnswerCache = "answer-cache"
 )
 
 // Streams (bounded).

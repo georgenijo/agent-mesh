@@ -508,6 +508,15 @@ func defaultConfig() config.Config {
 		AuditFanout:       true,
 		ExpertIdleTTL:     config.DefaultExpertIdleTTL,
 		Backoff:           config.DefaultReDispatchBackoff,
+		// Feature 5/6 knobs are env-only in v1 (not on settings.Record), but
+		// ValidateRecord resolves staged overlays onto defaultConfig() and runs
+		// config.Validate — so these defaults must be present or every Put fails.
+		StruggleTestRepeat:    config.DefaultStruggleTestRepeat,
+		StruggleEditRepeat:    config.DefaultStruggleEditRepeat,
+		StruggleCooldown:      config.DefaultStruggleCooldown,
+		StruggleMaxAsks:       config.DefaultStruggleMaxAsks,
+		AnswerCacheTTL:        config.DefaultAnswerCacheTTL,
+		AnswerCacheIncludeCtx: true,
 	}
 	c.ClaimTTL = 2 * (c.EvictAfter + c.RegistrationGrace)
 	return c
